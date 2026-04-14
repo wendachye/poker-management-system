@@ -1,18 +1,9 @@
-import { AppSidebar } from "@/components/app-sidebar";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { ManagementShell } from "@/components/layout/management-shell";
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <SidebarProvider>
-      <AppSidebar />
-
-      <SidebarInset>
-        <main>{children}</main>
-      </SidebarInset>
-    </SidebarProvider>
-  );
+  return <ManagementShell>{children}</ManagementShell>;
 }
