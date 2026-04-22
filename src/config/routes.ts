@@ -4,7 +4,7 @@ export const ROUTES = {
   TABLES: "/tables",
   TRANSACTIONS: "/transactions",
   REPORTS: "/reports",
-  SETTINGS: "/settings",
+  ADMIN: "/admin",
 
   // Product
   //   PRODUCTS: "/products",

@@ -1,5 +1,12 @@
 import { NavItem } from "@/types/navigation";
-import { Handshake, LayoutDashboard, Package, Settings } from "lucide-react";
+import {
+  ChartNoAxesCombined,
+  HandCoins,
+  LayoutDashboard,
+  Table2,
+  UserRoundCog,
+  UsersRound,
+} from "lucide-react";
 import { ROUTES } from "./routes";
 
 export const navMenu: NavItem[] = [
@@ -12,31 +19,31 @@ export const navMenu: NavItem[] = [
   {
     title: "Players",
     url: ROUTES.PLAYERS,
-    icon: Package,
+    icon: UsersRound,
     moduleKey: "players",
   },
   {
     title: "Tables",
     url: ROUTES.TABLES,
-    icon: Handshake,
+    icon: Table2,
     moduleKey: "tables",
   },
   {
     title: "Transactions",
     url: ROUTES.TRANSACTIONS,
-    icon: Handshake,
+    icon: HandCoins,
     moduleKey: "transactions",
   },
   {
     title: "Reports",
     url: ROUTES.REPORTS,
-    icon: Handshake,
+    icon: ChartNoAxesCombined,
     moduleKey: "reports",
   },
   {
-    title: "Settings",
-    url: ROUTES.SETTINGS,
-    icon: Settings,
-    moduleKey: "settings",
+    title: "Admin",
+    url: ROUTES.ADMIN,
+    icon: UserRoundCog,
+    moduleKey: "admin",
   },
 ];
