@@ -14,7 +14,13 @@ npm run prototype
 
 Open [the stakeholder prototype](http://127.0.0.1:3001/en/dashboard). This preview uses the existing screens and theme with in-memory browser data. It needs no database, staff passwords or account setup. The regular local app at port 3000 can keep running independently.
 
-Use **Demo tools** to choose a busy shift, start a guided player visit, or review a shift ready to close. Switch between Cashier, Manager, Admin and Dealer to show the different responsibilities. A cashier can request a buy-in; a separate manager can approve it. Cash-outs require admin review. Financial amounts are fictional and follow the same workflow rules used by the app.
+Use **Demo tools** for free exploration with **Busy shift** or **Ready to close**, or start one of three guided journeys:
+
+- **Cash player:** check in Alex Tan, request a RM500 cash buy-in, approve as a separate manager, return RM700 in chips, approve the cash-out as admin, then close with RM19,800 counted cash.
+- **Credit player:** check in Sara Lee, approve a RM500 credit buy-in, approve a RM200 cash repayment, then return RM700 in chips. Cash-out settles the remaining RM300 debt and pays RM400 in cash; closing cash is RM19,800.
+- **Corrections and closing:** approve RM50 rake, reject a duplicate request, reverse the original entry, then approve a replacement for RM30. Expected cash is RM20,030; count RM20,020 to demonstrate a RM10 shortage with a required explanation.
+
+The guide shows the current step and required staff role. Continue opens the relevant screen or unsaved form; staff still review and submit every action. Switch between Cashier, Manager, Admin and Dealer to demonstrate responsibilities. A separate manager approves buy-ins and repayments; cash-outs and reversals require admin review. All amounts are fictional and follow the same workflow rules used by the app.
 
 **Reset demo** returns to the selected sample scenario. Refreshing the browser returns to the initial busy shift. Demo changes are not saved and never reach the working local database; the prototype launcher explicitly disables live database access. This is a local presentation prototype, not a deployed operations service. Prototype work lives on `codex/stakeholder-prototype` while the tested local release remains on `main`.
 

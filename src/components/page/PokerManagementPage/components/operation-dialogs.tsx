@@ -32,7 +32,7 @@ import {
   useText,
 } from "./shared";
 import { money, parseMoney } from "../utils";
-import { EntryImpact } from "./entry-impact";
+import { CashOutSummary, EntryImpact } from "./entry-impact";
 import { PlayerDetails, EditPlayer } from "./player-details";
 function useFields(initial: Record<string, string>) {
   const [values, setValues] = useState(initial);
@@ -387,7 +387,7 @@ function CheckInDialog({
                   <Select
                     required
                     value={value("table")}
-                  className="[&>span]:min-w-0"
+                    className="[&>span]:min-w-0"
                     onValueChange={(v) => {
                       set("table", v);
                       set("seat", "");
@@ -495,6 +495,27 @@ function TransactionDialog({
     (table) => table.id === selectedPlayer?.tableId,
   );
   const rules = effectiveTableRules(s.store, selectedTable);
+  const creditPlayer = selectedPlayer?.type === "CREDIT";
+  const pendingCredit = selectedPlayer
+    ? s.pendingApprovals
+        .filter(
+          (request) =>
+            request.playerId === selectedPlayer.id && request.type === "Buy-in",
+        )
+        .reduce((total, request) => total + request.amount, 0)
+    : 0;
+  const availableCredit = selectedPlayer
+    ? Math.max(
+        0,
+        selectedPlayer.creditLimit - selectedPlayer.creditUsed - pendingCredit,
+      )
+    : 0;
+  const title =
+    type === "Buy-in" && selectedPlayer
+      ? creditPlayer
+        ? "Credit buy-in"
+        : "Cash buy-in"
+      : type;
   function enabled(candidate: EntryType) {
     if (candidate === "Tips") return settings.tipsEnabled;
     if (candidate === "Rake") return settings.rakeEnabled;
@@ -516,10 +537,13 @@ function TransactionDialog({
       ? Math.ceil(Math.max(1, rules.minBuyIn) / rules.buyInStep) *
         rules.buyInStep
       : Math.max(1, rules.minBuyIn);
+  const buyInCap = creditPlayer
+    ? Math.min(rules.maxBuyIn, availableCredit)
+    : rules.maxBuyIn;
   const maximum =
     rules.buyInStep > 0
-      ? Math.floor(rules.maxBuyIn / rules.buyInStep) * rules.buyInStep
-      : rules.maxBuyIn;
+      ? Math.floor(buyInCap / rules.buyInStep) * rules.buyInStep
+      : buyInCap;
   let amount = 0;
   try {
     amount = parseMoney(val("amount", "0"), true);
@@ -549,8 +573,18 @@ function TransactionDialog({
     <Modal
       open
       onOpenChange={() => s.closeOperation()}
-      title={type}
-      description="Review the details before sending this request for independent approval."
+      title={title}
+      description={
+        type === "Buy-in" && selectedPlayer
+          ? creditPlayer
+            ? "Request chips on credit. No cash is collected."
+            : "Request chips paid for in cash."
+          : type === "Cash-out"
+            ? "Enter the chips returned to calculate the cash payout."
+            : repayment
+              ? "Record cash received to reduce outstanding credit."
+              : "Review the details before sending this request for independent approval."
+      }
     >
       <ActionForm
         disabled={s.locked}
@@ -586,7 +620,9 @@ function TransactionDialog({
                   set("type", v);
                   set("player", "");
                   set("table", "");
+                  set("amount", "");
                   setChangingPlayer(true);
+                  setChangingType(false);
                 }}
                 options={entryTypes
                   .filter(
@@ -606,8 +642,7 @@ function TransactionDialog({
           ) : (
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <p className="min-w-0 break-words text-sm">
-                <span className="text-muted-foreground">{t("Transaction type")}: </span>
-                <span className="font-medium">{t(type)}</span>
+                <span className="font-medium">{t(title)}</span>
               </p>
               <Button
                 type="button"
@@ -631,11 +666,18 @@ function TransactionDialog({
               )}
             </p>
           )}
-          {!changingPlayer && selectedPlayer && options.some((player) => player.id === selectedPlayer.id) ? (
+          {!changingPlayer &&
+          selectedPlayer &&
+          options.some((player) => player.id === selectedPlayer.id) ? (
             <div className="min-w-0 space-y-1 rounded-lg border px-3 py-2">
               <div className="flex min-w-0 items-start justify-between gap-3">
                 <div className="min-w-0 self-center">
-                  <p className="text-xs text-muted-foreground">{t("Player")}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      {t("Player")}
+                    </p>
+                    <Badge>{selectedPlayer.type}</Badge>
+                  </div>
                   <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">
                     {displayName(selectedPlayer.name)}
                   </p>
@@ -666,7 +708,11 @@ function TransactionDialog({
               <SearchSelect
                 value={val("player")}
                 required={sessionEntry || repayment}
-                onValueChange={(v) => set("player", v)}
+                onValueChange={(v) => {
+                  set("player", v);
+                  set("amount", "");
+                  if (v) setChangingPlayer(false);
+                }}
                 options={[
                   {
                     value: "",
@@ -687,10 +733,34 @@ function TransactionDialog({
               />
             </Field>
           )}
-          {(sessionEntry || repayment) && selectedPlayer?.type === "CREDIT" && (
-            <p className="text-sm text-muted-foreground">
-              {t("Outstanding credit")}: {money(selectedPlayer.creditUsed)}
-            </p>
+          {(sessionEntry || repayment) && creditPlayer && selectedPlayer && (
+            <div className="min-w-0 space-y-2 text-xs">
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
+                {[
+                  ["Outstanding credit", selectedPlayer.creditUsed],
+                  ["Available credit", availableCredit],
+                ].map(([label, value]) => (
+                  <div key={label} className="min-w-0 space-y-1">
+                    <dt className="text-muted-foreground">
+                      {t(String(label))}
+                    </dt>
+                    <dd className="break-words font-medium tabular-nums">
+                      {money(Number(value))}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="text-muted-foreground">
+                {t("Credit limit")}: {money(selectedPlayer.creditLimit)}
+                {pendingCredit > 0 && (
+                  <>
+                    {" "}
+                    · {t("Reserved for pending buy-ins")}:{" "}
+                    {money(pendingCredit)}
+                  </>
+                )}
+              </p>
+            </div>
           )}
           {(sessionEntry || repayment) && !options.length && (
             <p className="text-sm text-muted-foreground">
@@ -738,25 +808,63 @@ function TransactionDialog({
           )}
         </FormSection>
         <FormSection title="Amount and note">
+          <Field
+            label={
+              type === "Cash-out"
+                ? "Chips returned (RM)"
+                : type === "Buy-in" && selectedPlayer
+                  ? creditPlayer
+                    ? "Chips on credit (RM)"
+                    : "Cash received (RM)"
+                  : repayment
+                    ? "Cash repayment (RM)"
+                    : "Amount (RM)"
+            }
+            hint={
+              type === "Cash-out"
+                ? "Enter the total value of chips returned. Enter 0 to check out without returning chips."
+                : repayment
+                  ? "Repayment cannot exceed outstanding credit."
+                  : undefined
+            }
+          >
+            <MoneyInput
+              required
+              value={val("amount")}
+              onChange={(e) => set("amount", e.target.value)}
+            />
+          </Field>
+          {repayment && selectedPlayer && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-auto min-h-11 max-w-full flex-wrap whitespace-normal text-xs sm:min-h-9"
+              disabled={selectedPlayer.creditUsed <= 0}
+              data-mark-dirty="true"
+              onClick={() => {
+                set("amount", (selectedPlayer.creditUsed / 100).toFixed(2));
+                s.setError("");
+              }}
+            >
+              {t("Repay full balance")} · {money(selectedPlayer.creditUsed)}
+            </Button>
+          )}
           {type === "Buy-in" && selectedPlayer && selectedTable && (
-            <div className="min-w-0 space-y-2 rounded-lg border bg-muted/40 p-3 text-xs leading-5 [overflow-wrap:anywhere]">
-              <p className="font-medium">
-                {displayName(selectedTable.name)} · {t("Table stakes")}: {money(rules.smallBlind)} /{" "}
-                {money(rules.bigBlind)}
-              </p>
+            <div className="min-w-0 space-y-2 text-xs leading-5 [overflow-wrap:anywhere]">
               <p>
                 {t("Buy-in range")}: {money(rules.minBuyIn)} –{" "}
                 {money(rules.maxBuyIn)}
-              </p>
-              <p>
-                {t("Buy-in increment")}:{" "}
-                {rules.buyInStep > 0
-                  ? money(rules.buyInStep)
-                  : t("Any amount within the table limits.")}
+                {rules.buyInStep > 0 && (
+                  <>
+                    {" "}
+                    · {t("Buy-in increment")}: {money(rules.buyInStep)}
+                  </>
+                )}
               </p>
               {!disabledReason && (
                 <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                  {rules.minBuyIn > 0 && minimum <= rules.maxBuyIn && (
+                  {rules.minBuyIn > 0 && minimum <= maximum && (
                     <Button
                       type="button"
                       variant="outline"
@@ -772,8 +880,8 @@ function TransactionDialog({
                       <span className="tabular-nums">{money(minimum)}</span>
                     </Button>
                   )}
-                  {rules.maxBuyIn < MAX_MONEY &&
-                    maximum > 0 &&
+                  {maximum < MAX_MONEY &&
+                    maximum >= minimum &&
                     maximum !== minimum && (
                       <Button
                         type="button"
@@ -791,6 +899,18 @@ function TransactionDialog({
                       </Button>
                     )}
                 </div>
+              )}
+              {creditPlayer && availableCredit < minimum && (
+                <p className="font-medium text-destructive">
+                  {t(
+                    "Available credit is below the table minimum. Repay credit or ask a manager to review the limit.",
+                  )}
+                </p>
+              )}
+              {creditPlayer && amount > availableCredit && (
+                <p className="font-medium text-destructive">
+                  {t("This amount exceeds available credit.")}
+                </p>
               )}
             </div>
           )}
@@ -816,22 +936,6 @@ function TransactionDialog({
               </p>
             </div>
           )}
-          <Field
-            label={type === "Cash-out" ? "Chips returned (RM)" : "Amount (RM)"}
-            hint={
-              type === "Cash-out"
-                ? "Enter the total value of chips returned. Enter 0 to check out without returning chips."
-                : type === "Buy-in"
-                  ? "Use the limits and increment shown for the selected table."
-                  : undefined
-            }
-          >
-            <MoneyInput
-              required
-              value={val("amount")}
-              onChange={(e) => set("amount", e.target.value)}
-            />
-          </Field>
           {cashMovement ? (
             noteField
           ) : (
@@ -849,28 +953,32 @@ function TransactionDialog({
                   />
                 </Button>
               </CollapsibleTrigger>
-              <CollapsibleContent className="pt-2">{noteField}</CollapsibleContent>
+              <CollapsibleContent className="pt-2">
+                {noteField}
+              </CollapsibleContent>
             </Collapsible>
           )}
         </FormSection>
-        <FormSection title="Review request">
-          <Alert>
-            <AlertDescription>
-              <p className="font-medium">
-                {t(type)} · {money(amount)}
-              </p>
-              <p>
-                {t(
-                  "No cash or credit balance changes until this request is approved.",
-                )}
-              </p>
-            </AlertDescription>
-          </Alert>
+        <div className="min-w-0 space-y-2">
           <EntryImpact
             request={{ type, amount, playerId: val("player") || undefined }}
           />
-        </FormSection>
-        <FormActions disabled={!!disabledReason}>Request approval</FormActions>
+          <p className="text-xs text-muted-foreground">
+            {t("Balances change only after independent approval.")}
+          </p>
+        </div>
+        <FormActions
+          disabled={!!disabledReason}
+          summary={
+            type === "Cash-out" ? (
+              <CashOutSummary
+                request={{ type, amount, playerId: val("player") || undefined }}
+              />
+            ) : undefined
+          }
+        >
+          Request approval
+        </FormActions>
       </ActionForm>
     </Modal>
   );

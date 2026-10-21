@@ -1,6 +1,7 @@
 import { AppSidebar } from "@/components/layout/app-sidebar";
 import { DashboardHeader } from "@/components/layout/dashboard-header";
 import { PokerManagementProvider } from "@/components/page/PokerManagementPage/PokerManagementProvider";
+import { OperationDialogs } from "@/components/page/PokerManagementPage/components/operation-dialogs";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { prototypeEnabled } from "@/prototype/config";
 import { PrototypeToolbar } from "@/prototype/prototype-toolbar";
@@ -17,6 +18,7 @@ export function ManagementShell({ children }: { children: React.ReactNode }) {
             {children}
           </div>
         </SidebarInset>
+        <OperationDialogs />
       </SidebarProvider>
     </PokerManagementProvider>
   );

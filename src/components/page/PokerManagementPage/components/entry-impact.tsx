@@ -4,63 +4,145 @@ import { ledgerImpact } from "@/domain/ledger-impact";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money } from "../utils";
 import { useText } from "./shared";
-export function EntryImpact({
-  request,
-}: {
-  request: Pick<ApprovalRequest, "type" | "amount" | "playerId" | "reversesId">;
-}) {
+type ImpactRequest = Pick<
+  ApprovalRequest,
+  "type" | "amount" | "playerId" | "reversesId"
+>;
+
+export function CashOutSummary({ request }: { request: ImpactRequest }) {
+  const s = usePokerManagementContext(),
+    t = useText();
+  if (request.type !== "Cash-out") return null;
+  const impact = ledgerImpact(s.store, request);
+  return (
+    <dl className="min-w-0 space-y-1" aria-live="polite" aria-atomic="true">
+      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+        <dt className="text-xs text-muted-foreground">
+          {t("Cash payout after approval")}
+        </dt>
+        <dd className="whitespace-nowrap text-base font-semibold tabular-nums">
+          {money(impact.cashPayout)}
+        </dd>
+      </div>
+      {impact.creditDelta < 0 && (
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          <dt>{t("Credit settled")}</dt>
+          <dd className="whitespace-nowrap tabular-nums">
+            {money(-impact.creditDelta)}
+          </dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+export function EntryImpact({ request }: { request: ImpactRequest }) {
   const s = usePokerManagementContext(),
     t = useText();
   const impact = ledgerImpact(s.store, request);
   const original = s.store.transactions.find(
     (tx) => tx.id === request.reversesId,
   );
-  const effects =
-    request.type === "Cash-out"
-      ? [
-          ["Cash payout", impact.cashPayout],
-          ["Credit change", impact.creditDelta],
-          ["Cash received", impact.cashReceived],
-        ]
-      : [
-          ["Cash received", impact.cashReceived],
-          ["Cash payout", impact.cashPayout],
-          ["Credit change", impact.creditDelta],
-        ];
+  const player = s.players.find((player) => player.id === request.playerId);
+  const creditBuyIn = request.type === "Buy-in" && player?.type === "CREDIT";
+  const invalidRepayment =
+    request.type === "Credit Repayment" &&
+    !!player &&
+    request.amount > player.creditUsed;
+  const creditAfter = player ? player.creditUsed + impact.creditDelta : 0;
+  const effects: { label: string; value: number; primary?: boolean }[] = [];
+  if (request.type === "Reversal") {
+    if (impact.cashReceived !== 0)
+      effects.push({ label: "Cash received", value: impact.cashReceived });
+    if (impact.cashPayout !== 0)
+      effects.push({ label: "Cash payout", value: impact.cashPayout });
+    if (impact.creditDelta !== 0)
+      effects.push({
+        label:
+          original?.type === "Cash-out" && impact.creditDelta > 0
+            ? "Credit debt restored"
+            : "Credit change",
+        value: impact.creditDelta,
+      });
+  } else {
+    if (
+      [
+        "Cash-out",
+        "Insurance Payout",
+        "Jackpot Payout",
+        "Cash Payout",
+      ].includes(request.type)
+    )
+      effects.push({
+        label: "Cash payout",
+        value: impact.cashPayout,
+        primary: true,
+      });
+    else if (impact.cashReceived > 0 || !creditBuyIn)
+      effects.push({
+        label: "Cash received",
+        value: impact.cashReceived,
+        primary: true,
+      });
+    if (impact.creditDelta !== 0 || creditBuyIn)
+      effects.push({
+        label: impact.creditDelta < 0 ? "Credit settled" : "Credit added",
+        value: Math.abs(impact.creditDelta),
+        primary: creditBuyIn,
+      });
+    if (
+      player?.type === "CREDIT" &&
+      ["Buy-in", "Cash-out", "Credit Repayment"].includes(request.type) &&
+      creditAfter >= 0
+    )
+      effects.push({ label: "Credit still owed", value: creditAfter });
+  }
   return (
-    <div className="space-y-2 rounded-lg border bg-muted/40 p-3 text-sm">
+    <div className="min-w-0 space-y-2 rounded-lg border bg-muted/40 p-3 text-sm">
       <p className="font-medium">{t("Impact after approval")}</p>
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
-        {effects.map(([label, value]) => {
-          const payout = request.type === "Cash-out" && label === "Cash payout";
-          return (
+      {invalidRepayment ? (
+        <p className="font-medium text-destructive">
+          {t("Repayment cannot exceed outstanding credit.")}
+        </p>
+      ) : effects.length ? (
+        <dl className="space-y-2">
+          {effects.map(({ label, value, primary }) => (
             <div
               className={
-                payout
-                  ? "col-span-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-md bg-background p-3"
-                  : "contents"
+                "flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 " +
+                (primary ? "rounded-md bg-background p-3" : "")
               }
               key={label}
             >
-              <dt className={payout ? "font-medium" : "text-muted-foreground"}>
-                {t(String(label))}
+              <dt className={primary ? "font-medium" : "text-muted-foreground"}>
+                {t(label)}
               </dt>
               <dd
-                className={`min-w-0 break-words text-right font-medium tabular-nums [overflow-wrap:anywhere] ${payout ? "text-lg font-semibold" : ""}`}
+                className={
+                  "max-w-full whitespace-nowrap text-right font-medium tabular-nums " +
+                  (primary ? "text-base font-semibold sm:text-lg" : "")
+                }
               >
-                {money(Number(value))}
+                {money(value)}
               </dd>
             </div>
-          );
-        })}
-      </dl>
+          ))}
+        </dl>
+      ) : (
+        <p className="text-muted-foreground">
+          {t("No cash or credit movement.")}
+        </p>
+      )}
+      {creditBuyIn && <p>{t("No cash is collected for a credit buy-in.")}</p>}
       {request.type === "Cash-out" && (
         <div className="space-y-1">
-          <p>
-            {t(
-              "Cash-out first settles outstanding credit; only the remainder is paid in cash.",
-            )}
-          </p>
+          {player?.type === "CREDIT" && (
+            <p>
+              {t(
+                "Cash-out first settles outstanding credit; only the remainder is paid in cash.",
+              )}
+            </p>
+          )}
           <p>{t("Approval checks this player out and releases their seat.")}</p>
         </div>
       )}

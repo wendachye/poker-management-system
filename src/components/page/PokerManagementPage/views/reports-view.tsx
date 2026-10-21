@@ -104,6 +104,19 @@ export function ReportsView() {
     counted = parseMoney(val("count"), true);
   } catch {}
   const variance = counted === null ? null : counted - s.totals.expectedCash;
+  function varianceLabel(value: number) {
+    return value < 0
+      ? "Cash short by"
+      : value > 0
+        ? "Cash over by"
+        : "Cash matches expected";
+  }
+  function varianceSummary(value: number) {
+    return (
+      t(varianceLabel(value)) +
+      (value === 0 ? "" : " " + money(Math.abs(value)))
+    );
+  }
   function download() {
     const rows: (string | number)[][] = [
       ["Branch", displayName(s.snapshot!.branch.name)],
@@ -269,8 +282,12 @@ export function ReportsView() {
                         : money(totals.countedCash),
                     ],
                     [
-                      "Variance",
-                      totals.variance === null ? "—" : money(totals.variance),
+                      totals.variance === null
+                        ? "Variance"
+                        : varianceLabel(totals.variance),
+                      totals.variance === null
+                        ? "—"
+                        : money(Math.abs(totals.variance)),
                     ],
                     ["Opening cash", money(totals.openingCash)],
                     ["Cash received", money(totals.cashReceived)],
@@ -438,15 +455,20 @@ export function ReportsView() {
                         label: "Variance",
                         align: "right",
                         render: (close) => (
-                          <span
+                          <div
                             className={
-                              close.variance
+                              close.variance < 0
                                 ? "font-semibold text-destructive"
                                 : ""
                             }
                           >
-                            {money(close.variance)}
-                          </span>
+                            <p className="text-xs font-medium">
+                              {t(varianceLabel(close.variance))}
+                            </p>
+                            <p className="tabular-nums">
+                              {money(Math.abs(close.variance))}
+                            </p>
+                          </div>
                         ),
                       },
                       {
@@ -532,9 +554,14 @@ export function ReportsView() {
         description={
           (s.day?.date ?? "") +
           " · " +
-          t(
-            "Resolve pending approvals and check out all players before closing.",
-          )
+          (variance === null
+            ? t(
+                "Resolve pending approvals and check out all players before closing.",
+              )
+            : varianceSummary(variance) +
+              (variance === 0
+                ? ""
+                : " · " + t("Explain the difference before closing.")))
         }
       >
         <FormSection title="Closing checklist">
@@ -607,7 +634,11 @@ export function ReportsView() {
           }}
         >
           <FormSection title="Cash reconciliation">
-            <Stat label="Expected cash" value={money(s.totals.expectedCash)} />
+            <Stat
+              compact
+              label="Expected cash"
+              value={money(s.totals.expectedCash)}
+            />
             <Field
               label="Counted cash (RM)"
               hint="Count the cash physically available. Enter 0 if there is none."
@@ -621,7 +652,12 @@ export function ReportsView() {
             {variance !== null && (
               <Alert variant={variance !== 0 ? "destructive" : "default"}>
                 <AlertDescription>
-                  {t("Variance")}: {money(variance)}
+                  <p className="font-semibold">{varianceSummary(variance)}</p>
+                  {variance !== 0 && (
+                    <p>
+                      {t("Variance")}: {money(variance)}
+                    </p>
+                  )}
                 </AlertDescription>
               </Alert>
             )}

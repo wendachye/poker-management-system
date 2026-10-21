@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePokerManagementContext } from "./PokerManagementProvider";
 import { useText } from "./components/shared";
-import { OperationDialogs } from "./components/operation-dialogs";
 import { DashboardView } from "./views/dashboard-view";
 import { PlayersView } from "./views/players-view";
 import { TablesView } from "./views/tables-view";
@@ -182,7 +181,6 @@ export function PokerManagementPage({
           ) : (
             <View />
           )}
-          <OperationDialogs />
         </>
       )}
     </div>

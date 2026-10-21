@@ -6,6 +6,12 @@ import { emptyStore } from "@/domain/selectors";
 import { defaultSettings } from "@/domain/settings";
 import { staffMutationSchema, type StaffCommand } from "@/domain/staff";
 import {
+  createPrototypeJourney,
+  observeJourneyCommand,
+  type PrototypeJourney,
+  type PrototypeJourneyId,
+} from "./journeys";
+import {
   createPrototypeAccounts,
   createPrototypeSample,
   prototypePersonas,
@@ -20,6 +26,7 @@ export type PrototypeInfo = {
   scenario: PrototypeScenario;
   personaId: string;
   generation: number;
+  journey: PrototypeJourney | null;
 };
 type Venue = {
   branch: Omit<Branch, "role">;
@@ -56,7 +63,7 @@ function initialRuntime(
     });
   }
   return {
-    info: { scenario, personaId: "admin", generation },
+    info: { scenario, personaId: "admin", generation, journey: null },
     branchId: "demo-city",
     venues,
     operations: new Map(),
@@ -135,6 +142,21 @@ export function resetPrototype(scenario = state().info.scenario) {
   if (!prototypeScenarios.some((entry) => entry.id === scenario))
     throw new Error("Select a sample scenario.");
   runtime = initialRuntime(scenario, state().info.generation + 1);
+  emit();
+}
+export function startPrototypeJourney(id: PrototypeJourneyId) {
+  runtime = initialRuntime("walkthrough", state().info.generation + 1);
+  const venue = currentVenue();
+  state().info = {
+    ...state().info,
+    personaId: "cashier",
+    journey: createPrototypeJourney(
+      id,
+      venue.branch.id,
+      venue.store,
+      venue.accounts.find((account) => account.personaId === "cashier")!.id,
+    ),
+  };
   emit();
 }
 function administrator() {
@@ -356,7 +378,20 @@ export async function prototypeRequest(
         throw new DomainError("Invalid operation. Check the supplied fields.");
       const command: Command = parsed.data.command;
       if (command.kind === "COMPLETE_SETUP") completeSetupStaff();
-      venue.store = applyCommand(venue.store, command, actor);
+      const before = venue.store;
+      venue.store = applyCommand(before, command, actor);
+      if (state().info.journey) {
+        state().info = {
+          ...state().info,
+          journey: observeJourneyCommand(
+            state().info.journey!,
+            before,
+            venue.store,
+            command,
+            actor,
+          ),
+        };
+      }
       if (command.kind === "UPDATE_SETTINGS") {
         venue.branch.name = command.settings.venueName;
         venue.branch.timezone = command.settings.timezone;

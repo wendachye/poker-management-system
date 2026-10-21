@@ -13,6 +13,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import { useLocale, useMessages } from "next-intl";
 import {
   Check,
@@ -517,8 +518,17 @@ export function ActionForm({
   const errors = validation.key === validationKey ? validation.errors : {};
   const formId = useId();
   const submitError = useRef<HTMLDivElement | null>(null);
+  const invalidFocus = useRef<string | null>(null);
   const attemptedHere = useRef(false);
   const openedRevision = useContext(FormRevision);
+  useEffect(() => {
+    const id = invalidFocus.current;
+    if (!id) return;
+    invalidFocus.current = null;
+    const control = document.getElementById(id);
+    control?.focus({ preventScroll: true });
+    control?.scrollIntoView({ block: "center", behavior: "instant" });
+  }, [validation]);
   useEffect(() => {
     if (s.error) submitError.current?.focus();
   }, [s.error]);
@@ -580,7 +590,7 @@ export function ActionForm({
               });
             setValidation({ key: validationKey, errors: next });
             if (Object.keys(next).length && !s.retryRequired) {
-              document.getElementById(Object.keys(next)[0])?.focus();
+              invalidFocus.current = Object.keys(next)[0];
               return;
             }
             s.setError("");
@@ -669,17 +679,30 @@ export function FormActions({
   children,
   destructive = false,
   disabled = false,
+  summary,
 }: {
   children: string;
   destructive?: boolean;
   disabled?: boolean;
+  summary?: ReactNode;
 }) {
   const s = usePokerManagementContext(),
     t = useText();
   const host = useContext(ModalFooter);
   const formId = useContext(ActionFormId);
   const actions = (
-    <DialogFooter className="mx-0 mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-none border-t bg-popover px-0 pb-0 pt-4 sm:mx-0 sm:mb-0 sm:flex sm:px-0 sm:pb-0 sm:pt-4">
+    <DialogFooter
+      className={cn(
+        "mx-0 mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-none border-t bg-popover px-0 pb-0 pt-4 sm:mx-0 sm:mb-0 sm:flex sm:px-0 sm:pb-0 sm:pt-4",
+        summary &&
+          "sm:grid sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center",
+      )}
+    >
+      {summary && (
+        <div className="col-span-2 min-w-0 text-left sm:col-span-1">
+          {summary}
+        </div>
+      )}
       <DialogClose asChild>
         <Button
           type="button"
@@ -746,6 +769,7 @@ export function Modal({
           closeLabel={t("Close")}
           showCloseButton={!s.busy}
           onOpenAutoFocus={() => {
+            toast.dismiss();
             openedRevision.current = s.snapshot?.revision;
             setDirty(false);
             setConfirmClose(false);

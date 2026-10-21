@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useState } from "react";
 import { Plus, ReceiptText, RotateCcw } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -148,6 +149,74 @@ export function TransactionsView() {
     ]
       .filter(Boolean)
       .join(" · ");
+  }
+  function amount(tx: Transaction) {
+    const original = tx.reversesId
+      ? s.store.transactions.find((entry) => entry.id === tx.reversesId)
+      : undefined;
+    const cashOut = tx.type === "Cash-out" || original?.type === "Cash-out";
+    return (
+      <div className="space-y-0.5 text-right tabular-nums">
+        <p className="font-semibold">
+          {money(cashOut ? tx.cashPayout : tx.amount)}
+        </p>
+        {cashOut && (
+          <>
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              {t(tx.reversesId ? "Cash payout reversal" : "Cash payout")}
+            </p>
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              {t("Chips returned")}: {money(tx.amount)}
+            </p>
+            {tx.creditDelta !== 0 && (
+              <p className="text-[11px] leading-4 text-muted-foreground">
+                {t(
+                  tx.creditDelta > 0
+                    ? "Credit debt restored"
+                    : "Credit settled",
+                )}
+                : {money(Math.abs(tx.creditDelta))}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+  function reversalDetails(tx: Transaction) {
+    const original = tx.reversesId
+      ? s.store.transactions.find((entry) => entry.id === tx.reversesId)
+      : undefined;
+    const reversal = s.store.transactions.find(
+      (entry) => entry.reversesId === tx.id,
+    );
+    const pending = s.pendingApprovals.some(
+      (request) => request.reversesId === tx.id,
+    );
+    if (!original && !reversal && !pending) return null;
+    const linked = original ?? reversal;
+    return (
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        {!tx.reversesId && (reversal || pending) && (
+          <Badge
+            variant={reversal ? "secondary" : "warning"}
+            className="h-5 px-1.5 text-[10px]"
+          >
+            {t(reversal ? "Reversed" : "Reversal pending")}
+          </Badge>
+        )}
+        {linked && (
+          <Button
+            variant="link"
+            size="sm"
+            className="h-11 max-w-full justify-start whitespace-normal p-0 text-xs sm:h-7"
+            onClick={() => setReceipt(linked)}
+          >
+            {t(original ? "Original receipt" : "Reversal receipt")}
+          </Button>
+        )}
+      </div>
+    );
   }
   function rowActions(tx: Transaction) {
     const canReverse =
@@ -366,12 +435,11 @@ export function TransactionsView() {
                       data-transaction-row
                     >
                       <div className="flex min-w-0 items-start justify-between gap-3 font-medium">
-                        <span className="min-w-0 break-words">
-                          {t(tx.type)}
-                        </span>
-                        <span className="shrink-0 whitespace-nowrap tabular-nums">
-                          {money(tx.amount)}
-                        </span>
+                        <div className="min-w-0">
+                          <p className="break-words">{t(tx.type)}</p>
+                          {reversalDetails(tx)}
+                        </div>
+                        <div className="shrink-0">{amount(tx)}</div>
                       </div>
                       <p
                         className="line-clamp-2 break-words text-sm [overflow-wrap:anywhere]"
@@ -437,6 +505,7 @@ export function TransactionsView() {
                                   s.snapshot!.branch.timezone,
                                 )}
                               </p>
+                              {reversalDetails(tx)}
                             </TableCell>
                             <TableCell className="whitespace-normal py-2">
                               <p className="line-clamp-2 break-words [overflow-wrap:anywhere]">
@@ -453,9 +522,7 @@ export function TransactionsView() {
                                 )}
                               </p>
                             </TableCell>
-                            <TableCell className="py-2 text-right font-medium tabular-nums">
-                              {money(tx.amount)}
-                            </TableCell>
+                            <TableCell className="py-2">{amount(tx)}</TableCell>
                             <TableCell className="whitespace-normal py-2 text-xs">
                               <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
                                 {displayName(tx.staff)}
@@ -542,6 +609,11 @@ export function TransactionsView() {
                 </AlertDescription>
               </Alert>
             </FormSection>
+            <p className="text-sm text-muted-foreground">
+              {t(
+                "After the reversal is approved, create a new entry with the correct details.",
+              )}
+            </p>
             <Field
               label="Reason for change"
               hint="Explain why this entry needs to be reversed."
@@ -559,7 +631,11 @@ export function TransactionsView() {
         )}
       </Modal>
       {receipt && (
-        <Receipt transaction={receipt} close={() => setReceipt(null)} />
+        <Receipt
+          transaction={receipt}
+          close={() => setReceipt(null)}
+          onViewTransaction={setReceipt}
+        />
       )}
     </div>
   );

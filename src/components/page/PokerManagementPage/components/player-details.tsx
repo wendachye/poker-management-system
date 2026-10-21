@@ -31,6 +31,11 @@ export function PlayerDetails({ playerId }: { playerId: string }) {
   const s = usePokerManagementContext(),
     t = useText();
   const history = s.players.find((p) => p.id === playerId);
+  const pendingCredit = s.pendingApprovals
+    .filter(
+      (request) => request.playerId === playerId && request.type === "Buy-in",
+    )
+    .reduce((total, request) => total + request.amount, 0);
   return (
     <Modal
       open={!!history}
@@ -57,6 +62,40 @@ export function PlayerDetails({ playerId }: { playerId: string }) {
             )}
             {history.seat ? " · " + t("Seat") + " " + history.seat : ""}
           </p>
+          {history.type === "CREDIT" && (
+            <div className="min-w-0 space-y-2 rounded-lg border bg-muted/40 p-3">
+              <dl className="space-y-2 text-sm">
+                {[
+                  ["Outstanding credit", history.creditUsed],
+                  [
+                    "Available credit",
+                    Math.max(
+                      0,
+                      history.creditLimit - history.creditUsed - pendingCredit,
+                    ),
+                  ],
+                  ["Credit limit", history.creditLimit],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1"
+                  >
+                    <dt className="text-muted-foreground">
+                      {t(String(label))}
+                    </dt>
+                    <dd className="whitespace-nowrap font-medium tabular-nums">
+                      {money(Number(value))}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              {pendingCredit > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {t("Reserved for pending buy-ins")}: {money(pendingCredit)}
+                </p>
+              )}
+            </div>
+          )}
           <PlayerActions player={history} details />
           <p className="text-sm font-medium">
             {t("Current business day")}: {s.day?.date ?? "—"}
@@ -73,9 +112,6 @@ export function PlayerDetails({ playerId }: { playerId: string }) {
               {history.status === "ACTIVE"
                 ? t("Unsettled")
                 : money(history.cashOut - history.buyIn)}
-            </p>
-            <p>
-              {t("Outstanding credit")}: {money(history.creditUsed)}
             </p>
           </div>
           <SessionHistory key={history.id} playerId={history.id} />

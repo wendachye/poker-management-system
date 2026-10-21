@@ -135,7 +135,11 @@ export function createPrototypeSample(
   }
   function startDay(offset: number) {
     const date = businessDate(now, offset);
-    cursor = Date.parse(`${date}T09:00:00+08:00`);
+    // Keep today's sample entries in the past, including early-morning demos.
+    cursor =
+      offset === 0
+        ? now.getTime() - 2 * 60 * 60_000
+        : Date.parse(`${date}T09:00:00+08:00`);
     run({ kind: "OPEN_DAY", date, openingCash: 2000000 }, actors.manager);
   }
   function post(

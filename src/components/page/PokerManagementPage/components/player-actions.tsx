@@ -21,7 +21,9 @@ export function PlayerActions({
     t = useText();
   const operator = s.user?.role !== "DEALER";
   const supervisor = ["MANAGER", "ADMIN"].includes(s.user?.role ?? "");
-  const pendingRequest = s.pendingApprovals.find((r) => r.playerId === player.id);
+  const pendingRequest = s.pendingApprovals.find(
+    (r) => r.playerId === player.id,
+  );
   const pending = !!pendingRequest;
   const blocked = s.locked || s.busy || s.retryRequired;
   const pendingDescriptionId = useId();
@@ -51,7 +53,7 @@ export function PlayerActions({
       disabled: blocked || pending,
       onSelect: () => s.startOperation({ kind: "move", playerId: player.id }),
     });
-  if (operator && player.type === "CREDIT" && player.creditUsed > 0)
+  if (compact && operator && player.type === "CREDIT" && player.creditUsed > 0)
     actions.push({
       key: "repay",
       label: "Credit Repayment",
@@ -89,15 +91,12 @@ export function PlayerActions({
       {operator && player.status === "ACTIVE" && (
         <>
           {compact && pendingRequest ? (
-            <Button
-              asChild
-              size="sm"
-              variant="outline"
-              className="h-11 sm:h-9"
-            >
+            <Button asChild size="sm" variant="outline" className="h-11 sm:h-9">
               <Link
                 href="/transactions"
-                aria-label={t("View request") + " · " + displayName(player.name)}
+                aria-label={
+                  t("View request") + " · " + displayName(player.name)
+                }
                 onClick={() => {
                   s.setDraft("tx.status", "PENDING");
                   s.setDraft("tx.day", "");
@@ -169,6 +168,29 @@ export function PlayerActions({
             }
           >
             {t("Check in")}
+          </Button>
+        )}
+      {!compact &&
+        operator &&
+        player.type === "CREDIT" &&
+        player.creditUsed > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-11 sm:h-9"
+            aria-label={
+              t("Credit Repayment") + " · " + displayName(player.name)
+            }
+            disabled={blocked || pending}
+            onClick={() =>
+              s.startOperation({
+                kind: "transaction",
+                type: "Credit Repayment",
+                playerId: player.id,
+              })
+            }
+          >
+            {t("Credit Repayment")}
           </Button>
         )}
       {actions.length > 0 && (

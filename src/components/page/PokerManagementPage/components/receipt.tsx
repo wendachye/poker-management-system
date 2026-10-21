@@ -1,5 +1,7 @@
 "use client";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { Transaction } from "@/domain/model";
 import { displayName } from "@/lib/display-name";
 import { usePokerManagementContext } from "../PokerManagementProvider";
@@ -17,13 +19,54 @@ import {
 export function Receipt({
   transaction: tx,
   close,
+  onViewTransaction,
 }: {
   transaction: Transaction;
   close: () => void;
+  onViewTransaction: (transaction: Transaction) => void;
 }) {
   const s = usePokerManagementContext(),
     t = useText(),
     timestamp = useTimestamp();
+  const original = tx.reversesId
+    ? s.store.transactions.find((entry) => entry.id === tx.reversesId)
+    : tx;
+  const reversal = original
+    ? s.store.transactions.find((entry) => entry.reversesId === original.id)
+    : undefined;
+  const reversalPending =
+    !!original &&
+    s.pendingApprovals.some((request) => request.reversesId === original.id);
+  const cashOut = tx.type === "Cash-out" || original?.type === "Cash-out";
+  const relatedPending =
+    !!original &&
+    s.pendingApprovals.some(
+      (request) =>
+        (original.playerId && request.playerId === original.playerId) ||
+        (original.sessionId && request.sessionId === original.sessionId),
+    );
+  const sessionRequired =
+    original?.type === "Buy-in" || original?.type === "Cash-out";
+  const activeOriginalSession =
+    !!original &&
+    s.players.some(
+      (player) =>
+        player.id === original.playerId &&
+        player.status === "ACTIVE" &&
+        player.sessionId === original.sessionId,
+    );
+  const correctionBlocked =
+    s.busy ||
+    s.retryRequired ||
+    relatedPending ||
+    (sessionRequired && !activeOriginalSession);
+  const canReplace =
+    original &&
+    original.type !== "Reversal" &&
+    reversal &&
+    original.dayId === s.store.currentDayId &&
+    !s.locked &&
+    s.user?.role !== "DEALER";
   return (
     <Dialog
       open
@@ -40,8 +83,101 @@ export function Receipt({
           <DialogTitle>
             {displayName(s.snapshot!.branch.name)} · {t("Receipt")}
           </DialogTitle>
-          <DialogDescription className="break-all">{tx.id}</DialogDescription>
+          <DialogDescription>
+            {t(tx.type)} · {timestamp(tx.time, s.snapshot!.branch.timezone)}
+          </DialogDescription>
         </DialogHeader>
+        {(reversal || reversalPending) && (
+          <div className="space-y-3 rounded-lg border bg-muted/30 p-3 text-sm">
+            <Badge variant={reversal ? "secondary" : "warning"}>
+              {t(
+                tx.reversesId
+                  ? "Reversal posted"
+                  : reversal
+                    ? "Reversed"
+                    : "Reversal pending",
+              )}
+            </Badge>
+            <p className="text-muted-foreground">
+              {t(
+                reversal
+                  ? "The reversal is posted. Both entries remain in the ledger."
+                  : "After the reversal is approved, create a new entry with the correct details.",
+              )}
+            </p>
+            <div className="flex flex-wrap gap-2 print:hidden [&>button]:min-h-11 sm:[&>button]:min-h-9">
+              {tx.reversesId && original && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onViewTransaction(original)}
+                >
+                  {t("Original receipt")}
+                </Button>
+              )}
+              {!tx.reversesId && reversal && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onViewTransaction(reversal)}
+                >
+                  {t("Reversal receipt")}
+                </Button>
+              )}
+              {canReplace && original.type !== "Reversal" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={correctionBlocked}
+                  onClick={() => {
+                    if (original.type === "Reversal" || correctionBlocked)
+                      return;
+                    close();
+                    s.startOperation({
+                      kind: "transaction",
+                      type: original.type,
+                      playerId: original.playerId,
+                      tableId: original.tableId,
+                    });
+                  }}
+                >
+                  {t("Create corrected entry")}
+                </Button>
+              )}
+            </div>
+            {canReplace && correctionBlocked && (
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  s.busy
+                    ? "Saving…"
+                    : s.retryRequired
+                      ? "Retry the previous request before submitting a different operation."
+                      : relatedPending
+                        ? "Resolve pending request first"
+                        : "The original player session is no longer active.",
+                )}
+              </p>
+            )}
+          </div>
+        )}
+        {cashOut && (
+          <Alert>
+            <AlertDescription className="flex min-w-0 flex-wrap items-baseline justify-between gap-2">
+              <span className="font-medium">
+                {t(
+                  tx.reversesId
+                    ? "Cash payout reversal"
+                    : reversal
+                      ? "Original cash payout"
+                      : "Cash payout",
+                )}
+              </span>
+              <strong className="whitespace-nowrap text-lg tabular-nums sm:text-xl">
+                {money(tx.cashPayout)}
+              </strong>
+            </AlertDescription>
+          </Alert>
+        )}
         <dl className="grid grid-cols-2 gap-3 text-sm">
           {[
             ["Transaction type", t(tx.type)],
@@ -57,10 +193,21 @@ export function Receipt({
                 s.tables.find((table) => table.id === tx.tableId)?.name ?? "—",
               ),
             ],
-            ["Amount", money(tx.amount)],
+            [cashOut ? "Chips returned" : "Amount", money(tx.amount)],
             ["Cash received", money(tx.cashReceived)],
-            ["Cash payout", money(tx.cashPayout)],
-            ["Credit change", money(tx.creditDelta)],
+            ...(cashOut
+              ? [
+                  [
+                    tx.creditDelta > 0
+                      ? "Credit debt restored"
+                      : "Credit settled",
+                    money(Math.abs(tx.creditDelta)),
+                  ],
+                ]
+              : [
+                  ["Cash payout", money(tx.cashPayout)],
+                  ["Credit change", money(tx.creditDelta)],
+                ]),
             ["Staff", displayName(tx.staff)],
             ["Date", timestamp(tx.time, s.snapshot!.branch.timezone)],
           ].map(([label, value]) => (
@@ -75,7 +222,10 @@ export function Receipt({
         <p className="break-words text-sm [overflow-wrap:anywhere]">
           {tx.note}
         </p>
-        <p className="break-all text-xs">
+        <p className="break-all text-xs text-muted-foreground">
+          {t("Reference")}: {tx.id}
+        </p>
+        <p className="break-all text-xs text-muted-foreground">
           {t("Request reference")}: {tx.approvalId}
         </p>
         <p className="text-xs">
@@ -86,7 +236,7 @@ export function Receipt({
             .join(", ") || "—"}
         </p>
         {tx.reversesId && (
-          <p className="break-all text-xs">
+          <p className="break-all text-xs text-muted-foreground">
             {t("Reverses")}: {tx.reversesId}
           </p>
         )}

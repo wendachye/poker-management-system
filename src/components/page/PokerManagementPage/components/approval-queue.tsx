@@ -5,6 +5,7 @@ import { displayName } from "@/lib/display-name";
 import { Button } from "@/components/ui/button";
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Table,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/table";
 import { canApprove } from "@/domain/operations";
 import { approvalReviewProgress } from "@/domain/approval-review-progress";
+import { ledgerImpact } from "@/domain/ledger-impact";
 import type { ApprovalRequest, Transaction } from "@/domain/model";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money } from "../utils";
@@ -32,7 +34,7 @@ import {
   useText,
   useTimestamp,
 } from "./shared";
-import { EntryImpact } from "./entry-impact";
+import { CashOutSummary, EntryImpact } from "./entry-impact";
 import { Receipt } from "./receipt";
 import { Link } from "@/i18n/navigation";
 
@@ -70,6 +72,18 @@ export function ApprovalQueue({
   const requestDay = request
     ? s.store.days.find((day) => day.id === request.dayId)?.date
     : undefined;
+  const reversalOriginal =
+    request?.type === "Reversal"
+      ? s.store.transactions.find((tx) => tx.id === request.reversesId)
+      : undefined;
+  const reversalImpact =
+    request && reversalOriginal && request.status !== "REJECTED"
+      ? request.status === "APPROVED"
+        ? s.store.transactions.find((tx) => tx.approvalId === request.id)
+        : ledgerImpact(s.store, request)
+      : undefined;
+  const cashOutReversal =
+    !!reversalImpact && reversalOriginal?.type === "Cash-out";
   function canReview(request: ApprovalRequest) {
     return (
       !!s.user &&
@@ -164,6 +178,56 @@ export function ApprovalQueue({
       </p>
     );
   }
+  function amount(r: ApprovalRequest) {
+    const original = r.reversesId
+      ? s.store.transactions.find((tx) => tx.id === r.reversesId)
+      : undefined;
+    const cashOut = r.type === "Cash-out" || original?.type === "Cash-out";
+    const impact = cashOut
+      ? r.status === "PENDING"
+        ? ledgerImpact(s.store, r)
+        : s.store.transactions.find((tx) => tx.approvalId === r.id)
+      : undefined;
+    return (
+      <div className="space-y-0.5 text-right tabular-nums">
+        <p className="text-sm font-semibold">
+          {money(impact ? impact.cashPayout : r.amount)}
+        </p>
+        {cashOut && (
+          <>
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              {t(
+                impact
+                  ? r.reversesId
+                    ? "Cash payout reversal"
+                    : r.status === "PENDING"
+                      ? "Cash payout after approval"
+                      : "Cash payout"
+                  : "Chips returned",
+              )}
+            </p>
+            {impact && (
+              <>
+                <p className="text-[11px] leading-4 text-muted-foreground">
+                  {t("Chips returned")}: {money(impact.amount)}
+                </p>
+                {impact.creditDelta !== 0 && (
+                  <p className="text-[11px] leading-4 text-muted-foreground">
+                    {t(
+                      impact.creditDelta > 0
+                        ? "Credit debt restored"
+                        : "Credit settled",
+                    )}
+                    : {money(Math.abs(impact.creditDelta))}
+                  </p>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
   function actions(r: ApprovalRequest) {
     const posted = s.store.transactions.find((tx) => tx.approvalId === r.id);
     const actionLabel = canReview(r) ? "Review request" : "View details";
@@ -246,9 +310,7 @@ export function ApprovalQueue({
                       {subject(r)}
                     </p>
                   </div>
-                  <p className="shrink-0 text-right text-sm font-semibold tabular-nums">
-                    {money(r.amount)}
-                  </p>
+                  <div className="shrink-0">{amount(r)}</div>
                 </div>
                 {metadata(r)}
                 {r.note && (
@@ -312,9 +374,7 @@ export function ApprovalQueue({
                       {status(r)}
                       {reviewSummary(r)}
                     </TableCell>
-                    <TableCell className="py-2 text-right font-semibold tabular-nums">
-                      {money(r.amount)}
-                    </TableCell>
+                    <TableCell className="py-2">{amount(r)}</TableCell>
                     <TableCell className="py-2">{actions(r)}</TableCell>
                   </TableRow>
                 ))}
@@ -357,10 +417,37 @@ export function ApprovalQueue({
         {request && reviewProgress && (
           <>
             <div className="min-w-0 space-y-2 rounded-lg bg-muted p-4 text-sm [overflow-wrap:anywhere]">
-              <div className="flex flex-wrap justify-between gap-2">
-                <p className="text-lg font-semibold">
-                  {t(request.type)} · {money(request.amount)}
-                </p>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="space-y-1">
+                  <p className="text-lg font-semibold">{t(request.type)}</p>
+                  <p className="font-medium tabular-nums">
+                    {t(
+                      cashOutReversal
+                        ? "Cash payout reversal"
+                        : request.type === "Cash-out"
+                          ? "Chips returned"
+                          : "Amount",
+                    )}
+                    :{" "}
+                    <span className="whitespace-nowrap">
+                      {money(
+                        reversalImpact
+                          ? cashOutReversal
+                            ? reversalImpact.cashPayout
+                            : reversalImpact.amount
+                          : request.amount,
+                      )}
+                    </span>
+                  </p>
+                  {cashOutReversal && reversalImpact && (
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      {t("Chips returned")}:{" "}
+                      <span className="whitespace-nowrap">
+                        {money(reversalImpact.amount)}
+                      </span>
+                    </p>
+                  )}
+                </div>
                 <Badge>{request.status}</Badge>
               </div>
               <p>
@@ -401,7 +488,43 @@ export function ApprovalQueue({
                 {t("Reference")}: {request.id}
               </p>
             </div>
-            {request.status === "PENDING" && <EntryImpact request={request} />}
+            {request.status === "PENDING" &&
+              (reviewable && decision === "REJECTED" ? (
+                <Alert>
+                  <AlertDescription>
+                    {t(
+                      "Rejecting this request does not post an entry or change cash or credit.",
+                    )}
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <EntryImpact request={request} />
+              ))}
+            {request.status === "REJECTED" && (
+              <Alert>
+                <AlertDescription>
+                  {t(
+                    "This request was rejected. Cash and credit were not changed.",
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+            {request.reversesId && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const original = s.store.transactions.find(
+                    (tx) => tx.id === request.reversesId,
+                  );
+                  if (original) {
+                    setReviewId("");
+                    setReceipt(original);
+                  }
+                }}
+              >
+                {t("Original receipt")}
+              </Button>
+            )}
             {reviewable ? (
               <ActionForm
                 validationKey={request.id + ":" + decision}
@@ -449,7 +572,14 @@ export function ApprovalQueue({
                     </TabsContent>
                   </Tabs>
                 </FormSection>
-                <FormActions destructive={decision === "REJECTED"}>
+                <FormActions
+                  destructive={decision === "REJECTED"}
+                  summary={
+                    decision === "APPROVED" && request.type === "Cash-out" ? (
+                      <CashOutSummary request={request} />
+                    ) : undefined
+                  }
+                >
                   {decision === "REJECTED"
                     ? "Reject request"
                     : "Approve request"}
@@ -487,7 +617,11 @@ export function ApprovalQueue({
         )}
       </Modal>
       {receipt && (
-        <Receipt transaction={receipt} close={() => setReceipt(null)} />
+        <Receipt
+          transaction={receipt}
+          close={() => setReceipt(null)}
+          onViewTransaction={setReceipt}
+        />
       )}
     </div>
   );
