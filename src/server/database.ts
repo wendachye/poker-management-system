@@ -13,6 +13,10 @@ export interface Database extends SqlConnection {
 const globalDatabase = globalThis as typeof globalThis & { pokerPool?: Pool };
 
 export function database(): Database {
+  if (process.env.POKER_PROTOTYPE_MODE === "1")
+    throw new Error(
+      "Live database access is disabled in the frontend prototype.",
+    );
   if (!process.env.DATABASE_URL)
     throw new Error(
       "DATABASE_URL is not configured. Complete the database setup before signing in.",

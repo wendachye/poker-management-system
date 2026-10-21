@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronsUpDown, LoaderCircle, LogOut } from "lucide-react";
+import {
+  ChevronsUpDown,
+  LoaderCircle,
+  LogOut,
+  Presentation,
+} from "lucide-react";
+import { prototypeEnabled } from "@/prototype/config";
 import { useAuth } from "@/contexts/auth-context";
 import { displayName } from "@/lib/display-name";
 import { useText } from "@/components/page/PokerManagementPage/components/shared";
@@ -41,6 +47,7 @@ export function NavUser() {
           ? error.message
           : "Could not sign out. Please try again.",
       );
+    } finally {
       setBusy(false);
     }
   }
@@ -99,8 +106,14 @@ export function NavUser() {
                 void signOut();
               }}
             >
-              {busy ? <LoaderCircle className="animate-spin" /> : <LogOut />}
-              {t("Sign out")}
+              {busy ? (
+                <LoaderCircle className="animate-spin" />
+              ) : prototypeEnabled ? (
+                <Presentation />
+              ) : (
+                <LogOut />
+              )}
+              {t(prototypeEnabled ? "Demo overview" : "Sign out")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

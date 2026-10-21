@@ -22,7 +22,7 @@ export function DashboardView() {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 xl:grid-cols-4">
         <Stat label="Active players" value={String(summary.activePlayers)} />
         <Card>
           <CardHeader>

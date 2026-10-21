@@ -65,8 +65,10 @@ export function DashboardHeader() {
     setError("");
     try {
       await action();
+      setPendingBranch("");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Request failed.");
+    } finally {
       setBusy(false);
     }
   }

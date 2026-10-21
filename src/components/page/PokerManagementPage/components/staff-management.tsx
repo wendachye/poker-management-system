@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { Role } from "@/domain/model";
 import type { StaffAccount, StaffCommand } from "@/domain/staff";
 import { displayName } from "@/lib/display-name";
+import { managementRequest } from "@/lib/management-request";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
@@ -60,7 +61,10 @@ export function StaffManagement() {
   const branchId = s.snapshot!.branch.id;
   useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/staff", { cache: "no-store", signal: controller.signal })
+    void managementRequest("/api/staff", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
@@ -205,7 +209,9 @@ export function StaffManagement() {
             onClick={() => start({ action: "create" })}
           >
             <UserPlus />
-            <span className="hidden sm:inline">{t("Create staff account")}</span>
+            <span className="hidden sm:inline">
+              {t("Create staff account")}
+            </span>
           </Button>
         }
       >
@@ -285,7 +291,9 @@ export function StaffManagement() {
             />
           </Field>
         </ListToolbar>
-        {rows.some((account) => account.sharedAccount && account.id !== s.user?.id) && (
+        {rows.some(
+          (account) => account.sharedAccount && account.id !== s.user?.id,
+        ) && (
           <p className="text-xs leading-5 text-muted-foreground">
             <span className="font-medium">{t("Multiple locations")}: </span>
             {t(

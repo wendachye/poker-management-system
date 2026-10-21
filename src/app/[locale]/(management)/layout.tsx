@@ -3,6 +3,7 @@ import { ManagementShell } from "@/components/layout/management-shell";
 import { sessionUser } from "@/server/auth";
 import { database } from "@/server/database";
 import { sessionToken } from "@/server/http";
+import { prototypeEnabled } from "@/prototype/config";
 export default async function ManagementLayout({
   children,
   params,
@@ -11,6 +12,8 @@ export default async function ManagementLayout({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
+  if (prototypeEnabled && process.env.POKER_PROTOTYPE_MODE === "1")
+    return <ManagementShell>{children}</ManagementShell>;
   const token = await sessionToken();
   if (!token) redirect("/" + locale + "/login");
   let authenticated = false;

@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { toast } from "sonner";
 import { useLocale, useMessages } from "next-intl";
+import { managementRequest } from "@/lib/management-request";
+import { prototypeEnabled } from "@/prototype/config";
 import type { Command } from "@/domain/commands";
 import type { StaffCommand } from "@/domain/staff";
 import type { LocationCommand } from "@/domain/locations";
@@ -48,8 +50,13 @@ export function usePokerManagementState() {
   } | null>(null);
   const accept = useCallback((next: Snapshot) => {
     if (activeBranch.current && activeBranch.current !== next.branch.id) {
-      window.location.reload();
-      return;
+      if (!prototypeEnabled) {
+        window.location.reload();
+        return;
+      }
+      latestRevision.current = -1;
+      setDrafts({});
+      setOperation(null);
     }
     activeBranch.current = next.branch.id;
     if (next.revision >= latestRevision.current) {
@@ -59,7 +66,9 @@ export function usePokerManagementState() {
   }, []);
   const refresh = useCallback(async () => {
     try {
-      const response = await fetch("/api/state", { cache: "no-store" });
+      const response = await managementRequest("/api/state", {
+        cache: "no-store",
+      });
       const data = await response.json();
       if (response.status === 401) {
         window.location.assign("/login");
@@ -76,6 +85,34 @@ export function usePokerManagementState() {
       setRefreshError(message);
     }
   }, [accept]);
+  useEffect(() => {
+    if (!prototypeEnabled) return;
+    let disposed = false;
+    let unsubscribe = () => {};
+    void import("@/prototype/runtime").then((runtime) => {
+      if (disposed) return;
+      let generation = runtime.getPrototypeInfo().generation;
+      unsubscribe = runtime.subscribePrototype(() => {
+        const next = runtime.getPrototypeInfo();
+        if (generation !== next.generation) {
+          generation = next.generation;
+          latestRevision.current = -1;
+          activeBranch.current = null;
+          uncertain.current = null;
+          setRetryRequired(false);
+          setDrafts({});
+          setOperation(null);
+          setError("");
+          setNotice("");
+        }
+        if (!inFlight.current) void refresh();
+      });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [refresh]);
   useEffect(() => {
     if (!user) return;
     void refresh();
@@ -120,7 +157,7 @@ export function usePokerManagementState() {
           command,
         });
       uncertain.current = { fingerprint, payload, endpoint };
-      const response = await fetch(endpoint, {
+      const response = await managementRequest(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: payload,

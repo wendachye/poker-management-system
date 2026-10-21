@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "prototype": "node --import tsx scripts/prototype.ts",
     "local": "node --conditions=react-server --import tsx scripts/local.ts",
     "local:db": "node --conditions=react-server --import tsx scripts/local.ts --database-only",
     "local:seed": "node --conditions=react-server --import tsx scripts/seed-local.ts",

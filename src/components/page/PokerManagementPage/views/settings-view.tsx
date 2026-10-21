@@ -1,5 +1,6 @@
 "use client";
 import { displayName } from "@/lib/display-name";
+import { managementRequest } from "@/lib/management-request";
 import { useEffect, useState } from "react";
 import {
   CheckCircle2,
@@ -58,7 +59,10 @@ export function SettingsView({
   useEffect(() => {
     if (!admin || section !== "setup") return;
     const controller = new AbortController();
-    void fetch("/api/staff", { cache: "no-store", signal: controller.signal })
+    void managementRequest("/api/staff", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);

@@ -36,7 +36,9 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts",
     ".local/ui-next/types/**/*.ts",
-    ".local/ui-next/dev/types/**/*.ts"
+    ".local/ui-next/dev/types/**/*.ts",
+    ".local/prototype-next/types/**/*.ts",
+    ".local/prototype-next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

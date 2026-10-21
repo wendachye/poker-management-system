@@ -25,7 +25,12 @@ import {
   useText,
 } from "@/components/page/PokerManagementPage/components/shared";
 import { LanguageSwitcher } from "@/components/layout/language-switcher";
+import { prototypeEnabled } from "@/prototype/config";
+import { PrototypeEntry } from "@/prototype/prototype-entry";
 export default function LoginPage() {
+  return prototypeEnabled ? <PrototypeEntry /> : <StaffLoginPage />;
+}
+function StaffLoginPage() {
   const { login, loading } = useAuth();
   const router = useRouter();
   const t = useText();

@@ -4,6 +4,20 @@ A staff operations app for poker venues: player check-in, table seating, buy-ins
 
 Built with Next.js 16, React 19, TypeScript, PostgreSQL, and English/Chinese interfaces. Each location has separate records and staff permissions. Staff with multiple memberships can switch locations.
 
+## Stakeholder frontend prototype
+
+To review the user interface and daily workflow with fictional data, run:
+
+```sh
+npm run prototype
+```
+
+Open [the stakeholder prototype](http://127.0.0.1:3001/en/dashboard). This preview uses the existing screens and theme with in-memory browser data. It needs no database, staff passwords or account setup. The regular local app at port 3000 can keep running independently.
+
+Use **Demo tools** to choose a busy shift, start a guided player visit, or review a shift ready to close. Switch between Cashier, Manager, Admin and Dealer to show the different responsibilities. A cashier can request a buy-in; a separate manager can approve it. Cash-outs require admin review. Financial amounts are fictional and follow the same workflow rules used by the app.
+
+**Reset demo** returns to the selected sample scenario. Refreshing the browser returns to the initial busy shift. Demo changes are not saved and never reach the working local database; the prototype launcher explicitly disables live database access. This is a local presentation prototype, not a deployed operations service. Prototype work lives on `codex/stakeholder-prototype` while the tested local release remains on `main`.
+
 ## Local first (no Docker or cloud account)
 
 Use Node.js 22.13+ and install the project dependencies once with `yarn install --frozen-lockfile`. Start both the app and persistent local database with:
@@ -211,7 +225,6 @@ node --conditions=react-server --import tsx tests/ui-server.ts
 ```
 
 This starts a separate app at `http://127.0.0.1:3001` with an in-memory database on port 55434 and build output in `.local/ui-next`. Test accounts are `qa.admin`, `qa.manager`, `qa.cashier`, and `qa.dealer`, all with the test-only password `ui-test-password`. Both test venues start with the sample rules and tables above and setup complete, with no business day, players, or transactions. All test records disappear when this helper stops; it does not use `.local/postgres`. Use the separate hostname as shown so test sign-ins do not replace the normal localhost session.
-
 
 ### Create and edit forms
 

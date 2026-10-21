@@ -869,7 +869,7 @@ export function Stat({
   compact?: boolean;
 }) {
   const t = useText();
-  const currency = compact ? value.match(/^(-?)RM\s*(\d[\d,]*\.\d{2})$/) : null;
+  const currency = value.match(/^(-?)RM\s*(\d[\d,]*\.\d{2})$/);
   const amount = currency ? currency[2] : "";
   const digits = amount.replace(/\D/g, "").length;
   // Reserve enough room for tabular digits and punctuation at the card's width.
@@ -888,9 +888,9 @@ export function Stat({
         </CardDescription>
         <p
           className={cn(
-            "min-w-0 break-words font-semibold tabular-nums",
+            "@container/stat-value min-w-0 break-words font-semibold tabular-nums",
             compact
-              ? "@container/stat-value text-sm leading-5 [overflow-wrap:anywhere] sm:text-lg sm:leading-6"
+              ? "text-sm leading-5 [overflow-wrap:anywhere] sm:text-lg sm:leading-6"
               : "text-lg sm:text-2xl",
           )}
         >
