@@ -15,6 +15,17 @@ export function json(value: unknown, status = 200) {
     },
   });
 }
+export function prototypeApiResponse(): Response | null {
+  if (
+    process.env.POKER_PROTOTYPE_MODE !== "1" &&
+    process.env.NEXT_PUBLIC_POKER_PROTOTYPE !== "1"
+  )
+    return null;
+  return json(
+    { error: "Staff APIs are disabled in the sample-data prototype." },
+    404,
+  );
+}
 export function verifyOrigin(request: Request) {
   const expected = process.env.APP_ORIGIN || new URL(request.url).origin;
   if (request.headers.get("origin") !== expected)

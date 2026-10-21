@@ -22,7 +22,15 @@ Use **Demo tools** for free exploration with **Busy shift** or **Ready to close*
 
 The guide shows the current step and required staff role. Continue opens the relevant screen or unsaved form; staff still review and submit every action. Switch between Cashier, Manager, Admin and Dealer to demonstrate responsibilities. A separate manager approves buy-ins and repayments; cash-outs and reversals require admin review. All amounts are fictional and follow the same workflow rules used by the app.
 
-**Reset demo** returns to the selected sample scenario. Refreshing the browser returns to the initial busy shift. Demo changes are not saved and never reach the working local database; the prototype launcher explicitly disables live database access. This is a local presentation prototype, not a deployed operations service. Prototype work lives on `codex/stakeholder-prototype` while the tested local release remains on `main`.
+**Reset demo** returns to the selected sample scenario. Refreshing the browser returns to the initial busy shift. Demo changes are not saved and never reach the working local database; the prototype launcher explicitly disables live database access. Prototype work lives on `codex/stakeholder-prototype` while the tested local release remains on `main`.
+
+### Stakeholder demo on Vercel
+
+Deploy the **`codex/stakeholder-prototype`** branch. Its `vercel.json` enables sample-data mode for both the build and the deployed server. Stakeholders can open `/en/login`, click **Open prototype**, and try the workflows without a staff username, password or database. Each browser tab has its own sample records; refreshing or resetting starts a fresh example.
+
+Both `NEXT_PUBLIC_POKER_PROTOTYPE=1` and `POKER_PROTOTYPE_MODE=1` must be enabled together. Public variables are built into the browser bundle, so redeploy after changing them. The prototype blocks direct staff APIs and database access when either marker is present. Do not attach an operations database or import local accounts into this demo project. Normal application builds without these markers retain staff authentication.
+
+If the deployed address still shows the staff sign-in form, check that Vercel's deployment source is this prototype branch and includes the latest commit, then redeploy. A production address pointing at `main` must be switched or promoted to the prototype deployment before it will show the sample demo.
 
 ## Local first (no Docker or cloud account)
 

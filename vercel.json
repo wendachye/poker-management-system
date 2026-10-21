@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_POKER_PROTOTYPE": "1",
+      "POKER_PROTOTYPE_MODE": "1"
+    }
+  },
+  "env": {
+    "NEXT_PUBLIC_POKER_PROTOTYPE": "1",
+    "POKER_PROTOTYPE_MODE": "1"
+  }
+}

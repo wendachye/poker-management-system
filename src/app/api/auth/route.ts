@@ -9,11 +9,19 @@ import {
   SESSION_SECONDS,
 } from "@/server/auth";
 import { database } from "@/server/database";
-import { body, failure, json, sessionToken } from "@/server/http";
+import {
+  body,
+  failure,
+  json,
+  prototypeApiResponse,
+  sessionToken,
+} from "@/server/http";
 import { DomainError } from "@/domain/operations";
 
 export const runtime = "nodejs";
 export async function GET() {
+  const disabled = prototypeApiResponse();
+  if (disabled) return disabled;
   try {
     const db = database();
     const user = await requireUser(db, await sessionToken());
@@ -23,6 +31,8 @@ export async function GET() {
   }
 }
 export async function POST(request: Request) {
+  const disabled = prototypeApiResponse();
+  if (disabled) return disabled;
   try {
     const credentials = z
       .object({
@@ -53,6 +63,8 @@ export async function POST(request: Request) {
   }
 }
 export async function DELETE(request: Request) {
+  const disabled = prototypeApiResponse();
+  if (disabled) return disabled;
   try {
     await body(request);
     await logout(database(), await sessionToken());
