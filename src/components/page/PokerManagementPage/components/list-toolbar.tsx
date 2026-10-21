@@ -19,7 +19,13 @@ import {
 import { cn } from "@/lib/utils";
 import { useText } from "./shared";
 
-export type ListFilter = { key: string; label: string; onRemove: () => void };
+export type ListFilter = {
+  key: string;
+  label: string;
+  onRemove: () => void;
+  /** Keep a visible quick filter in the criteria count without repeating its chip. */
+  hideChip?: boolean;
+};
 
 export function ListToolbar({
   search,
@@ -170,17 +176,12 @@ export function ListToolbar({
             <Button
               type="button"
               variant="ghost"
-              className={cn(
-                "h-11 sm:h-10",
-                compact && "w-11 px-0 sm:w-auto sm:px-4",
-              )}
+              className={cn("h-11 sm:h-10", compact && "hidden sm:inline-flex")}
               aria-label={t("Clear all")}
               onClick={onClear}
             >
               <RotateCcw aria-hidden="true" />
-              <span className={compact ? "hidden sm:inline" : undefined}>
-                {t("Clear all")}
-              </span>
+              <span>{t("Clear all")}</span>
             </Button>
           )}
         </div>
@@ -188,37 +189,53 @@ export function ListToolbar({
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span
           id={`${id}-results`}
-          className="w-full tabular-nums sm:mr-auto sm:w-auto"
+          className={cn(
+            "w-full tabular-nums sm:mr-auto sm:w-auto",
+            compact && "mr-auto w-auto",
+          )}
           role="status"
           aria-live="polite"
           aria-atomic="true"
         >
           {resultCount} {t(resultCount === 1 ? "result" : "results")}
         </span>
-        {activeFilters.map((filter, index) =>
-          typeof filter === "string" ? (
-            <Badge
-              key={`${index}-${filter}`}
-              variant="secondary"
-              className="max-w-full whitespace-normal font-normal"
-            >
-              {t(filter)}
-            </Badge>
-          ) : (
-            <Button
-              key={filter.key}
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-1.5 text-left font-normal sm:min-h-8"
-              aria-label={`${t("Remove filter")}: ${t(filter.label)}`}
-              onClick={filter.onRemove}
-            >
-              <span className="min-w-0 break-words">{t(filter.label)}</span>
-              <X aria-hidden="true" className="size-3.5 shrink-0" />
-            </Button>
-          ),
+        {compact && hasCriteria && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-11 gap-1.5 px-2 text-xs text-muted-foreground sm:hidden"
+            onClick={onClear}
+          >
+            <RotateCcw aria-hidden="true" className="size-3.5" />
+            {t("Clear all")}
+          </Button>
         )}
+        {activeFilters
+          .filter((filter) => typeof filter === "string" || !filter.hideChip)
+          .map((filter, index) =>
+            typeof filter === "string" ? (
+              <Badge
+                key={`${index}-${filter}`}
+                variant="secondary"
+                className="max-w-full whitespace-normal font-normal"
+              >
+                {t(filter)}
+              </Badge>
+            ) : (
+              <Button
+                key={filter.key}
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-1.5 text-left font-normal sm:min-h-8"
+                aria-label={`${t("Remove filter")}: ${t(filter.label)}`}
+                onClick={filter.onRemove}
+              >
+                <span className="min-w-0 break-words">{t(filter.label)}</span>
+                <X aria-hidden="true" className="size-3.5 shrink-0" />
+              </Button>
+            ),
+          )}
       </div>
     </div>
   );

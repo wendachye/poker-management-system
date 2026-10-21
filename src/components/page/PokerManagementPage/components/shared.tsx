@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup } from "radix-ui";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Select as UiSelect,
@@ -307,6 +308,53 @@ type ChoiceProps = {
   "aria-invalid"?: boolean;
   className?: string;
 };
+export function ChoiceButtons({
+  options,
+  value,
+  onValueChange,
+  required,
+  disabled,
+  className,
+  ...props
+}: ChoiceProps) {
+  const t = useText();
+  const markDirty = useContext(DirtyContext);
+  return (
+    <RadioGroup.Root
+      {...props}
+      value={value}
+      required={required}
+      disabled={disabled}
+      data-required={(required && !disabled) || undefined}
+      data-value={value}
+      onValueChange={(next) => {
+        markDirty?.();
+        onValueChange(next);
+      }}
+      className={cn(
+        "grid min-w-0 grid-cols-3 gap-2 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        className,
+      )}
+    >
+      {options.map((option) => (
+        <RadioGroup.Item
+          key={option.value}
+          value={option.value}
+          disabled={option.disabled}
+          asChild
+        >
+          <Button
+            type="button"
+            variant={value === option.value ? "default" : "outline"}
+            className="h-11 min-w-0 whitespace-normal px-2"
+          >
+            {t(option.label)}
+          </Button>
+        </RadioGroup.Item>
+      ))}
+    </RadioGroup.Root>
+  );
+}
 export function Select({
   options,
   value,
@@ -479,14 +527,17 @@ export function ActionForm({
       <Errors.Provider
         value={{
           errors,
-          clear: (id) =>
+          clear: (id) => {
             setValidation((current) => ({
               key: validationKey,
               errors: {
                 ...(current.key === validationKey ? current.errors : {}),
                 [id]: "",
               },
-            })),
+            }));
+            if (attemptedHere.current && s.error && !s.retryRequired)
+              s.setError("");
+          },
         }}
       >
         <form
@@ -568,7 +619,7 @@ export function ActionForm({
           )}
           <FieldSet
             disabled={s.busy || disabled || s.retryRequired}
-            className="gap-5"
+            className="min-w-0 gap-5"
           >
             {Children.map(children, (child) =>
               isValidElement(child) && child.type === FormActions

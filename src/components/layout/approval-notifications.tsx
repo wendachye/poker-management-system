@@ -77,7 +77,7 @@ export function ApprovalNotifications() {
         <Button
           variant="ghost"
           size="icon"
-          className="relative size-10"
+          className="relative size-11 shrink-0 sm:size-10"
           aria-label={`${t("Approval queue")}: ${countLabel}`}
           title={countLabel}
         >

@@ -40,10 +40,12 @@ export function ApprovalQueue({
   requests,
   compact = false,
   embedded = false,
+  pendingView = false,
 }: {
   requests?: ApprovalRequest[];
   compact?: boolean;
   embedded?: boolean;
+  pendingView?: boolean;
 }) {
   const s = usePokerManagementContext(),
     t = useText(),
@@ -54,6 +56,8 @@ export function ApprovalQueue({
     [currentPage, setPage] = useState(0);
   const [receipt, setReceipt] = useState<Transaction | null>(null);
   const entries = requests ?? s.pendingApprovals;
+  const emptyPendingQueue =
+    (pendingView || requests === undefined) && !s.pendingApprovals.length;
   const page = Math.min(
     currentPage,
     Math.max(0, Math.ceil(entries.length / 20) - 1),
@@ -66,8 +70,15 @@ export function ApprovalQueue({
   const requestDay = request
     ? s.store.days.find((day) => day.id === request.dayId)?.date
     : undefined;
-  const reviewable =
-    !!request && !!s.user && canApprove(s.user, request) && !s.locked;
+  function canReview(request: ApprovalRequest) {
+    return (
+      !!s.user &&
+      !s.locked &&
+      request.dayId === s.store.currentDayId &&
+      canApprove(s.user, request)
+    );
+  }
+  const reviewable = !!request && canReview(request);
   function subject(r: ApprovalRequest) {
     return (
       [
@@ -155,10 +166,7 @@ export function ApprovalQueue({
   }
   function actions(r: ApprovalRequest) {
     const posted = s.store.transactions.find((tx) => tx.approvalId === r.id);
-    const actionLabel =
-      r.status === "PENDING" && s.user && canApprove(s.user, r)
-        ? "Review request"
-        : "View details";
+    const actionLabel = canReview(r) ? "Review request" : "View details";
     return (
       <div className="flex shrink-0 items-center justify-end gap-1.5">
         {posted && (
@@ -196,14 +204,16 @@ export function ApprovalQueue({
       {!entries.length && (
         <EmptyState
           title={
-            requests && s.store.approvals.length
-              ? "No requests match these filters."
-              : requests
-                ? "No requests yet"
-                : "No pending approvals."
+            emptyPendingQueue
+              ? "No pending approvals."
+              : requests && s.store.approvals.length
+                ? "No requests match these filters."
+                : requests
+                  ? "No requests yet"
+                  : "No pending approvals."
           }
           description={
-            requests && s.store.approvals.length
+            !emptyPendingQueue && requests && s.store.approvals.length
               ? "Try another search or clear the filters."
               : "Requests keep their status and review history here."
           }
@@ -449,9 +459,11 @@ export function ApprovalQueue({
               request.status === "PENDING" && (
                 <p className="text-sm text-muted-foreground">
                   {t(
-                    request.requestedById === s.user?.id
-                      ? "Awaiting independent review"
-                      : "Awaiting authorized reviewer",
+                    s.locked || request.dayId !== s.store.currentDayId
+                      ? "Only requests for the current open business day can be reviewed."
+                      : request.requestedById === s.user?.id
+                        ? "Awaiting independent review"
+                        : "Awaiting authorized reviewer",
                   )}
                 </p>
               )

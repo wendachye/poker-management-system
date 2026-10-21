@@ -49,15 +49,30 @@ export function PlayersView() {
       table.status === "OPEN" &&
       s.activePlayers.filter((p) => p.tableId === table.id).length < 9,
   );
-  const filtered = s.players.filter(
+  const matchingPlayers = s.players.filter(
     (p) =>
       [p.name, p.phone, p.id].some((text) =>
         text.toLowerCase().includes(query),
       ) &&
-      (!value("status") || p.status === value("status")) &&
       (!value("type") || p.type === value("type")) &&
       (!value("tag") || p.tags.some((tag) => tag === value("tag"))),
   );
+  const filtered = matchingPlayers.filter(
+    (p) => !value("status") || p.status === value("status"),
+  );
+  const statusOptions = [
+    { value: "", label: "All players", count: matchingPlayers.length },
+    {
+      value: "ACTIVE",
+      label: "ACTIVE",
+      count: matchingPlayers.filter((p) => p.status === "ACTIVE").length,
+    },
+    {
+      value: "OUT",
+      label: "OUT",
+      count: matchingPlayers.filter((p) => p.status === "OUT").length,
+    },
+  ];
   const page = Math.min(
     Number(value("page", "0")),
     Math.max(0, Math.ceil(filtered.length / 20) - 1),
@@ -183,6 +198,28 @@ export function PlayersView() {
               </Link>
             </p>
           )}
+          <div
+            role="group"
+            aria-label={t("Player status")}
+            className="grid grid-cols-3 gap-1 rounded-lg border bg-muted/30 p-1 sm:w-fit"
+          >
+            {statusOptions.map((status) => (
+              <Button
+                key={status.value}
+                type="button"
+                variant="ghost"
+                aria-pressed={value("status") === status.value}
+                aria-label={t(status.label) + " · " + status.count}
+                className={`h-11 min-w-0 flex-col gap-0 px-2 text-xs sm:h-9 sm:flex-row sm:gap-2 sm:px-3 ${value("status") === status.value ? "bg-background text-foreground shadow-xs hover:bg-background" : "text-muted-foreground"}`}
+                onClick={() => setCriteria("status", status.value)}
+              >
+                <span>{t(status.label)}</span>
+                <span className="text-[11px] font-normal tabular-nums text-muted-foreground">
+                  {status.count}
+                </span>
+              </Button>
+            ))}
+          </div>
           <ListToolbar
             compact
             search={value("search")}
@@ -199,6 +236,7 @@ export function PlayersView() {
                 key,
                 label: t(label) + ": " + t(value(key)),
                 onRemove: () => setCriteria(key, ""),
+                hideChip: key === "status",
               }))}
             onClear={clearCriteria}
             resultCount={filtered.length}
@@ -271,17 +309,17 @@ export function PlayersView() {
                     <div className="min-w-0 flex-1">{playerIdentity(p)}</div>
                     <span className="pt-1">{playerStatus(p)}</span>
                   </div>
+                  {p.creditUsed > 0 && (
+                    <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs leading-4 text-muted-foreground">
+                      <span>{t("Outstanding credit")}</span>
+                      <span className="whitespace-nowrap font-medium tabular-nums text-foreground">
+                        {money(p.creditUsed)}
+                      </span>
+                    </p>
+                  )}
                   <div className="flex min-w-0 items-end justify-between gap-2">
                     <div className="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
                       {p.status === "ACTIVE" && <p>{playerSeat(p)}</p>}
-                      {p.creditUsed > 0 && (
-                        <p className="break-words leading-4">
-                          {t("Outstanding credit")}
-                          <span className="block font-medium tabular-nums text-foreground">
-                            {money(p.creditUsed)}
-                          </span>
-                        </p>
-                      )}
                     </div>
                     <div className="shrink-0">{rowActions(p)}</div>
                   </div>

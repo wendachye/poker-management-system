@@ -1,6 +1,7 @@
 "use client";
 import { useId } from "react";
 import { Button } from "@/components/ui/button";
+import { Link } from "@/i18n/navigation";
 import type { Player } from "@/domain/model";
 import { displayName } from "@/lib/display-name";
 import { usePokerManagementContext } from "../PokerManagementProvider";
@@ -20,7 +21,8 @@ export function PlayerActions({
     t = useText();
   const operator = s.user?.role !== "DEALER";
   const supervisor = ["MANAGER", "ADMIN"].includes(s.user?.role ?? "");
-  const pending = s.pendingApprovals.some((r) => r.playerId === player.id);
+  const pendingRequest = s.pendingApprovals.find((r) => r.playerId === player.id);
+  const pending = !!pendingRequest;
   const blocked = s.locked || s.busy || s.retryRequired;
   const pendingDescriptionId = useId();
   const actions: RowAction[] = [];
@@ -86,22 +88,46 @@ export function PlayerActions({
     >
       {operator && player.status === "ACTIVE" && (
         <>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-11 sm:h-9"
-            aria-label={t("Buy-in") + " · " + displayName(player.name)}
-            disabled={blocked || pending}
-            onClick={() =>
-              s.startOperation({
-                kind: "transaction",
-                type: "Buy-in",
-                playerId: player.id,
-              })
-            }
-          >
-            {t("Buy-in")}
-          </Button>
+          {compact && pendingRequest ? (
+            <Button
+              asChild
+              size="sm"
+              variant="outline"
+              className="h-11 sm:h-9"
+            >
+              <Link
+                href="/transactions"
+                aria-label={t("View request") + " · " + displayName(player.name)}
+                onClick={() => {
+                  s.setDraft("tx.status", "PENDING");
+                  s.setDraft("tx.day", "");
+                  s.setDraft("tx.filter", "");
+                  s.setDraft("tx.search", pendingRequest.id);
+                  s.setDraft("tx.page", "0");
+                  s.closeOperation();
+                }}
+              >
+                {t("View request")}
+              </Link>
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-11 sm:h-9"
+              aria-label={t("Buy-in") + " · " + displayName(player.name)}
+              disabled={blocked || pending}
+              onClick={() =>
+                s.startOperation({
+                  kind: "transaction",
+                  type: "Buy-in",
+                  playerId: player.id,
+                })
+              }
+            >
+              {t("Buy-in")}
+            </Button>
+          )}
           {!compact && (
             <Button
               size="sm"

@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { displayName } from "@/lib/display-name";
 import type { EntryType, PlayerType, PlayerTag } from "@/domain/model";
 import { effectiveTableRules, venueSettings } from "@/domain/settings";
@@ -12,10 +13,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   ActionForm,
   Badge,
   Field,
   Select,
+  ChoiceButtons,
   SearchSelect,
   FormActions,
   FormGrid,
@@ -75,9 +82,27 @@ function CheckInDialog({
   const s = usePokerManagementContext(),
     t = useText();
   const settings = venueSettings(s.store);
+  const [step, setStep] = useState<"player" | "seat">(
+    initial.playerId ? "seat" : "player",
+  );
+  const stageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    stageRef.current
+      ?.querySelector<HTMLElement>(
+        'input:not([type="hidden"]),[role="combobox"]',
+      )
+      ?.focus();
+  }, [step]);
+  const [moreOptions, setMoreOptions] = useState(false);
+  const openTables = s.tables.filter((table) => table.status === "OPEN");
+  const freeSeats = (tableId: string) =>
+    9 - s.activePlayers.filter((player) => player.tableId === tableId).length;
+  const availableTables = openTables.filter((table) => freeSeats(table.id) > 0);
   const { value, set } = useFields({
     existing: initial.playerId ?? "",
-    table: initial.tableId ?? "",
+    table:
+      initial.tableId ??
+      (availableTables.length === 1 ? availableTables[0].id : ""),
     seat: initial.seat ? String(initial.seat) : "",
     mode:
       initial.playerId ||
@@ -94,7 +119,6 @@ function CheckInDialog({
     (returning
       ? selected?.type === "CREDIT"
       : value("type", "CASH") === "CREDIT");
-  const available = s.tables.filter((table) => table.status === "OPEN");
   return (
     <Modal
       open
@@ -104,10 +128,20 @@ function CheckInDialog({
     >
       <ActionForm
         disabled={s.locked || !operator}
-        validationKey={returning ? "returning" : "new:" + value("type", "CASH")}
+        validationKey={
+          step +
+          ":" +
+          ((returning ? "returning" : "new:" + value("type", "CASH")) +
+            ":" +
+            value("table"))
+        }
         onSubmit={() => {
           if (creditBlocked)
             throw new Error("Credit accounts are disabled in venue settings.");
+          if (step === "player") {
+            setStep("seat");
+            return false;
+          }
           return s.submit({
             kind: "CHECK_IN",
             name: returning ? (selected?.name ?? "") : value("name"),
@@ -129,181 +163,299 @@ function CheckInDialog({
             seat: Number(value("seat")),
           });
         }}
-        onSuccess={() => s.closeOperation()}
+        onSuccess={() => {
+          // Keep the checked-in player visible even if the directory was filtered
+          // to checked-out players, so the operator can request their buy-in next.
+          s.setDraft(
+            "player.search",
+            returning
+              ? (selected?.phone ?? "")
+              : value("phone").replace(/[\s()-]/g, ""),
+          );
+          s.setDraft("player.status", "ACTIVE");
+          s.setDraft("player.type", "");
+          s.setDraft("player.tag", "");
+          s.setDraft("player.page", "0");
+          s.closeOperation();
+        }}
       >
-        <FormSection title="Player details">
-          <Tabs
-            value={returning ? "returning" : "new"}
-            onValueChange={(v) => set("mode", v)}
-          >
-            <TabsList className="w-full">
-              <TabsTrigger value="returning">
-                {t("Returning player")}
-              </TabsTrigger>
-              <TabsTrigger value="new">{t("New player")}</TabsTrigger>
-            </TabsList>
-            <TabsContent value="returning" className="space-y-4 pt-3">
-              <Field
-                label="Player"
-                hint="Returning players keep their profile, restrictions, and outstanding credit."
+        <ol
+          aria-label={t("Check-in steps")}
+          className="mb-5 grid grid-cols-2 gap-3 text-xs"
+        >
+          {["player", "seat"].map((stage, index) => (
+            <li
+              key={stage}
+              aria-current={step === stage ? "step" : undefined}
+              className={
+                "border-b-2 pb-2 " +
+                (step === stage
+                  ? "border-foreground font-medium text-foreground"
+                  : "border-border text-muted-foreground")
+              }
+            >
+              {index + 1}.{" "}
+              {t(stage === "player" ? "Player details" : "Seat assignment")}
+            </li>
+          ))}
+        </ol>
+        <div ref={stageRef} className="min-w-0 space-y-5">
+          {step === "player" && (
+            <FormSection title="Player details">
+              <Tabs
+                value={returning ? "returning" : "new"}
+                onValueChange={(v) => set("mode", v)}
               >
-                <SearchSelect
-                  required
-                  value={value("existing")}
-                  onValueChange={(v) => set("existing", v)}
-                  options={[
-                    { value: "", label: "Select player" },
-                    ...s.players
-                      .filter(
-                        (p) =>
-                          p.status !== "ACTIVE" && !p.tags.includes("Banned"),
-                      )
-                      .map((p) => ({
-                        value: p.id,
-                        label: displayName(p.name) + " · " + p.phone,
-                        disabled:
-                          p.type === "CREDIT" && !settings.creditEnabled,
-                      })),
-                  ]}
-                />
-              </Field>
-              {selected && (
-                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted p-3 text-sm">
-                  <Badge>{selected.type}</Badge>
-                  <span>
-                    {t("Outstanding credit")}: {money(selected.creditUsed)}
-                  </span>
-                </div>
+                <TabsList className="h-auto w-full">
+                  <TabsTrigger value="returning" className="min-h-11">
+                    {t("Returning player")}
+                  </TabsTrigger>
+                  <TabsTrigger value="new" className="min-h-11">
+                    {t("New player")}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="returning" className="space-y-4 pt-3">
+                  <Field
+                    label="Player"
+                    hint="Returning players keep their profile, restrictions, and outstanding credit."
+                  >
+                    <SearchSelect
+                      required
+                      value={value("existing")}
+                      onValueChange={(v) => set("existing", v)}
+                      options={[
+                        { value: "", label: "Select player" },
+                        ...s.players
+                          .filter(
+                            (p) =>
+                              p.status !== "ACTIVE" &&
+                              !p.tags.includes("Banned"),
+                          )
+                          .map((p) => ({
+                            value: p.id,
+                            label: displayName(p.name) + " · " + p.phone,
+                            disabled:
+                              p.type === "CREDIT" && !settings.creditEnabled,
+                          })),
+                      ]}
+                    />
+                  </Field>
+                  {selected && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted p-3 text-sm">
+                      <Badge>{selected.type}</Badge>
+                      <span>
+                        {t("Outstanding credit")}: {money(selected.creditUsed)}
+                      </span>
+                    </div>
+                  )}
+                </TabsContent>
+                <TabsContent value="new" className="space-y-4 pt-3">
+                  <FormGrid>
+                    <Field label="Player name">
+                      <Input
+                        required
+                        maxLength={200}
+                        autoComplete="name"
+                        value={value("name")}
+                        onChange={(e) => set("name", e.target.value)}
+                      />
+                    </Field>
+                    <Field
+                      label="Phone"
+                      hint="Use the country code, for example +60123456789."
+                    >
+                      <Input
+                        required
+                        type="tel"
+                        maxLength={30}
+                        autoComplete="tel"
+                        placeholder="+60123456789"
+                        value={value("phone")}
+                        onChange={(e) => set("phone", e.target.value)}
+                      />
+                    </Field>
+                  </FormGrid>
+                  <Field
+                    label="Player type"
+                    hint={
+                      !supervisor
+                        ? "New credit accounts require a manager."
+                        : undefined
+                    }
+                  >
+                    <ChoiceButtons
+                      className="grid-cols-2"
+                      aria-label={t("Player type")}
+                      required
+                      value={value("type", "CASH")}
+                      onValueChange={(v) => set("type", v)}
+                      options={[
+                        { value: "CASH", label: "CASH" },
+                        {
+                          value: "CREDIT",
+                          label: "CREDIT",
+                          disabled: !supervisor || !settings.creditEnabled,
+                        },
+                      ]}
+                    />
+                  </Field>
+                  {value("type", "CASH") === "CREDIT" && (
+                    <Field
+                      label="Credit limit (RM)"
+                      hint="New credit accounts require a manager."
+                    >
+                      <MoneyInput
+                        required
+                        value={value("credit")}
+                        onChange={(e) => set("credit", e.target.value)}
+                      />
+                    </Field>
+                  )}
+                  <Collapsible open={moreOptions} onOpenChange={setMoreOptions}>
+                    <CollapsibleTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-11 w-full justify-between px-0 text-muted-foreground"
+                      >
+                        {t("More options")}
+                        {value("tag") ? " · " + t(value("tag")) : ""}
+                        <ChevronDown
+                          aria-hidden="true"
+                          className={moreOptions ? "rotate-180" : undefined}
+                        />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-2">
+                      <Field label="Tag" optional>
+                        <Select
+                          value={value("tag")}
+                          onValueChange={(v) => set("tag", v)}
+                          options={["", "VIP", "Risk"].map((v) => ({
+                            value: v,
+                            label: v || "None",
+                          }))}
+                        />
+                      </Field>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </TabsContent>
+              </Tabs>
+              {!settings.creditEnabled && (
+                <Alert>
+                  <AlertDescription>
+                    {t("Credit accounts are disabled in venue settings.")}
+                  </AlertDescription>
+                </Alert>
               )}
-            </TabsContent>
-            <TabsContent value="new" className="space-y-4 pt-3">
-              <FormGrid>
-                <Field label="Player name">
-                  <Input
-                    required
-                    maxLength={200}
-                    autoComplete="name"
-                    value={value("name")}
-                    onChange={(e) => set("name", e.target.value)}
-                  />
-                </Field>
-                <Field
-                  label="Phone"
-                  hint="Use the country code, for example +60123456789."
+            </FormSection>
+          )}
+          {step === "seat" && (
+            <>
+              <div className="flex min-w-0 items-start justify-between gap-3 rounded-lg border bg-muted/20 p-3">
+                <div className="min-w-0 space-y-1 text-sm">
+                  <p className="break-words font-medium [overflow-wrap:anywhere]">
+                    {displayName(
+                      returning ? (selected?.name ?? "") : value("name"),
+                    )}
+                  </p>
+                  <p className="break-words text-xs text-muted-foreground">
+                    {returning ? selected?.phone : value("phone")} ·{" "}
+                    {t(
+                      returning
+                        ? (selected?.type ?? "CASH")
+                        : value("type", "CASH"),
+                    )}
+                  </p>
+                  {returning && selected && selected.creditUsed > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("Outstanding credit")}: {money(selected.creditUsed)}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11 shrink-0 px-2 text-xs"
+                  onClick={() => setStep("player")}
                 >
-                  <Input
-                    required
-                    type="tel"
-                    maxLength={30}
-                    autoComplete="tel"
-                    placeholder="+60123456789"
-                    value={value("phone")}
-                    onChange={(e) => set("phone", e.target.value)}
-                  />
-                </Field>
-              </FormGrid>
-              <FormGrid>
-                <Field label="Player type">
+                  {t("Change player")}
+                </Button>
+              </div>
+              <FormSection title="Seat assignment">
+                <Field label="Table">
                   <Select
                     required
-                    value={value("type", "CASH")}
-                    onValueChange={(v) => set("type", v)}
+                    value={value("table")}
+                  className="[&>span]:min-w-0"
+                    onValueChange={(v) => {
+                      set("table", v);
+                      set("seat", "");
+                    }}
                     options={[
-                      { value: "CASH", label: "CASH" },
-                      {
-                        value: "CREDIT",
-                        label: "CREDIT",
-                        disabled: !supervisor || !settings.creditEnabled,
-                      },
+                      { value: "", label: "Select table" },
+                      ...openTables.map((table) => {
+                        const rules = effectiveTableRules(s.store, table);
+                        return {
+                          value: table.id,
+                          disabled: freeSeats(table.id) === 0,
+                          label:
+                            displayName(table.name) +
+                            " · " +
+                            money(rules.smallBlind) +
+                            " / " +
+                            money(rules.bigBlind) +
+                            " · " +
+                            freeSeats(table.id) +
+                            " " +
+                            t("seats available"),
+                        };
+                      }),
                     ]}
                   />
                 </Field>
-                <Field label="Tag" optional>
-                  <Select
-                    value={value("tag")}
-                    onValueChange={(v) => set("tag", v)}
-                    options={["", "VIP", "Risk"].map((v) => ({
-                      value: v,
-                      label: v || "None",
-                    }))}
-                  />
-                </Field>
-              </FormGrid>
-              {value("type", "CASH") === "CREDIT" && (
-                <Field
-                  label="Credit limit (RM)"
-                  hint="New credit accounts require a manager."
-                >
-                  <MoneyInput
-                    required
-                    value={value("credit")}
-                    onChange={(e) => set("credit", e.target.value)}
-                  />
-                </Field>
-              )}
-            </TabsContent>
-          </Tabs>
-          {!settings.creditEnabled && (
-            <Alert>
-              <AlertDescription>
-                {t("Credit accounts are disabled in venue settings.")}
-              </AlertDescription>
-            </Alert>
-          )}
-        </FormSection>
-        <FormSection title="Seat assignment">
-          <FormGrid>
-            <Field label="Table">
-              <Select
-                required
-                value={value("table")}
-                onValueChange={(v) => {
-                  set("table", v);
-                  set("seat", "");
-                }}
-                options={[
-                  { value: "", label: "Select table" },
-                  ...available.map((table) => {
-                    const rules = effectiveTableRules(s.store, table);
-                    return {
-                      value: table.id,
-                      label:
-                        displayName(table.name) +
-                        " · " +
-                        money(rules.smallBlind) +
-                        " / " +
-                        money(rules.bigBlind),
-                    };
-                  }),
-                ]}
-              />
-            </Field>
-            <Field label="Seat" hint="Only available seats are listed.">
-              <Select
-                required
-                disabled={!value("table")}
-                value={value("seat")}
-                onValueChange={(v) => set("seat", v)}
-                options={[
-                  { value: "", label: "Select seat" },
-                  ...Array.from({ length: 9 }, (_, i) => i + 1)
-                    .filter(
-                      (seat) =>
-                        !s.activePlayers.some(
-                          (p) =>
-                            p.tableId === value("table") && p.seat === seat,
+                {value("table") ? (
+                  <Field
+                    label="Seat"
+                    hint="Choose an available seat. Occupied seats are disabled."
+                  >
+                    <ChoiceButtons
+                      aria-label={t("Seat")}
+                      required
+                      value={value("seat")}
+                      onValueChange={(v) => set("seat", v)}
+                      options={[
+                        ...Array.from({ length: 9 }, (_, i) => i + 1).map(
+                          (seat) => ({
+                            value: String(seat),
+                            label: t("Seat") + " " + seat,
+                            disabled: s.activePlayers.some(
+                              (player) =>
+                                player.tableId === value("table") &&
+                                player.seat === seat,
+                            ),
+                          }),
                         ),
-                    )
-                    .map((seat) => ({
-                      value: String(seat),
-                      label: String(seat),
-                    })),
-                ]}
-              />
-            </Field>
-          </FormGrid>
-        </FormSection>
-        <FormActions disabled={creditBlocked}>Check in</FormActions>
+                      ]}
+                    />
+                  </Field>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {t("Select a table to see available seats.")}
+                  </p>
+                )}
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {t(
+                    "After check-in, use Buy-in to request chips. No balance changes until approval.",
+                  )}
+                </p>
+              </FormSection>
+            </>
+          )}
+        </div>
+        <FormActions disabled={creditBlocked}>
+          {step === "player" ? "Choose seat" : "Check in"}
+        </FormActions>
       </ActionForm>
     </Modal>
   );
@@ -316,6 +468,9 @@ function TransactionDialog({
   const s = usePokerManagementContext(),
     t = useText();
   const settings = venueSettings(s.store);
+  const [changingType, setChangingType] = useState(!initial.type);
+  const [changingPlayer, setChangingPlayer] = useState(!initial.playerId);
+  const [noteOpen, setNoteOpen] = useState(false);
   const { value: val, set } = useFields({
     type: initial.type ?? (s.user?.role === "DEALER" ? "Rake" : "Buy-in"),
     player: initial.playerId ?? "",
@@ -369,6 +524,26 @@ function TransactionDialog({
   try {
     amount = parseMoney(val("amount", "0"), true);
   } catch {}
+  const noteField = (
+    <Field
+      label="Note"
+      optional={!cashMovement}
+      hint={
+        cashMovement
+          ? "Explain this cash movement."
+          : "Add information for the reviewer."
+      }
+    >
+      <Textarea
+        required={cashMovement}
+        minLength={cashMovement ? 3 : undefined}
+        maxLength={500}
+        rows={3}
+        value={val("note")}
+        onChange={(e) => set("note", e.target.value)}
+      />
+    </Field>
+  );
 
   return (
     <Modal
@@ -397,34 +572,53 @@ function TransactionDialog({
           s.setDraft("tx.day", s.store.currentDayId ?? "");
           s.setDraft("tx.filter", "");
           s.setDraft("tx.search", "");
+          s.setDraft("tx.page", "0");
           s.closeOperation();
         }}
       >
         <FormSection title="Request details">
-          <Field label="Transaction type">
-            <Select
-              required
-              value={type}
-              onValueChange={(v) => {
-                set("type", v);
-                set("player", "");
-                set("table", "");
-              }}
-              options={entryTypes
-                .filter(
-                  (v) =>
-                    s.user?.role !== "DEALER" ||
-                    ![
-                      "Buy-in",
-                      "Cash-out",
-                      "Credit Repayment",
-                      "Cash Received",
-                      "Cash Payout",
-                    ].includes(v),
-                )
-                .map((v) => ({ value: v, label: v, disabled: !enabled(v) }))}
-            />
-          </Field>
+          {changingType ? (
+            <Field label="Transaction type">
+              <Select
+                required
+                value={type}
+                onValueChange={(v) => {
+                  set("type", v);
+                  set("player", "");
+                  set("table", "");
+                  setChangingPlayer(true);
+                }}
+                options={entryTypes
+                  .filter(
+                    (v) =>
+                      s.user?.role !== "DEALER" ||
+                      ![
+                        "Buy-in",
+                        "Cash-out",
+                        "Credit Repayment",
+                        "Cash Received",
+                        "Cash Payout",
+                      ].includes(v),
+                  )
+                  .map((v) => ({ value: v, label: v, disabled: !enabled(v) }))}
+              />
+            </Field>
+          ) : (
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <p className="min-w-0 break-words text-sm">
+                <span className="text-muted-foreground">{t("Transaction type")}: </span>
+                <span className="font-medium">{t(type)}</span>
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-11 shrink-0 px-2 text-xs sm:h-9"
+                onClick={() => setChangingType(true)}
+              >
+                {t("Change type")}
+              </Button>
+            </div>
+          )}
           {disabledReason && (
             <Alert>
               <AlertDescription>{t(disabledReason)}</AlertDescription>
@@ -437,30 +631,67 @@ function TransactionDialog({
               )}
             </p>
           )}
-          <Field label="Player" optional={!sessionEntry && !repayment}>
-            <SearchSelect
-              value={val("player")}
-              required={sessionEntry || repayment}
-              onValueChange={(v) => set("player", v)}
-              options={[
-                {
-                  value: "",
-                  label:
-                    sessionEntry || repayment
-                      ? "Select player"
-                      : "House / no player",
-                },
-                ...options.map((p) => ({
-                  value: p.id,
-                  label: displayName(p.name) + " · " + p.phone,
-                  disabled:
-                    type === "Buy-in" &&
-                    p.type === "CREDIT" &&
-                    !settings.creditEnabled,
-                })),
-              ]}
-            />
-          </Field>
+          {!changingPlayer && selectedPlayer && options.some((player) => player.id === selectedPlayer.id) ? (
+            <div className="min-w-0 space-y-1 rounded-lg border px-3 py-2">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0 self-center">
+                  <p className="text-xs text-muted-foreground">{t("Player")}</p>
+                  <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">
+                    {displayName(selectedPlayer.name)}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11 shrink-0 px-2 text-xs sm:h-9"
+                  onClick={() => setChangingPlayer(true)}
+                >
+                  {t("Change player")}
+                </Button>
+              </div>
+              <p className="break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                {selectedPlayer.phone}
+                {selectedPlayer.status === "ACTIVE" && selectedTable && (
+                  <>
+                    {" · "}
+                    {displayName(selectedTable.name)}
+                    {" · "}
+                    {t("Seat")} {selectedPlayer.seat}
+                  </>
+                )}
+              </p>
+            </div>
+          ) : (
+            <Field label="Player" optional={!sessionEntry && !repayment}>
+              <SearchSelect
+                value={val("player")}
+                required={sessionEntry || repayment}
+                onValueChange={(v) => set("player", v)}
+                options={[
+                  {
+                    value: "",
+                    label:
+                      sessionEntry || repayment
+                        ? "Select player"
+                        : "House / no player",
+                  },
+                  ...options.map((p) => ({
+                    value: p.id,
+                    label: displayName(p.name) + " · " + p.phone,
+                    disabled:
+                      type === "Buy-in" &&
+                      p.type === "CREDIT" &&
+                      !settings.creditEnabled,
+                  })),
+                ]}
+              />
+            </Field>
+          )}
+          {(sessionEntry || repayment) && selectedPlayer?.type === "CREDIT" && (
+            <p className="text-sm text-muted-foreground">
+              {t("Outstanding credit")}: {money(selectedPlayer.creditUsed)}
+            </p>
+          )}
           {(sessionEntry || repayment) && !options.length && (
             <p className="text-sm text-muted-foreground">
               {t(
@@ -508,15 +739,14 @@ function TransactionDialog({
         </FormSection>
         <FormSection title="Amount and note">
           {type === "Buy-in" && selectedPlayer && selectedTable && (
-            <div className="space-y-2 rounded-lg border bg-muted/40 p-3 text-sm">
-              <p className="font-medium">{displayName(selectedTable.name)}</p>
-              <p>
-                {t("Table stakes")}: {money(rules.smallBlind)} /{" "}
+            <div className="min-w-0 space-y-2 rounded-lg border bg-muted/40 p-3 text-xs leading-5 [overflow-wrap:anywhere]">
+              <p className="font-medium">
+                {displayName(selectedTable.name)} · {t("Table stakes")}: {money(rules.smallBlind)} /{" "}
                 {money(rules.bigBlind)}
               </p>
               <p>
-                {t("Minimum buy-in")}: {money(rules.minBuyIn)} ·{" "}
-                {t("Maximum buy-in")}: {money(rules.maxBuyIn)}
+                {t("Buy-in range")}: {money(rules.minBuyIn)} –{" "}
+                {money(rules.maxBuyIn)}
               </p>
               <p>
                 {t("Buy-in increment")}:{" "}
@@ -525,16 +755,21 @@ function TransactionDialog({
                   : t("Any amount within the table limits.")}
               </p>
               {!disabledReason && (
-                <div className="flex flex-wrap gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                   {rules.minBuyIn > 0 && minimum <= rules.maxBuyIn && (
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
+                      className="h-auto min-h-11 max-w-full flex-col gap-0 whitespace-normal text-xs leading-4 sm:min-h-9 sm:flex-row sm:gap-1"
                       data-mark-dirty="true"
-                      onClick={() => set("amount", (minimum / 100).toFixed(2))}
+                      onClick={() => {
+                        set("amount", (minimum / 100).toFixed(2));
+                        s.setError("");
+                      }}
                     >
-                      {t("Use minimum")} · {money(minimum)}
+                      <span>{t("Use minimum")}</span>
+                      <span className="tabular-nums">{money(minimum)}</span>
                     </Button>
                   )}
                   {rules.maxBuyIn < MAX_MONEY &&
@@ -544,12 +779,15 @@ function TransactionDialog({
                         type="button"
                         variant="outline"
                         size="sm"
+                        className="h-auto min-h-11 max-w-full flex-col gap-0 whitespace-normal text-xs leading-4 sm:min-h-9 sm:flex-row sm:gap-1"
                         data-mark-dirty="true"
-                        onClick={() =>
-                          set("amount", (maximum / 100).toFixed(2))
-                        }
+                        onClick={() => {
+                          set("amount", (maximum / 100).toFixed(2));
+                          s.setError("");
+                        }}
                       >
-                        {t("Use maximum")} · {money(maximum)}
+                        <span>{t("Use maximum")}</span>
+                        <span className="tabular-nums">{money(maximum)}</span>
                       </Button>
                     )}
                 </div>
@@ -579,10 +817,10 @@ function TransactionDialog({
             </div>
           )}
           <Field
-            label="Amount (RM)"
+            label={type === "Cash-out" ? "Chips returned (RM)" : "Amount (RM)"}
             hint={
               type === "Cash-out"
-                ? "Zero cash-out closes the session without a cash payment."
+                ? "Enter the total value of chips returned. Enter 0 to check out without returning chips."
                 : type === "Buy-in"
                   ? "Use the limits and increment shown for the selected table."
                   : undefined
@@ -594,24 +832,26 @@ function TransactionDialog({
               onChange={(e) => set("amount", e.target.value)}
             />
           </Field>
-          <Field
-            label="Note"
-            optional={!cashMovement}
-            hint={
-              cashMovement
-                ? "Explain this cash movement."
-                : "Add information for the reviewer."
-            }
-          >
-            <Textarea
-              required={cashMovement}
-              minLength={cashMovement ? 3 : undefined}
-              maxLength={500}
-              rows={3}
-              value={val("note")}
-              onChange={(e) => set("note", e.target.value)}
-            />
-          </Field>
+          {cashMovement ? (
+            noteField
+          ) : (
+            <Collapsible open={noteOpen} onOpenChange={setNoteOpen}>
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11 w-full justify-between px-0 text-muted-foreground"
+                >
+                  {t(val("note").trim() ? "Edit note" : "Add note")}
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={noteOpen ? "rotate-180" : undefined}
+                  />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-2">{noteField}</CollapsibleContent>
+            </Collapsible>
+          )}
         </FormSection>
         <FormSection title="Review request">
           <Alert>

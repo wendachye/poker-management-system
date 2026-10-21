@@ -80,6 +80,9 @@
     "reason": "Reason",
     "save_profile": "Save profile",
     "player_directory": "Player directory",
+    "all_players": "All players",
+    "player_status": "Player status",
+    "view_request": "View request",
     "search": "Search",
     "name_phone_or_id": "Name, phone, or ID",
     "filter": "Filter",
@@ -823,6 +826,21 @@
     "seated": "seated",
     "any_amount": "Any amount",
     "table_totals_for_the_current_business_day": "Table totals for the current business day.",
-    "operations_paused": "Operations paused"
+    "operations_paused": "Operations paused",
+    "more_options": "More options",
+    "change_type": "Change type",
+    "add_note": "Add note",
+    "edit_note": "Edit note",
+    "chips_returned_rm": "Chips returned (RM)",
+    "enter_the_total_value_of_chips_returned_enter_0_to_check_out_without_returning_chips": "Enter the total value of chips returned. Enter 0 to check out without returning chips.",
+    "check_in_steps": "Check-in steps",
+    "change_player": "Change player",
+    "choose_seat": "Choose seat",
+    "seats_available": "seats available",
+    "choose_an_available_seat_occupied_seats_are_disabled": "Choose an available seat. Occupied seats are disabled.",
+    "select_a_table_to_see_available_seats": "Select a table to see available seats.",
+    "after_check_in_use_buy_in_to_request_chips_no_balance_changes_until_approval": "After check-in, use Buy-in to request chips. No balance changes until approval.",
+    "player_checked_in_use_buy_in_to_request_chips": "Player checked in. Use Buy-in to request chips.",
+    "only_requests_for_the_current_open_business_day_can_be_reviewed": "Only requests for the current open business day can be reviewed."
   }
 }

@@ -80,6 +80,9 @@
     "reason": "原因",
     "save_profile": "保存档案",
     "player_directory": "玩家名录",
+    "all_players": "全部玩家",
+    "player_status": "玩家状态",
+    "view_request": "查看申请",
     "search": "搜索",
     "name_phone_or_id": "姓名、电话或编号",
     "filter": "筛选",
@@ -823,6 +826,21 @@
     "seated": "人入座",
     "any_amount": "不限增量",
     "table_totals_for_the_current_business_day": "当前营业日的牌桌收支汇总。",
-    "operations_paused": "运营已暂停"
+    "operations_paused": "运营已暂停",
+    "more_options": "更多选项",
+    "change_type": "更改类型",
+    "add_note": "添加备注",
+    "edit_note": "编辑备注",
+    "chips_returned_rm": "交回筹码价值（RM）",
+    "enter_the_total_value_of_chips_returned_enter_0_to_check_out_without_returning_chips": "输入交回筹码的总价值。如果没有筹码交回，输入 0 即可办理离场。",
+    "check_in_steps": "入场步骤",
+    "change_player": "更换玩家",
+    "choose_seat": "选择座位",
+    "seats_available": "个空位",
+    "choose_an_available_seat_occupied_seats_are_disabled": "请选择空位，已占用的座位不可选择。",
+    "select_a_table_to_see_available_seats": "请先选择牌桌，再选择空位。",
+    "after_check_in_use_buy_in_to_request_chips_no_balance_changes_until_approval": "入场后，点击“买入”申请筹码。审批通过前，余额不会改变。",
+    "player_checked_in_use_buy_in_to_request_chips": "玩家已入场，请点击“买入”申请筹码。",
+    "only_requests_for_the_current_open_business_day_can_be_reviewed": "只能审批当前营业日的申请，且该营业日必须处于营业中。"
   }
 }

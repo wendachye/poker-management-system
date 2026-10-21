@@ -555,15 +555,27 @@ export function ReportsView() {
                 {count} {t(String(label))}
               </span>
               {Number(count) > 0 && (
-                <Button variant="link" size="sm" className="ml-auto" asChild>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="ml-auto h-11 shrink-0 sm:h-9"
+                  asChild
+                >
                   <Link
                     href={String(href)}
                     onClick={() => {
-                      if (href === "/transactions") {
+                      if (href === "/players") {
+                        s.setDraft("player.status", "ACTIVE");
+                        s.setDraft("player.search", "");
+                        s.setDraft("player.type", "");
+                        s.setDraft("player.tag", "");
+                        s.setDraft("player.page", "0");
+                      } else if (href === "/transactions") {
                         s.setDraft("tx.status", "PENDING");
                         s.setDraft("tx.day", s.store.currentDayId ?? "");
                         s.setDraft("tx.filter", "");
                         s.setDraft("tx.search", "");
+                        s.setDraft("tx.page", "0");
                       }
                     }}
                   >

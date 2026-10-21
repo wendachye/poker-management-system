@@ -151,7 +151,9 @@ export function usePokerManagementState() {
       const message =
         command.kind === "REQUEST" || command.kind === "CORRECT"
           ? "Request sent for approval."
-          : "Saved successfully.";
+          : command.kind === "CHECK_IN"
+            ? "Player checked in. Use Buy-in to request chips."
+            : "Saved successfully.";
       const key = message
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "_")

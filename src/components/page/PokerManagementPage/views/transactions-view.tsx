@@ -491,6 +491,7 @@ export function TransactionsView() {
               <ApprovalQueue
                 key={view + JSON.stringify(requestFilters)}
                 requests={requests}
+                pendingView={view === "PENDING"}
                 embedded
               />
             </TabsContent>

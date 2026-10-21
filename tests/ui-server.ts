@@ -13,6 +13,8 @@ import type { Database, SqlConnection } from "../src/server/database";
 import type { Command } from "../src/domain/commands";
 import { tableLayoutFixture } from "./helpers/table-layout-fixture";
 import { financeLayoutFixture } from "./helpers/finance-layout-fixture";
+import { operatorFlowFixture } from "./helpers/operator-flow-fixture";
+import type { Store } from "../src/domain/model";
 
 function adapt(engine: PGlite): Database {
   const connection = (client: Pick<PGlite, "query">): SqlConnection => ({
@@ -115,6 +117,16 @@ async function main() {
   }
   await configureSampleVenues(adapt(db));
   // Opt-in visual fixture affects only the disposable qa venue in this process.
+  if (process.argv.includes("--operator-flow")) {
+    const configured = await adapt(db).query<{ data: Store }>(
+      "SELECT data FROM poker_branch_state WHERE branch_id=$1",
+      ["qa"],
+    );
+    await adapt(db).query(
+      "UPDATE poker_branch_state SET data=$1, revision=revision+1 WHERE branch_id=$2",
+      [JSON.stringify(operatorFlowFixture(configured.rows[0].data)), "qa"],
+    );
+  }
   if (process.argv.includes("--table-layout")) {
     await adapt(db).query(
       "UPDATE poker_branch_state SET data=$1, revision=revision+1 WHERE branch_id=$2",
