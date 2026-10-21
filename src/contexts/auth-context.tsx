@@ -1,62 +1,80 @@
-"use client"
-
-import * as React from "react"
-import { useRouter } from "next/navigation"
-
-interface AuthContextType {
-  user: { username: string } | null
-  login: (username: string, password: string) => Promise<boolean>
-  logout: () => void
-}
-
-const AuthContext = React.createContext<AuthContextType | null>(null)
-
+"use client";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
+import type { Branch, Staff } from "@/domain/model";
+type Auth = {
+  user: Staff | null;
+  branches: Branch[];
+  loading: boolean;
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  switchBranch: (id: string) => Promise<void>;
+  refresh: () => Promise<void>;
+};
+const Context = createContext<Auth | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = React.useState<{ username: string } | null>(null)
-  const router = useRouter()
-
-  React.useEffect(() => {
-    const stored = document.cookie
-      .split("; ")
-      .find((row) => row.startsWith("user="))
-      ?.split("=")[1]
-
-    if (stored) {
-      try {
-        setUser(JSON.parse(decodeURIComponent(stored)))
-      } catch {
-        setUser(null)
-      }
+  const [user, setUser] = useState<Staff | null>(null);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [loading, setLoading] = useState(true);
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch("/api/auth", { cache: "no-store" });
+      const data = await response.json();
+      setUser(response.ok ? data.user : null);
+      setBranches(response.ok ? data.branches : []);
+    } finally {
+      setLoading(false);
     }
-  }, [])
-
-  const login = async (username: string, password: string): Promise<boolean> => {
-    if (username && password) {
-      const userData = { username }
-      setUser(userData)
-      document.cookie = `user=${encodeURIComponent(JSON.stringify(userData))}; path=/; max-age=${60 * 60 * 24 * 7}`
-      return true
-    }
-    return false
+  }, []);
+  useEffect(() => {
+    void refresh().catch(() => setLoading(false));
+  }, [refresh]);
+  async function login(username: string, password: string) {
+    const response = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    await refresh();
   }
-
-  const logout = () => {
-    setUser(null)
-    document.cookie = "user=; path=/; max-age=0"
-    router.push("/login")
+  async function logout() {
+    const response = await fetch("/api/auth", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!response.ok) throw new Error("Could not sign out. Please try again.");
+    setUser(null);
+    setBranches([]);
+    window.location.assign("/login");
   }
-
+  async function switchBranch(branchId: string) {
+    const response = await fetch("/api/branch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ branchId }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    window.location.assign("/dashboard");
+  }
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <Context.Provider
+      value={{ user, branches, loading, login, logout, switchBranch, refresh }}
+    >
       {children}
-    </AuthContext.Provider>
-  )
+    </Context.Provider>
+  );
 }
-
 export function useAuth() {
-  const context = React.useContext(AuthContext)
-  if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider")
-  }
-  return context
+  const context = useContext(Context);
+  if (!context) throw new Error("AuthProvider missing");
+  return context;
 }

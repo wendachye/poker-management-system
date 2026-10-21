@@ -1,150 +1,492 @@
-import { ShieldCheck } from "lucide-react";
-
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+"use client";
+import { useState } from "react";
+import { ReceiptText } from "lucide-react";
+import { displayName } from "@/lib/display-name";
 import { Button } from "@/components/ui/button";
-import type { ApprovalRequest, Player } from "../types";
+import { Badge as UiBadge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table";
+import { canApprove } from "@/domain/operations";
+import { approvalReviewProgress } from "@/domain/approval-review-progress";
+import type { ApprovalRequest, Transaction } from "@/domain/model";
+import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money } from "../utils";
-import { Badge } from "./shared";
-
-type ApprovalQueueProps = {
-  approvals: ApprovalRequest[];
-  players: Player[];
-  canDecide: boolean;
-  decideApproval: (id: string, decision: "APPROVED" | "REJECTED") => void;
-};
+import {
+  Field,
+  Panel,
+  Badge,
+  Modal,
+  ActionForm,
+  FormActions,
+  FormSection,
+  EmptyState,
+  Pager,
+  useText,
+  useTimestamp,
+} from "./shared";
+import { EntryImpact } from "./entry-impact";
+import { Receipt } from "./receipt";
+import { Link } from "@/i18n/navigation";
 
 export function ApprovalQueue({
-  approvals,
-  players,
-  canDecide,
-  decideApproval,
-}: ApprovalQueueProps) {
-  const pending = approvals.filter((approval) => approval.status === "PENDING");
-  const recent = approvals
-    .filter((approval) => approval.status !== "PENDING")
-    .slice(0, 3);
-
-  return (
-    <Card className="rounded-lg">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ShieldCheck className="size-4" /> Manager/Admin approvals
-        </CardTitle>
-        <CardDescription>
-          Every buy-in, cash-out, rake, tips, insurance, jackpot, cash received,
-          and cash payout entry waits here before posting.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {pending.length === 0 && (
-          <div className="rounded-lg border p-3 text-sm text-muted-foreground">
-            No pending approvals.
-          </div>
+  requests,
+  compact = false,
+  embedded = false,
+}: {
+  requests?: ApprovalRequest[];
+  compact?: boolean;
+  embedded?: boolean;
+}) {
+  const s = usePokerManagementContext(),
+    t = useText(),
+    timestamp = useTimestamp();
+  const [reviewId, setReviewId] = useState(""),
+    [decision, setDecision] = useState("APPROVED");
+  const [reason, setReason] = useState(""),
+    [currentPage, setPage] = useState(0);
+  const [receipt, setReceipt] = useState<Transaction | null>(null);
+  const entries = requests ?? s.pendingApprovals;
+  const page = Math.min(
+    currentPage,
+    Math.max(0, Math.ceil(entries.length / 20) - 1),
+  );
+  const visible = compact
+    ? entries.slice(0, 4)
+    : entries.slice(page * 20, page * 20 + 20);
+  const request = s.store.approvals.find((r) => r.id === reviewId);
+  const reviewProgress = request ? approvalReviewProgress(request, t) : null;
+  const requestDay = request
+    ? s.store.days.find((day) => day.id === request.dayId)?.date
+    : undefined;
+  const reviewable =
+    !!request && !!s.user && canApprove(s.user, request) && !s.locked;
+  function subject(r: ApprovalRequest) {
+    return (
+      [
+        displayName(s.players.find((p) => p.id === r.playerId)?.name ?? ""),
+        displayName(
+          s.tables.find((table) => table.id === r.tableId)?.name ?? "",
+        ),
+      ]
+        .filter(Boolean)
+        .join(" · ") || t("House")
+    );
+  }
+  function status(r: ApprovalRequest) {
+    return (
+      <UiBadge
+        variant={
+          r.status === "REJECTED"
+            ? "destructive"
+            : r.status === "APPROVED"
+              ? "success"
+              : "warning"
+        }
+        className="h-5 px-1.5 text-[10px]"
+      >
+        {t(r.status)}
+      </UiBadge>
+    );
+  }
+  function reviewSummary(r: ApprovalRequest) {
+    const progress = approvalReviewProgress(r, t);
+    const reviewers = displayName(
+      r.decidedBy ??
+        progress.reviewers.map((vote) => displayName(vote.username)).join(", "),
+    );
+    return (
+      <div className="min-w-0 space-y-1 text-xs leading-4 text-muted-foreground">
+        {r.status === "PENDING" && (
+          <p
+            className="break-words [overflow-wrap:anywhere]"
+            title={progress.label}
+          >
+            <span className="whitespace-nowrap">
+              {t("Reviewers")}: {progress.count} / {progress.minimum}
+            </span>
+            {progress.requirement && <> · {t(progress.requirement)}</>}
+          </p>
         )}
-        {pending.map((approval) => {
-          const player = players.find((item) => item.id === approval.playerId);
-
-          return (
-            <div
-              key={approval.id}
-              className="grid gap-3 rounded-lg border p-3 lg:grid-cols-[1fr_auto]"
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-medium">
-                    {approval.type} | {money(approval.amount)}
-                  </p>
-                  <Badge tone="amber">Pending</Badge>
-                  <Badge
-                    tone={
-                      approval.approvalLevel === "DUAL"
-                        ? "red"
-                        : approval.approvalLevel === "ADMIN"
-                          ? "blue"
-                          : "neutral"
-                    }
-                  >
-                    {approval.approvalLevel}
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  {player?.name || approval.tableId || "House"} | Requested by{" "}
-                  {approval.requestedBy} at {approval.createdAt}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Cash received {money(approval.cashReceived)} | Cash payout{" "}
-                  {money(approval.cashPayout)} | {approval.note}
-                </p>
-                <p className="text-xs font-medium text-amber-700">
-                  {approval.riskReason}
-                </p>
-              </div>
-              {canDecide ? (
-                <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-                  <Button
-                    className="w-full sm:w-auto"
-                    size="sm"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Approve ${approval.type} ${money(approval.amount)}?`,
-                        )
-                      ) {
-                        decideApproval(approval.id, "APPROVED");
-                      }
-                    }}
-                  >
-                    Approve
-                  </Button>
-                  <Button
-                    className="w-full sm:w-auto"
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Reject ${approval.type} ${money(approval.amount)}?`,
-                        )
-                      ) {
-                        decideApproval(approval.id, "REJECTED");
-                      }
-                    }}
-                  >
-                    Reject
-                  </Button>
-                </div>
-              ) : (
-                <Badge tone="blue">Admin or Manager only</Badge>
-              )}
-            </div>
-          );
-        })}
-        {recent.length > 0 && (
-          <div className="grid gap-2 pt-2">
-            <p className="text-sm font-medium">Recent decisions</p>
-            {recent.map((approval) => (
-              <div
-                key={approval.id}
-                className="flex flex-col gap-2 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+        {reviewers && (
+          <p
+            className="line-clamp-2 break-words [overflow-wrap:anywhere]"
+            title={reviewers}
+          >
+            {t("Reviewed by")}: {reviewers}
+          </p>
+        )}
+        {r.status === "REJECTED" && r.rejectionReason && (
+          <p
+            className="line-clamp-2 break-words text-destructive [overflow-wrap:anywhere]"
+            title={r.rejectionReason}
+          >
+            <span className="font-medium">{t("Rejection reason")}: </span>
+            {r.rejectionReason}
+          </p>
+        )}
+      </div>
+    );
+  }
+  function metadata(r: ApprovalRequest) {
+    const day = s.store.days.find((entry) => entry.id === r.dayId)?.date;
+    const details = [
+      displayName(r.requestedBy),
+      timestamp(r.createdAt, s.snapshot!.branch.timezone),
+      day ? `${t("Business day")}: ${day}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return (
+      <p
+        className="line-clamp-2 break-words text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]"
+        title={details}
+      >
+        {details}
+      </p>
+    );
+  }
+  function actions(r: ApprovalRequest) {
+    const posted = s.store.transactions.find((tx) => tx.approvalId === r.id);
+    const actionLabel =
+      r.status === "PENDING" && s.user && canApprove(s.user, r)
+        ? "Review request"
+        : "View details";
+    return (
+      <div className="flex shrink-0 items-center justify-end gap-1.5">
+        {posted && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="size-11 sm:size-9"
+            aria-label={t("Receipt") + " · " + subject(r) + " · " + r.id}
+            title={t("Receipt")}
+            onClick={() => setReceipt(posted)}
+          >
+            <ReceiptText aria-hidden="true" />
+          </Button>
+        )}
+        <Button
+          size="sm"
+          className="h-11 px-3 sm:h-9"
+          aria-label={t(actionLabel) + " · " + subject(r) + " · " + r.id}
+          variant={actionLabel === "Review request" ? "default" : "outline"}
+          disabled={s.busy}
+          onClick={() => {
+            s.setError("");
+            setDecision("APPROVED");
+            setReason("");
+            setReviewId(r.id);
+          }}
+        >
+          {t(actionLabel)}
+        </Button>
+      </div>
+    );
+  }
+  const content = (
+    <div className="@container/approvals min-w-0 space-y-3">
+      {!entries.length && (
+        <EmptyState
+          title={
+            requests && s.store.approvals.length
+              ? "No requests match these filters."
+              : requests
+                ? "No requests yet"
+                : "No pending approvals."
+          }
+          description={
+            requests && s.store.approvals.length
+              ? "Try another search or clear the filters."
+              : "Requests keep their status and review history here."
+          }
+        />
+      )}
+      {!!visible.length && (
+        <>
+          <ul
+            aria-label={t("Approval queue")}
+            className="divide-y border-y @min-[900px]/approvals:hidden"
+          >
+            {visible.map((r) => (
+              <li
+                key={r.id}
+                className="min-w-0 space-y-2 py-3"
+                data-approval-row
               >
-                <span className="min-w-0 break-words">
-                  {approval.type} | {money(approval.amount)} |{" "}
-                  {approval.decidedBy}
-                </span>
-                <Badge tone={approval.status === "APPROVED" ? "green" : "red"}>
-                  {approval.status}
-                </Badge>
-              </div>
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium">
+                      <span className="break-words [overflow-wrap:anywhere]">
+                        {t(r.type)}
+                      </span>
+                      {status(r)}
+                    </p>
+                    <p
+                      className="line-clamp-2 break-words text-sm font-medium leading-5 [overflow-wrap:anywhere]"
+                      title={subject(r)}
+                    >
+                      {subject(r)}
+                    </p>
+                  </div>
+                  <p className="shrink-0 text-right text-sm font-semibold tabular-nums">
+                    {money(r.amount)}
+                  </p>
+                </div>
+                {metadata(r)}
+                {r.note && (
+                  <p
+                    className="line-clamp-1 break-words text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]"
+                    title={r.note}
+                  >
+                    {r.note}
+                  </p>
+                )}
+                <div className="flex min-w-0 flex-wrap items-end justify-between gap-x-3 gap-y-2">
+                  <div className="min-w-0 flex-1 basis-36">
+                    {reviewSummary(r)}
+                  </div>
+                  {actions(r)}
+                </div>
+              </li>
             ))}
+          </ul>
+          <div className="hidden border-y @min-[900px]/approvals:block">
+            <Table className="table-fixed" aria-label={t("Approval queue")}>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">{t("Request")}</TableHead>
+                  <TableHead scope="col" className="w-60">
+                    {t("Review")}
+                  </TableHead>
+                  <TableHead scope="col" className="w-44 text-right">
+                    {t("Amount")}
+                  </TableHead>
+                  <TableHead scope="col" className="w-48 text-right">
+                    {t("Actions")}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.map((r) => (
+                  <TableRow key={r.id} data-approval-row>
+                    <TableCell className="space-y-0.5 whitespace-normal py-2">
+                      <p
+                        className="line-clamp-2 break-words font-medium leading-5 [overflow-wrap:anywhere]"
+                        title={t(r.type) + " · " + subject(r)}
+                      >
+                        {t(r.type)}
+                        <span className="font-normal text-muted-foreground">
+                          {" "}
+                          · {subject(r)}
+                        </span>
+                      </p>
+                      {metadata(r)}
+                      {r.note && (
+                        <p
+                          className="line-clamp-1 break-words text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]"
+                          title={r.note}
+                        >
+                          {r.note}
+                        </p>
+                      )}
+                    </TableCell>
+                    <TableCell className="space-y-1.5 whitespace-normal py-2">
+                      {status(r)}
+                      {reviewSummary(r)}
+                    </TableCell>
+                    <TableCell className="py-2 text-right font-semibold tabular-nums">
+                      {money(r.amount)}
+                    </TableCell>
+                    <TableCell className="py-2">{actions(r)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
+        </>
+      )}
+      {compact ? (
+        <Button variant="outline" asChild>
+          <Link
+            href="/transactions"
+            onClick={() => {
+              s.setDraft("tx.status", "PENDING");
+              s.setDraft("tx.day", "");
+              s.setDraft("tx.filter", "");
+              s.setDraft("tx.search", "");
+              s.setDraft("tx.page", "0");
+            }}
+          >
+            {t("View all requests")}
+          </Link>
+        </Button>
+      ) : (
+        <Pager
+          page={page}
+          total={entries.length}
+          setPage={setPage}
+          label="Request pagination"
+        />
+      )}
+      <Modal
+        open={!!request}
+        onOpenChange={(open) => {
+          if (!open) setReviewId("");
+        }}
+        title={reviewable ? "Review request" : "Request details"}
+        description={request ? subject(request) : "Request details"}
+      >
+        {request && reviewProgress && (
+          <>
+            <div className="min-w-0 space-y-2 rounded-lg bg-muted p-4 text-sm [overflow-wrap:anywhere]">
+              <div className="flex flex-wrap justify-between gap-2">
+                <p className="text-lg font-semibold">
+                  {t(request.type)} · {money(request.amount)}
+                </p>
+                <Badge>{request.status}</Badge>
+              </div>
+              <p>
+                {t("Requested by")}: {displayName(request.requestedBy)}
+              </p>
+              <p>{timestamp(request.createdAt, s.snapshot!.branch.timezone)}</p>
+              {requestDay && (
+                <p>
+                  {t("Business day")}: {requestDay}
+                </p>
+              )}
+              <p className="break-words [overflow-wrap:anywhere]">
+                {request.note}
+              </p>
+              <p>{t(request.riskReason)}</p>
+              <p>{reviewProgress.label}</p>
+              {!!reviewProgress.reviewers.length && (
+                <p>
+                  {t("Reviewed by")}:{" "}
+                  {reviewProgress.reviewers
+                    .map((v) => displayName(v.username))
+                    .join(", ")}
+                </p>
+              )}
+              {request.decidedAt && (
+                <p>
+                  {t("Decision recorded")}:{" "}
+                  {timestamp(request.decidedAt, s.snapshot!.branch.timezone)} ·{" "}
+                  {displayName(request.decidedBy ?? "")}
+                </p>
+              )}
+              {request.rejectionReason && (
+                <p>
+                  {t("Rejection reason")}: {request.rejectionReason}
+                </p>
+              )}
+              <p className="break-all text-xs text-muted-foreground">
+                {t("Reference")}: {request.id}
+              </p>
+            </div>
+            {request.status === "PENDING" && <EntryImpact request={request} />}
+            {reviewable ? (
+              <ActionForm
+                validationKey={request.id + ":" + decision}
+                onSubmit={() =>
+                  s.submit({
+                    kind: "DECIDE",
+                    approvalId: request.id,
+                    decision: decision as "APPROVED" | "REJECTED",
+                    reason: decision === "REJECTED" ? reason : undefined,
+                  })
+                }
+                onSuccess={() => setReviewId("")}
+              >
+                <FormSection title="Review decision">
+                  <Tabs value={decision} onValueChange={setDecision}>
+                    <TabsList
+                      className="w-full"
+                      aria-label={t("Review decision")}
+                    >
+                      <TabsTrigger value="APPROVED">{t("Approve")}</TabsTrigger>
+                      <TabsTrigger value="REJECTED">{t("Reject")}</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="APPROVED">
+                      <p className="text-sm text-muted-foreground">
+                        {t(
+                          request.approvalLevel === "DUAL"
+                            ? "The entry posts after two distinct reviewers approve, including an admin."
+                            : "Approving posts this entry to the ledger.",
+                        )}
+                      </p>
+                    </TabsContent>
+                    <TabsContent value="REJECTED">
+                      <Field
+                        label="Rejection reason"
+                        hint="Explain what needs to be corrected before this request can be submitted again."
+                      >
+                        <Textarea
+                          required
+                          minLength={3}
+                          maxLength={500}
+                          value={reason}
+                          onChange={(e) => setReason(e.target.value)}
+                        />
+                      </Field>
+                    </TabsContent>
+                  </Tabs>
+                </FormSection>
+                <FormActions destructive={decision === "REJECTED"}>
+                  {decision === "REJECTED"
+                    ? "Reject request"
+                    : "Approve request"}
+                </FormActions>
+              </ActionForm>
+            ) : (
+              request.status === "PENDING" && (
+                <p className="text-sm text-muted-foreground">
+                  {t(
+                    request.requestedById === s.user?.id
+                      ? "Awaiting independent review"
+                      : "Awaiting authorized reviewer",
+                  )}
+                </p>
+              )
+            )}
+            {request.status === "APPROVED" && (
+              <Button
+                onClick={() => {
+                  const tx = s.store.transactions.find(
+                    (tx) => tx.approvalId === request.id,
+                  );
+                  if (tx) {
+                    setReviewId("");
+                    setReceipt(tx);
+                  }
+                }}
+              >
+                {t("View posted receipt")}
+              </Button>
+            )}
+          </>
         )}
-      </CardContent>
-    </Card>
+      </Modal>
+      {receipt && (
+        <Receipt transaction={receipt} close={() => setReceipt(null)} />
+      )}
+    </div>
+  );
+  return embedded ? (
+    <div className="space-y-4">{content}</div>
+  ) : (
+    <Panel
+      title="Approval queue"
+      description="Review pending requests before they affect cash or credit."
+    >
+      {content}
+    </Panel>
   );
 }

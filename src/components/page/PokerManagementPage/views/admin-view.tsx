@@ -1,117 +1,371 @@
-import { AlertTriangle, Bell, Lock, ShieldCheck, Users } from "lucide-react";
-
+"use client";
+import { useState } from "react";
+import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { RecordList } from "../components/record-list";
+import { ListToolbar } from "../components/list-toolbar";
+import { auditChanges, auditReason } from "@/lib/audit-presentation";
+import { displayName } from "@/lib/display-name";
+import type { AuditLog } from "@/domain/model";
+import { usePokerManagementContext } from "../PokerManagementProvider";
+
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import type { AuditLog } from "../types";
-
-type AdminViewProps = {
-  locked: boolean;
-  setLocked: (value: boolean) => void;
-  auditLogs: AuditLog[];
-};
-
-export function AdminView({ locked, setLocked, auditLogs }: AdminViewProps) {
-  const roles = [
-    ["Dealer", "Rake, tips, insurance entry"],
-    ["Cashier", "Buy-in, cash-out, cash handling"],
-    ["Manager", "Approvals, credit, daily close"],
-    ["Admin", "Branch, tables, roles, audit logs"],
-  ];
+  ActionForm,
+  Field,
+  Pager,
+  Panel,
+  Modal,
+  FormActions,
+  FormSection,
+  EmptyState,
+  useText,
+  useTimestamp,
+  Select,
+} from "../components/shared";
+export function AdminView({
+  section = "audit",
+}: {
+  section?: "audit" | "policy" | "recovery";
+}) {
+  const s = usePokerManagementContext(),
+    t = useText(),
+    timestamp = useTimestamp();
+  const [reopen, setReopen] = useState(false),
+    [detail, setDetail] = useState<AuditLog | null>(null);
+  const val = (key: string) => s.draft("audit." + key);
+  const set = (key: string, value: string) => {
+    s.setDraft("audit." + key, value);
+    s.setDraft("audit.page", "0");
+  };
+  const clearCriteria = () =>
+    ["search", "staff", "action", "from", "to"].forEach((key) => set(key, ""));
+  const query = val("search").trim().toLowerCase(),
+    logs = s.store.auditLogs.filter((log) => {
+      const date = new Intl.DateTimeFormat("en-CA", {
+        timeZone: s.snapshot!.branch.timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(log.time));
+      return (
+        [log.actor, log.action, auditReason(log, s.store), log.entity].some(
+          (text) => text.toLowerCase().includes(query),
+        ) &&
+        (!val("staff") || log.actor === val("staff")) &&
+        (!val("action") || log.action === val("action")) &&
+        (!val("from") || date >= val("from")) &&
+        (!val("to") || date <= val("to"))
+      );
+    });
+  const page = Math.min(
+    Number(s.draft("audit.page", "0")),
+    Math.max(0, Math.ceil(logs.length / 20) - 1),
+  );
+  if (section === "recovery" && s.user?.role !== "ADMIN") {
+    return <EmptyState title="Admin access required." />;
+  }
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
-      <Card className="rounded-lg">
-        <CardHeader>
-          <CardTitle>Staff roles</CardTitle>
-          <CardDescription>
-            Dealer, Cashier, Manager, and Admin sample permissions
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {roles.map(([role, access]) => (
-            <div
-              key={role}
-              className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div>
-                <p className="font-medium">{role}</p>
-                <p className="text-sm text-muted-foreground">{access}</p>
-              </div>
-              <ShieldCheck className="size-5 text-emerald-700" />
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-      <Card className="rounded-lg">
-        <CardHeader>
-          <CardTitle>Branch and table settings</CardTitle>
-          <CardDescription>Operational limits and end-of-day controls</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border p-3">
-              <Users className="mb-2 size-5 text-sky-700" />
-              <p className="font-medium">Max seats</p>
-              <p className="text-sm text-muted-foreground">9 players per table</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <Bell className="mb-2 size-5 text-amber-700" />
-              <p className="font-medium">Summary push</p>
-              <p className="text-sm text-muted-foreground">Every 30 minutes</p>
-            </div>
-          </div>
+    <div className="space-y-5">
+      {section === "policy" && (
+        <Panel title="Approval policy">
+          <ul className="list-inside list-disc space-y-2 text-sm">
+            {[
+              "Every request requires an independent reviewer.",
+              "Payouts, reversals, and amounts from RM10,000 require an admin.",
+              "Amounts from RM25,000 require two reviewers, including an admin.",
+              "Cashiers handle players and cash; dealers submit table entries.",
+              "Credit balances only change through approved ledger entries.",
+            ].map((text) => (
+              <li key={text}>{t(text)}</li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+      {section === "recovery" && (
+        <Panel
+          title="Reopen current day"
+          description="Previous closing snapshots are preserved."
+        >
+          <p className="text-sm text-muted-foreground">
+            {s.day?.status === "CLOSED"
+              ? s.day.date
+              : t("Only a closed business day can be reopened.")}
+          </p>
           <Button
-            className="w-full sm:w-auto"
-            variant={locked ? "secondary" : "destructive"}
+            variant="outline"
+            disabled={s.day?.status !== "CLOSED"}
             onClick={() => {
-              if (
-                window.confirm(
-                  locked
-                    ? "Unlock this sample day?"
-                    : "Lock the day and block further edits?",
-                )
-              ) {
-                setLocked(!locked);
-              }
+              s.setError("");
+              s.setDraft("reopen.reason", "");
+              setReopen(true);
             }}
           >
-            <Lock /> {locked ? "Unlock sample day" : "Lock day"}
+            {t("Reopen day")}
           </Button>
-        </CardContent>
-      </Card>
-      <Card className="rounded-lg xl:col-span-2">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="size-4" /> Activity logs
-          </CardTitle>
-          <CardDescription>Every operational action can be audited</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-2">
-          {auditLogs.slice(0, 8).map((log) => (
-            <div key={log.id} className="rounded-lg border p-3 text-sm">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <p className="font-medium">{log.action}</p>
-                <p className="text-xs text-muted-foreground">{log.time}</p>
-              </div>
-              <p className="text-muted-foreground">
-                {log.actor} | {log.entity} | {log.reason}
+        </Panel>
+      )}
+      {section === "audit" && (
+        <Panel title="Audit history" compact>
+          <ListToolbar
+            compact
+            search={val("search")}
+            searchLabel="Search audit history"
+            searchPlaceholder="Staff, action, reason, or reference"
+            onSearchChange={(value) => set("search", value)}
+            activeFilters={[
+              ["staff", "Staff"],
+              ["action", "Action"],
+              ["from", "From date"],
+              ["to", "To date"],
+            ]
+              .filter(([key]) => val(key))
+              .map(([key, label]) => ({
+                key,
+                label:
+                  t(label) +
+                  ": " +
+                  t(key === "staff" ? displayName(val(key)) : val(key)),
+                onRemove: () => set(key, ""),
+              }))}
+            onClear={clearCriteria}
+            resultCount={logs.length}
+          >
+            <Field label="Staff">
+              <Select
+                value={val("staff")}
+                onValueChange={(v) => set("staff", v)}
+                options={[
+                  { value: "", label: "All staff" },
+                  ...[...new Set(s.store.auditLogs.map((log) => log.actor))]
+                    .sort()
+                    .map((value) => ({ value, label: displayName(value) })),
+                ]}
+              />
+            </Field>
+            <Field label="Action">
+              <Select
+                value={val("action")}
+                onValueChange={(v) => set("action", v)}
+                options={[
+                  { value: "", label: "All actions" },
+                  ...[...new Set(s.store.auditLogs.map((log) => log.action))]
+                    .sort()
+                    .map((value) => ({ value, label: value })),
+                ]}
+              />
+            </Field>
+            <Field label="From date">
+              <Input
+                type="date"
+                value={val("from")}
+                max={val("to") || undefined}
+                onChange={(e) => set("from", e.target.value)}
+              />
+            </Field>
+            <Field label="To date">
+              <Input
+                type="date"
+                value={val("to")}
+                min={val("from") || undefined}
+                onChange={(e) => set("to", e.target.value)}
+              />
+            </Field>
+          </ListToolbar>
+          {!logs.length ? (
+            <EmptyState
+              title={
+                s.store.auditLogs.length
+                  ? "No matching activity"
+                  : "No activity yet"
+              }
+              description={
+                s.store.auditLogs.length
+                  ? "Try another search or clear the filters."
+                  : "Activity will appear here as staff use this location."
+              }
+            >
+              {s.store.auditLogs.length > 0 && (
+                <Button variant="outline" onClick={clearCriteria}>
+                  {t("Clear all")}
+                </Button>
+              )}
+            </EmptyState>
+          ) : (
+            <RecordList
+              compact
+              label="Audit history"
+              rows={logs.slice(page * 20, page * 20 + 20)}
+              rowKey={(log) => log.id}
+              columns={[
+                {
+                  label: "Action",
+                  render: (log) => (
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="font-medium [overflow-wrap:anywhere]">
+                        {t(log.action)}
+                      </p>
+                      <p
+                        className="max-w-64 truncate text-xs font-normal text-muted-foreground"
+                        title={t("Reference") + ": " + log.entity}
+                      >
+                        {t("Reference")}: {log.entity}
+                      </p>
+                    </div>
+                  ),
+                },
+                {
+                  label: "Staff",
+                  mobileSpan: "half",
+                  render: (log) => (
+                    <span className="[overflow-wrap:anywhere]">
+                      {displayName(log.actor)}
+                    </span>
+                  ),
+                },
+                {
+                  label: "Date",
+                  mobileSpan: "half",
+                  render: (log) => (
+                    <span className="font-normal text-muted-foreground">
+                      {timestamp(log.time, s.snapshot!.branch.timezone)}
+                    </span>
+                  ),
+                },
+                {
+                  label: "Reason",
+                  mobileSpan: "full",
+                  render: (log) => (
+                    <p className="line-clamp-2 max-w-md font-normal [overflow-wrap:anywhere]">
+                      {t(auditReason(log, s.store)) || "—"}
+                    </p>
+                  ),
+                },
+                {
+                  label: "Actions",
+                  actions: true,
+                  render: (log) => (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="size-11 sm:size-9"
+                      title={t("View details")}
+                      aria-label={
+                        t("View details") +
+                        " · " +
+                        t(log.action) +
+                        " · " +
+                        displayName(log.actor) +
+                        " · " +
+                        timestamp(log.time, s.snapshot!.branch.timezone)
+                      }
+                      onClick={() => setDetail(log)}
+                    >
+                      <Eye aria-hidden="true" />
+                    </Button>
+                  ),
+                },
+              ]}
+            />
+          )}
+          <Pager
+            label="Audit history pages"
+            page={page}
+            total={logs.length}
+            setPage={(p) => s.setDraft("audit.page", String(p))}
+          />
+        </Panel>
+      )}
+      {section === "recovery" && (
+        <Modal
+          open={reopen}
+          onOpenChange={setReopen}
+          title="Reopen current day"
+          description="This enables new operations for the current day. Previous closing snapshots are preserved."
+        >
+          <ActionForm
+            disabled={s.day?.status !== "CLOSED" || s.user?.role !== "ADMIN"}
+            onSubmit={() =>
+              s.submit({ kind: "REOPEN_DAY", reason: s.draft("reopen.reason") })
+            }
+            onSuccess={() => {
+              setReopen(false);
+              s.setDraft("reopen.reason", "");
+            }}
+          >
+            <FormSection title="Current business day">
+              <p className="text-sm font-medium">{s.day?.date}</p>
+            </FormSection>
+            <Field
+              label="Reason for change"
+              hint="Explain why the day needs to be reopened."
+            >
+              <Textarea
+                required
+                minLength={3}
+                maxLength={500}
+                value={s.draft("reopen.reason")}
+                onChange={(e) => s.setDraft("reopen.reason", e.target.value)}
+              />
+            </Field>
+            <FormActions>Reopen business day</FormActions>
+          </ActionForm>
+        </Modal>
+      )}
+      {section === "audit" && (
+        <Modal
+          open={!!detail}
+          onOpenChange={(open) => {
+            if (!open) setDetail(null);
+          }}
+          title="Audit details"
+          description={
+            detail
+              ? t(detail.action) + " · " + displayName(detail.actor)
+              : "Details"
+          }
+        >
+          {detail && (
+            <div className="min-w-0 space-y-4 text-sm">
+              <p>{timestamp(detail.time, s.snapshot!.branch.timezone)}</p>
+              <p className="[overflow-wrap:anywhere]">
+                {t(auditReason(detail, s.store))}
               </p>
-              {(log.before || log.after) && (
-                <p className="text-xs text-muted-foreground">
-                  {log.before ? `Before: ${log.before}` : ""}
-                  {log.before && log.after ? " | " : ""}
-                  {log.after ? `After: ${log.after}` : ""}
-                </p>
+              <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                {t("Reference")}: {detail.entity}
+              </p>
+              {(detail.before || detail.after) && (
+                <div className="space-y-3">
+                  {auditChanges(detail, s.store).map((change) => (
+                    <div
+                      key={change.label}
+                      className="min-w-0 rounded-lg border p-3"
+                    >
+                      <p className="font-medium">{t(change.label)}</p>
+                      <dl className="mt-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+                        <dt className="text-muted-foreground">{t("Before")}</dt>
+                        <dd className="min-w-0 [overflow-wrap:anywhere]">
+                          {t(change.before)}
+                        </dd>
+                        <dt className="text-muted-foreground">{t("After")}</dt>
+                        <dd className="min-w-0 [overflow-wrap:anywhere]">
+                          {change.label === "Date" && change.after !== "—"
+                            ? timestamp(
+                                change.after,
+                                s.snapshot!.branch.timezone,
+                              )
+                            : t(change.after)}
+                        </dd>
+                      </dl>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-          ))}
-        </CardContent>
-      </Card>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

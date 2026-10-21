@@ -3,24 +3,41 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "local": "node --conditions=react-server --import tsx scripts/local.ts",
+    "local:db": "node --conditions=react-server --import tsx scripts/local.ts --database-only",
+    "local:seed": "node --conditions=react-server --import tsx scripts/seed-local.ts",
+    "local:backup": "node --conditions=react-server --import tsx scripts/backup-local.ts backup",
+    "local:restore": "node --conditions=react-server --import tsx scripts/backup-local.ts restore",
+    "local:verify-backup": "node --conditions=react-server --import tsx scripts/backup-local.ts verify",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --conditions=react-server --import tsx --test tests/*.test.ts",
+    "typecheck": "next typegen && tsc --noEmit",
+    "db:migrate": "node --conditions=react-server --import tsx scripts/manage.ts migrate",
+    "db:branch": "node --conditions=react-server --import tsx scripts/manage.ts branch",
+    "staff:create": "node --conditions=react-server --import tsx scripts/manage.ts staff",
+    "staff:password": "node --conditions=react-server --import tsx scripts/manage.ts password",
+    "staff:disable": "node --conditions=react-server --import tsx scripts/manage.ts disable"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@tanstack/react-query": "^5.95.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "gsap": "3.14.2",
     "lucide-react": "^1.7.0",
     "next": "16.2.1",
     "next-intl": "^4.9.0",
     "next-themes": "^0.4.6",
+    "pg": "^8.23.0",
     "radix-ui": "^1.4.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hook-form": "^7.72.0",
+    "server-only": "^0.0.1",
     "shadcn": "^4.1.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
@@ -29,15 +46,23 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
     "@tailwindcss/postcss": "^4.2.2",
     "@tanstack/eslint-plugin-query": "^5.95.0",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
+    "prettier": "^3.9.9",
     "tailwindcss": "^4.2.2",
+    "tsx": "^4.23.15",
     "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

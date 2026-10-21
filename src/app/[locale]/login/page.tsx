@@ -1,108 +1,132 @@
 "use client";
-
+import { useState, type ComponentProps } from "react";
+import { Eye, EyeOff } from "lucide-react";
+import {
+  InputGroup,
+  InputGroupInput,
+  InputGroupAddon,
+  InputGroupButton,
+} from "@/components/ui/input-group";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
-  CardFooter,
   CardHeader,
   CardTitle,
+  CardDescription,
 } from "@/components/ui/card";
-import {
-  Field,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { FieldSet } from "@/components/ui/field";
 import { useAuth } from "@/contexts/auth-context";
 import { useRouter } from "@/i18n/navigation";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
-import { toast } from "sonner";
-import z from "zod";
-
-const loginSchema = z.object({
-  username: z.string().min(1, "Username is required"),
-  password: z.string().min(1, "Password is required"),
-});
-
-type LoginFormData = z.infer<typeof loginSchema>;
-
+import {
+  Field,
+  useText,
+} from "@/components/page/PokerManagementPage/components/shared";
+import { LanguageSwitcher } from "@/components/layout/language-switcher";
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, loading } = useAuth();
   const router = useRouter();
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<LoginFormData>({
-    resolver: zodResolver(loginSchema),
-    defaultValues: {
-      username: "",
-      password: "",
-    },
-  });
-
-  const onSubmit = async (data: LoginFormData) => {
-    const success = await login(data.username, data.password);
-
-    if (success) {
-      router.push("/dashboard");
-    } else {
-      toast.error("Invalid username or password. Please try again.");
-    }
-  };
-
+  const t = useText();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   return (
-    <div className="flex items-center justify-center min-h-screen">
-      <form className="w-full max-w-sm" onSubmit={handleSubmit(onSubmit)}>
+    <main className="flex min-h-screen items-center justify-center p-4">
+      <div className="w-full max-w-sm space-y-5">
+        <div className="flex justify-end">
+          <LanguageSwitcher />
+        </div>
         <Card>
           <CardHeader>
-            <CardTitle className="text-2xl font-bold text-center">
-              Poker Management System
+            <CardTitle>
+              <h1 className="text-2xl">{t("Poker Management")}</h1>
             </CardTitle>
+            <CardDescription>
+              {t("Sign in with your staff account.")}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col gap-6">
-              <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="username">Username</FieldLabel>
+            <form
+              className="space-y-5"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                setBusy(true);
+                setError("");
+                try {
+                  await login(username, password);
+                  router.replace("/dashboard");
+                  router.refresh();
+                } catch (error) {
+                  setError(
+                    error instanceof Error ? error.message : "Sign-in failed.",
+                  );
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{t(error)}</AlertDescription>
+                </Alert>
+              )}
+              <FieldSet disabled={loading || busy} className="gap-5">
+                <Field label="Username">
                   <Input
                     required
-                    id="username"
-                    type="text"
-                    {...register("username")}
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    maxLength={100}
                   />
-                  {errors.username && (
-                    <FieldError>{errors.username.message}</FieldError>
-                  )}
                 </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="password">Password</FieldLabel>
-                  <Input
+                <Field label="Password">
+                  <PasswordInput
                     required
-                    id="password"
-                    type="password"
-                    autoComplete="off"
-                    {...register("password")}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    maxLength={128}
                   />
-                  {errors.password && (
-                    <FieldError>{errors.password.message}</FieldError>
-                  )}
                 </Field>
-              </FieldGroup>
-            </div>
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={loading || busy}
+                >
+                  {t(busy ? "Signing in…" : "Sign in")}
+                </Button>
+              </FieldSet>
+            </form>
+            <p className="mt-4 text-center text-sm text-muted-foreground">
+              {t("Need account access? Contact your venue administrator.")}
+            </p>
           </CardContent>
-          <CardFooter className="flex-col gap-2">
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? "Logging in..." : "Login"}
-            </Button>
-          </CardFooter>
         </Card>
-      </form>
-    </div>
+      </div>
+    </main>
+  );
+}
+
+function PasswordInput(props: ComponentProps<typeof InputGroupInput>) {
+  const t = useText();
+  const [visible, setVisible] = useState(false);
+  return (
+    <InputGroup className="h-10">
+      <InputGroupInput {...props} type={visible ? "text" : "password"} />
+      <InputGroupAddon align="inline-end">
+        <InputGroupButton
+          type="button"
+          aria-label={t(visible ? "Hide password" : "Show password")}
+          aria-pressed={visible}
+          onClick={() => setVisible((value) => !value)}
+        >
+          {visible ? <EyeOff /> : <Eye />}
+        </InputGroupButton>
+      </InputGroupAddon>
+    </InputGroup>
   );
 }

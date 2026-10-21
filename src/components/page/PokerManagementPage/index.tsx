@@ -1,137 +1,191 @@
 "use client";
-
-import { Bell } from "lucide-react";
-
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ApprovalQueue } from "./components/approval-queue";
-import { Badge } from "./components/shared";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { usePokerManagementContext } from "./PokerManagementProvider";
-import type { ModuleKey } from "./types";
-import { AdminView } from "./views/admin-view";
+import { useText } from "./components/shared";
+import { OperationDialogs } from "./components/operation-dialogs";
 import { DashboardView } from "./views/dashboard-view";
 import { PlayersView } from "./views/players-view";
-import { ReportsView } from "./views/reports-view";
 import { TablesView } from "./views/tables-view";
 import { TransactionsView } from "./views/transactions-view";
-
-export function PokerManagementPage({ module }: { module: ModuleKey }) {
+import { ReportsView } from "./views/reports-view";
+import { AdminView } from "./views/admin-view";
+import { SettingsView } from "./views/settings-view";
+import { venueSettings } from "@/domain/settings";
+import { displayName } from "@/lib/display-name";
+import { Link } from "@/i18n/navigation";
+import { PageHeader } from "./components/page-header";
+import type { ModuleKey } from "./types";
+import {
+  adminModules,
+  settingsModules,
+  isAdminSection,
+  isSettingsSection,
+  type SettingsSection,
+  type AdminSection,
+} from "@/config/management-modules";
+const views = {
+  dashboard: DashboardView,
+  players: PlayersView,
+  tables: TablesView,
+  transactions: TransactionsView,
+  reports: ReportsView,
+  admin: AdminView,
+  settings: SettingsView,
+};
+const descriptions: Record<ModuleKey, string> = {
+  dashboard: "Monitor cash, table activity, and important alerts.",
+  players: "Find a player, manage their profile, or start a new visit.",
+  tables: "Manage tables, stakes, and seating.",
+  transactions: "Record transactions and review requests.",
+  reports:
+    "Review daily cash movements and reconcile the current business day.",
+  admin: "Manage staff access and review the audit history.",
+  settings: "Configure locations, game rules, staff, and tables.",
+};
+export function PokerManagementPage({
+  module,
+  section,
+}: {
+  module: ModuleKey;
+  section?: SettingsSection | AdminSection;
+}) {
   const state = usePokerManagementContext();
-
+  const t = useText();
+  const View = views[module];
+  const settingsSection =
+    section && isSettingsSection(section) ? section : "setup";
+  const adminSection = section && isAdminSection(section) ? section : "audit";
+  const moduleDetails =
+    module === "settings"
+      ? settingsModules[settingsSection]
+      : module === "admin"
+        ? adminModules[adminSection]
+        : null;
+  const needsSetup =
+    state.snapshot && !venueSettings(state.store).setupCompleted;
   return (
-    <div className="space-y-4 sm:space-y-6">
-      <section className="flex flex-col gap-4 rounded-md border bg-card p-4 shadow-sm sm:p-5 md:flex-row md:items-center md:justify-between">
-        <div className="min-w-0">
-          <p className="text-sm text-muted-foreground">Poker operations</p>
-          <h1 className="break-words text-xl font-semibold tracking-tight sm:text-2xl md:text-3xl">
-            {module === "admin"
-              ? "Admin"
-              : module[0].toUpperCase() + module.slice(1)}
-          </h1>
+    <div className="min-w-0 space-y-6 sm:space-y-7">
+      <PageHeader
+        title={
+          moduleDetails?.title ?? module[0].toUpperCase() + module.slice(1)
+        }
+        description={moduleDetails?.description ?? descriptions[module]}
+        metadata={
+          state.snapshot && (
+            <dl className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs leading-5 text-muted-foreground">
+              <div className="min-w-0">
+                <dt className="sr-only">{t("Venue name")}</dt>
+                <dd className="break-words">
+                  {displayName(state.snapshot.branch.name)}
+                </dd>
+              </div>
+              <div>
+                <dt className="sr-only">{t("Date")}</dt>
+                <dd className="tabular-nums">
+                  {state.day?.date ?? t("No business day")}
+                </dd>
+              </div>
+              {state.day && (
+                <div>
+                  <dt className="sr-only">{t("Status")}</dt>
+                  <dd className="flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className={
+                        "size-1.5 shrink-0 rounded-full " +
+                        (state.locked
+                          ? "bg-muted-foreground"
+                          : "bg-emerald-500")
+                      }
+                    />
+                    {t(state.locked ? "Day closed" : "Day open")}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          )
+        }
+      />
+      {state.error && (
+        <Alert variant="destructive" role="alert">
+          <AlertTitle>{t("Action needed")}</AlertTitle>
+          <AlertDescription>
+            {t(state.error)}{" "}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                state.setError("");
+                void state.refresh();
+              }}
+            >
+              {t("Refresh")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {state.retryRequired && (
+        <Alert>
+          <AlertDescription>
+            <p>
+              {t(
+                "The last request has an unconfirmed result. Retry it before continuing.",
+              )}
+            </p>
+            <Button
+              disabled={state.busy}
+              onClick={() => void state.retryLast()}
+            >
+              {t("Retry last request")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {!state.snapshot ? (
+        <div
+          role="status"
+          aria-label={t("Loading branch records…")}
+          className="grid gap-4 sm:grid-cols-2"
+        >
+          <Skeleton className="h-32" />
+          <Skeleton className="h-32" />
+          <Skeleton className="h-64 sm:col-span-2" />
         </div>
-        <div className="flex min-w-0 flex-wrap gap-2">
-          <Badge tone={state.locked ? "red" : "green"}>
-            {state.locked ? "Day locked" : "Day open"}
-          </Badge>
-          <Badge tone="blue">{state.activePlayers.length} players in-house</Badge>
-          <Badge tone={state.pendingApprovals.length ? "amber" : "neutral"}>
-            {state.pendingApprovals.length} pending approvals
-          </Badge>
-        </div>
-      </section>
-
-      <Alert variant="info">
-        <Bell className="size-4" />
-        <AlertTitle>System message</AlertTitle>
-        <AlertDescription>{state.notice}</AlertDescription>
-      </Alert>
-
-      {(module === "dashboard" ||
-        module === "transactions" ||
-        module === "admin") && (
-        <ApprovalQueue
-          approvals={state.approvals}
-          players={state.players}
-          canDecide={module === "admin"}
-          decideApproval={state.decideApproval}
-        />
-      )}
-
-      {module === "dashboard" && (
-        <DashboardView
-          totals={state.totals}
-          activePlayers={state.activePlayers}
-          tables={state.tables}
-          transactions={state.transactions}
-          players={state.players}
-          auditLogs={state.auditLogs}
-          notifications={state.notifications}
-        />
-      )}
-
-      {module === "players" && (
-        <PlayersView
-          players={state.filteredPlayers}
-          playerSearch={state.playerSearch}
-          setPlayerSearch={state.setPlayerSearch}
-          checkIn={state.checkIn}
-          setCheckIn={state.setCheckIn}
-          tables={state.tables}
-          handleCheckIn={state.handleCheckIn}
-          refreshCredit={state.refreshCredit}
-          transactions={state.transactions}
-          auditLogs={state.auditLogs}
-          pendingApprovals={state.pendingApprovals}
-        />
-      )}
-
-      {module === "tables" && (
-        <TablesView
-          tables={state.tables}
-          players={state.players}
-          pendingApprovals={state.pendingApprovals}
-          movePlayer={state.movePlayer}
-        />
-      )}
-
-      {module === "transactions" && (
-        <TransactionsView
-          activePlayers={state.activePlayers}
-          tables={state.tables}
-          buyIn={state.buyIn}
-          setBuyIn={state.setBuyIn}
-          cashOut={state.cashOut}
-          setCashOut={state.setCashOut}
-          manualTx={state.manualTx}
-          setManualTx={state.setManualTx}
-          handleBuyIn={state.handleBuyIn}
-          handleCashOut={state.handleCashOut}
-          handleManualTransaction={state.handleManualTransaction}
-          requestCorrection={state.requestCorrection}
-          transactions={state.transactions}
-          players={state.players}
-        />
-      )}
-
-      {module === "reports" && (
-        <ReportsView
-          players={state.players}
-          tables={state.tables}
-          totals={state.totals}
-          locked={state.locked}
-          setLocked={state.setLocked}
-          downloadReport={state.downloadReport}
-        />
-      )}
-
-      {module === "admin" && (
-        <AdminView
-          locked={state.locked}
-          setLocked={state.setLocked}
-          auditLogs={state.auditLogs}
-        />
+      ) : (
+        <>
+          {needsSetup && module !== "settings" && (
+            <Alert>
+              <AlertTitle>{t("Venue setup required")}</AlertTitle>
+              <AlertDescription>
+                <p>
+                  {t(
+                    "Review staff, tables, stakes, and operating rules before opening a new business day.",
+                  )}
+                </p>
+                {state.user?.role === "ADMIN" && (
+                  <Button asChild size="sm">
+                    <Link href="/settings">{t("Set up venue")}</Link>
+                  </Button>
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
+          {module === "settings" ? (
+            <SettingsView key={settingsSection} section={settingsSection} />
+          ) : module === "admin" &&
+            !["MANAGER", "ADMIN"].includes(state.user?.role ?? "") ? (
+            <p>{t("Manager or admin access required.")}</p>
+          ) : module === "admin" ? (
+            <AdminView key={adminSection} section={adminSection} />
+          ) : (
+            <View />
+          )}
+          <OperationDialogs />
+        </>
       )}
     </div>
   );
 }
-
 export default PokerManagementPage;

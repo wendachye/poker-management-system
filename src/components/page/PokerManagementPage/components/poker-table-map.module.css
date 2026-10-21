@@ -1,0 +1,460 @@
+.map {
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.arena {
+  --name-width: clamp(64px, 20cqi, 88px);
+  --table-top: 62px;
+  --table-bottom: 70px;
+  /* Corner labels leave room for a broad oval; cap its width to stay portrait. */
+  --table-inset: max(calc(var(--name-width) + 4px), calc(50% - 104px));
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  max-width: 440px;
+  height: 400px;
+  margin-inline: auto;
+}
+
+.felt,
+.seats {
+  position: absolute;
+  inset: var(--table-top) var(--table-inset) var(--table-bottom);
+}
+
+.felt {
+  border: 12px solid color-mix(in oklab, var(--foreground) 8%, var(--card));
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      ellipse at 50% 25%,
+      color-mix(in oklab, var(--primary) 7%, transparent),
+      transparent 75%
+    ),
+    var(--muted);
+  box-shadow:
+    0 12px 20px -12px #00000030,
+    0 2px 4px #00000012,
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 10%, transparent),
+    inset 0 -8px 16px color-mix(in oklab, var(--background) 14%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--foreground) 15%, transparent);
+}
+
+.felt::before {
+  position: absolute;
+  inset: -9px;
+  border: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+}
+
+.felt::after {
+  position: absolute;
+  inset: 10px;
+  border: 1px solid color-mix(in oklab, var(--foreground) 11%, transparent);
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+}
+
+.felt[data-closed="true"] {
+  background: var(--background);
+  border-color: var(--muted);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.seats {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.seat {
+  position: absolute;
+  z-index: 1;
+  /* Measured equal-perimeter stations share the rail's actual ellipse. */
+  top: var(--seat-y, var(--mobile-seat-y));
+  left: var(--seat-x, var(--mobile-seat-x));
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+.seatButton {
+  position: relative;
+  display: flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  padding: 0;
+  overflow: visible;
+  transition: none;
+}
+
+.seatButton:hover,
+.seatButton:disabled {
+  background: transparent;
+  opacity: 1;
+}
+
+.seatButton:focus-visible {
+  box-shadow: none;
+}
+
+.seatCircle {
+  display: flex;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid color-mix(in oklab, var(--foreground) 45%, var(--card));
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--muted) 85%, var(--card));
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  box-shadow:
+    0 0 0 3px var(--card),
+    0 2px 4px #00000018;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.seat[data-occupied="true"] .seatCircle {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow:
+    0 0 0 3px var(--card),
+    0 2px 5px #00000024,
+    inset 0 1px 0 color-mix(in oklab, var(--primary-foreground) 12%, transparent);
+}
+
+.seatButton:not(:disabled):hover .seatCircle {
+  border-color: var(--foreground);
+  box-shadow:
+    0 0 0 3px var(--card),
+    0 0 0 4px color-mix(in oklab, var(--foreground) 30%, transparent);
+}
+
+.seatButton:focus-visible .seatCircle {
+  outline: 2px solid var(--foreground);
+  outline-offset: 3px;
+}
+
+.seat[data-occupied="false"] .seatButton:disabled .seatCircle {
+  border-style: dashed;
+}
+
+.seatName {
+  display: flex;
+  position: absolute;
+  width: var(--name-width);
+  height: auto;
+  max-height: 32px;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+}
+
+.seatName::after {
+  /* A visible stem ties the outside text to its own seat, rather than its neighbour. */
+  position: absolute;
+  width: 1px;
+  height: 6px;
+  background: color-mix(in oklab, var(--foreground) 50%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.seatNameText {
+  display: -webkit-box;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.seatNameText[data-truncated] {
+  word-break: break-all;
+}
+
+.seat[data-seat="1"] .seatName,
+.seat[data-seat="9"] .seatName {
+  top: calc(100% + 6px);
+}
+
+.seat[data-seat="1"] .seatName {
+  right: 50%;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.seat[data-seat="9"] .seatName {
+  left: 50%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.seat[data-seat="5"] .seatName {
+  bottom: calc(100% + 6px);
+  left: 50%;
+  width: 104px;
+  max-height: 32px;
+  transform: translateX(-50%);
+}
+
+.seat[data-seat="5"] .seatNameText {
+  -webkit-line-clamp: 2;
+}
+
+.seat[data-seat="2"] .seatName,
+.seat[data-seat="3"] .seatName,
+.seat[data-seat="4"] .seatName {
+  right: calc(50% + 14px);
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.seat[data-seat="6"] .seatName,
+.seat[data-seat="7"] .seatName,
+.seat[data-seat="8"] .seatName {
+  left: calc(50% + 14px);
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.seat[data-seat="3"] .seatName,
+.seat[data-seat="4"] .seatName,
+.seat[data-seat="6"] .seatName,
+.seat[data-seat="7"] .seatName {
+  bottom: calc(100% + 6px);
+}
+
+.seat[data-seat="4"] .seatName {
+  right: calc(50% + 12px);
+}
+
+.seat[data-seat="6"] .seatName {
+  left: calc(50% + 12px);
+}
+
+.seat[data-seat="2"] .seatName,
+.seat[data-seat="8"] .seatName {
+  top: calc(100% + 4px);
+}
+
+.seat[data-seat="2"] .seatName,
+.seat[data-seat="3"] .seatName,
+.seat[data-seat="7"] .seatName,
+.seat[data-seat="8"] .seatName {
+  width: calc(var(--name-width) - 10px);
+}
+
+.seat[data-seat="3"] .seatName,
+.seat[data-seat="7"] .seatName {
+  bottom: calc(100% + 4px);
+}
+
+.seat[data-seat="3"] .seatName::after,
+.seat[data-seat="4"] .seatName::after,
+.seat[data-seat="5"] .seatName::after,
+.seat[data-seat="6"] .seatName::after,
+.seat[data-seat="7"] .seatName::after {
+  top: calc(100% + 1px);
+}
+
+.seat[data-seat="1"] .seatName::after,
+.seat[data-seat="2"] .seatName::after,
+.seat[data-seat="8"] .seatName::after,
+.seat[data-seat="9"] .seatName::after {
+  bottom: calc(100% + 1px);
+}
+
+.seat[data-seat="1"] .seatName::after,
+.seat[data-seat="2"] .seatName::after,
+.seat[data-seat="3"] .seatName::after,
+.seat[data-seat="4"] .seatName::after {
+  right: 0;
+}
+
+.seat[data-seat="6"] .seatName::after,
+.seat[data-seat="7"] .seatName::after,
+.seat[data-seat="8"] .seatName::after,
+.seat[data-seat="9"] .seatName::after {
+  left: 0;
+}
+
+.seat[data-seat="4"] .seatName::after,
+.seat[data-seat="6"] .seatName::after {
+  height: 9px;
+}
+
+.seat[data-seat="5"] .seatName::after {
+  left: 50%;
+}
+
+.seat[data-seat="2"] .seatName::after,
+.seat[data-seat="3"] .seatName::after,
+.seat[data-seat="7"] .seatName::after,
+.seat[data-seat="8"] .seatName::after {
+  height: 10px;
+}
+
+@container (min-width: 520px) {
+  .arena {
+    --table-top: 62px;
+    --table-bottom: 62px;
+    --table-inset: 134px;
+    max-width: 760px;
+    height: 316px;
+  }
+
+  .seat {
+    top: var(--seat-y, var(--desktop-seat-y));
+    left: var(--seat-x, var(--desktop-seat-x));
+  }
+
+  .seatName {
+    width: 104px;
+    height: 32px;
+    font-size: 13px;
+  }
+
+  .seat[data-seat="1"] .seatName,
+  .seat[data-seat="9"] .seatName {
+    top: calc(100% + 8px);
+    right: auto;
+    left: 50%;
+    justify-content: center;
+    text-align: center;
+    transform: translateX(-50%);
+  }
+
+  .seat[data-seat="5"] .seatName {
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  .seat[data-seat="2"] .seatName,
+  .seat[data-seat="3"] .seatName,
+  .seat[data-seat="4"] .seatName {
+    width: 104px;
+    right: calc(100% + 8px);
+    justify-content: flex-end;
+    text-align: right;
+  }
+
+  .seat[data-seat="6"] .seatName,
+  .seat[data-seat="7"] .seatName,
+  .seat[data-seat="8"] .seatName {
+    width: 104px;
+    left: calc(100% + 8px);
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .seat[data-seat="4"] .seatName,
+  .seat[data-seat="6"] .seatName {
+    bottom: 50%;
+  }
+
+  .seat[data-seat="3"] .seatName,
+  .seat[data-seat="7"] .seatName {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+
+  .seat[data-seat="2"] .seatName,
+  .seat[data-seat="8"] .seatName {
+    top: 50%;
+  }
+
+  .seat[data-seat] .seatName::after {
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    width: 8px;
+    height: 1px;
+  }
+
+  .seat[data-seat="2"] .seatName::after,
+  .seat[data-seat="3"] .seatName::after,
+  .seat[data-seat="4"] .seatName::after {
+    left: calc(100% + 1px);
+  }
+
+  .seat[data-seat="6"] .seatName::after,
+  .seat[data-seat="7"] .seatName::after,
+  .seat[data-seat="8"] .seatName::after {
+    right: calc(100% + 1px);
+  }
+
+  .seat[data-seat="2"] .seatName::after,
+  .seat[data-seat="8"] .seatName::after {
+    top: 0;
+  }
+
+  .seat[data-seat="3"] .seatName::after,
+  .seat[data-seat="7"] .seatName::after {
+    top: 50%;
+  }
+
+  .seat[data-seat="4"] .seatName::after,
+  .seat[data-seat="6"] .seatName::after {
+    bottom: 0;
+  }
+
+  .seat[data-seat="1"] .seatName::after,
+  .seat[data-seat="5"] .seatName::after,
+  .seat[data-seat="9"] .seatName::after {
+    left: 50%;
+    width: 1px;
+    height: 8px;
+  }
+
+  .seat[data-seat="1"] .seatName::after,
+  .seat[data-seat="9"] .seatName::after {
+    bottom: calc(100% + 1px);
+  }
+
+  .seat[data-seat="5"] .seatName::after {
+    top: calc(100% + 1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seatButton {
+    translate: none !important;
+  }
+
+  .seatButton,
+  .seatCircle {
+    transform: none !important;
+    transition: none;
+  }
+}
