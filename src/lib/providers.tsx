@@ -10,7 +10,14 @@ export default function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <TooltipProvider>
         <AuthProvider>{children}</AuthProvider>
-        <Toaster position="bottom-right" richColors closeButton />
+        <Toaster
+          position="bottom-right"
+          mobileOffset={{
+            bottom: "calc(96px + env(safe-area-inset-bottom, 0px))",
+          }}
+          richColors
+          closeButton
+        />
       </TooltipProvider>
     </ThemeProvider>
   );
