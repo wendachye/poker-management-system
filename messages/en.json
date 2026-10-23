@@ -1014,6 +1014,22 @@
     "new_buy_ins_use_the_destination_table_s_rules_existing_balances_stay_unchanged": "New buy-ins use the destination table's rules. Existing balances stay unchanged.",
     "select_a_seat_from_1_to_9": "Select a seat from 1 to 9.",
     "choose_a_different_seat": "Choose a different seat.",
-    "the_player_s_seat_changed_try_moving_them_again": "The player's seat changed. Try moving them again."
+    "the_player_s_seat_changed_try_moving_them_again": "The player's seat changed. Try moving them again.",
+    "swap_players": "Swap players",
+    "review_both_players_and_their_destination_seats_their_seats_will_be_exchanged_in_one_step": "Review both players and their destination seats. Their seats will be exchanged in one step.",
+    "existing_balances_stay_with_each_player_new_buy_ins_follow_their_destination_table_s_rules": "Existing balances stay with each player. New buy-ins follow their destination table's rules.",
+    "choose_two_different_players": "Choose two different players.",
+    "select_two_different_players_to_swap": "Select two different players to swap.",
+    "choose_two_different_seats": "Choose two different seats.",
+    "the_seating_changed_close_this_dialog_and_try_the_swap_again": "The seating changed. Close this dialog and try the swap again.",
+    "the_seating_changed_try_dragging_the_player_again": "The seating changed. Try dragging the player again.",
+    "both_tables_must_be_open_to_swap_players": "Both tables must be open to swap players.",
+    "seat_swap": "Seat swap",
+    "swapped_player_seats": "Swapped player seats",
+    "swap_with": "Swap with",
+    "press_space_to_pick_up_a_player_use_arrow_keys_to_choose_a_seat_then_space_to_review_a_move_or_swap_press_escape_to_cancel": "Press Space to pick up a player. Use arrow keys to choose a seat, then Space to review a move or swap. Press Escape to cancel.",
+    "choose_a_seat_or_press_escape_to_cancel": "Choose a seat or press Escape to cancel.",
+    "review_the_move_or_swap_before_saving": "Review the move or swap before saving.",
+    "drag_to_an_empty_seat_to_move_or_onto_a_player_to_swap_on_a_phone_press_and_hold": "Drag to an empty seat to move, or onto a player to swap. On a phone, press and hold."
   }
 }

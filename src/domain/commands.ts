@@ -8,6 +8,10 @@ const note = z.string().trim().min(3).max(500);
 const amount = z.number().int().min(0).max(MAX_MONEY);
 const seat = z.number().int().min(1).max(9);
 const tag = z.enum(["VIP", "Risk", "Banned"]);
+export const seatSwapParticipantSchema = z
+  .object({ playerId: id, sessionId: id, tableId: id, seat })
+  .strict();
+export type SeatSwapParticipant = z.infer<typeof seatSwapParticipantSchema>;
 export const commandSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -41,6 +45,13 @@ export const commandSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({ kind: z.literal("MOVE"), playerId: id, tableId: id, seat })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("SWAP_SEATS"),
+      first: seatSwapParticipantSchema,
+      second: seatSwapParticipantSchema,
+    })
     .strict(),
   z
     .object({

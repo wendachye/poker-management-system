@@ -92,8 +92,7 @@ export function auditChanges(log: AuditLog, store: Store) {
       return displayName(value);
     if (key === "tableId") return resolvedTableName(value, store);
     const seat = String(value).match(/^(.*), seat (\d+)$/);
-    if (seat)
-      return resolvedTableName(seat[1], store) + " · " + seat[2];
+    if (seat) return resolvedTableName(seat[1], store) + " · " + seat[2];
     return typeof value === "object" ? JSON.stringify(value) : String(value);
   }
   return [...new Set([...Object.keys(before), ...Object.keys(after)])]
@@ -115,6 +114,19 @@ export function auditChanges(log: AuditLog, store: Store) {
     }));
 }
 export function auditReason(log: AuditLog, store: Store) {
+  if (log.action === "Swapped player seats") {
+    const players = parse(log.reason).players;
+    if (Array.isArray(players) && players.length === 2) {
+      const profiles = players.map((id) =>
+        store.profiles.find((profile) => profile.id === id),
+      );
+      if (profiles.every((profile) => !!profile))
+        return profiles
+          .map((profile) => displayName(profile!.name))
+          .join(" ↔ ");
+    }
+    return "Seat swap";
+  }
   if (log.action === "Created location") return displayName(log.reason);
   if (log.action === "Requested approval") {
     const r = store.approvals.find((r) => r.id === log.entity);
@@ -122,8 +134,7 @@ export function auditReason(log: AuditLog, store: Store) {
   }
   if (log.action === "Checked in player") {
     const seat = log.reason.match(/^(.*), seat (\d+)$/);
-    if (seat)
-      return resolvedTableName(seat[1], store) + " · " + seat[2];
+    if (seat) return resolvedTableName(seat[1], store) + " · " + seat[2];
   }
   return log.reason;
 }

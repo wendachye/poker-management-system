@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useLocale, useMessages } from "next-intl";
 import { managementRequest } from "@/lib/management-request";
 import { prototypeEnabled } from "@/prototype/config";
-import type { Command } from "@/domain/commands";
+import type { Command, SeatSwapParticipant } from "@/domain/commands";
 import type { StaffCommand } from "@/domain/staff";
 import type { LocationCommand } from "@/domain/locations";
 import type { EntryType, Snapshot } from "@/domain/model";
@@ -25,6 +25,7 @@ export type Operation =
     }
   | { kind: "check-in"; playerId?: string; tableId?: string; seat?: number }
   | { kind: "move"; playerId?: string; tableId?: string; seat?: number }
+  | { kind: "swap"; first: SeatSwapParticipant; second: SeatSwapParticipant }
   | { kind: "player"; playerId: string }
   | { kind: "edit-player"; playerId: string };
 export function usePokerManagementState() {

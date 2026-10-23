@@ -134,11 +134,34 @@
   background: var(--card);
 }
 
+.seat[data-swap-available] .seatCircle {
+  outline: 1px dashed var(--muted-foreground);
+  outline-offset: 4px;
+}
+
 .seat[data-drop-target] .seatCircle {
   border-style: solid;
   background: var(--primary);
   color: var(--primary-foreground);
   box-shadow: 0 0 0 5px color-mix(in oklab, var(--primary) 28%, transparent);
+  outline: 2px solid var(--foreground);
+  outline-offset: 4px;
+}
+
+.swapIndicator {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--card);
+  border-radius: 50%;
+  background: var(--foreground);
+  color: var(--background);
+  pointer-events: none;
 }
 
 .seatCircle {

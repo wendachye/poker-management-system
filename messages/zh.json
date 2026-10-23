@@ -1014,6 +1014,22 @@
     "new_buy_ins_use_the_destination_table_s_rules_existing_balances_stay_unchanged": "新的买入使用目标牌桌的规则，现有余额保持不变。",
     "select_a_seat_from_1_to_9": "请选择 1 至 9 号座位。",
     "choose_a_different_seat": "请选择其他座位。",
-    "the_player_s_seat_changed_try_moving_them_again": "玩家座位已发生变化，请重新移动。"
+    "the_player_s_seat_changed_try_moving_them_again": "玩家座位已发生变化，请重新移动。",
+    "swap_players": "交换座位",
+    "review_both_players_and_their_destination_seats_their_seats_will_be_exchanged_in_one_step": "请确认两位玩家及其目标座位，保存后将同时交换座位。",
+    "existing_balances_stay_with_each_player_new_buy_ins_follow_their_destination_table_s_rules": "两位玩家的现有余额保持不变，新的买入使用各自目标牌桌的规则。",
+    "choose_two_different_players": "请选择两位不同的玩家。",
+    "select_two_different_players_to_swap": "请选择两位不同的玩家来交换座位。",
+    "choose_two_different_seats": "请选择两个不同的座位。",
+    "the_seating_changed_close_this_dialog_and_try_the_swap_again": "座位信息已改变，请关闭此窗口并重新交换座位。",
+    "the_seating_changed_try_dragging_the_player_again": "座位信息已改变，请重新拖动玩家。",
+    "both_tables_must_be_open_to_swap_players": "交换涉及的牌桌必须处于开放状态。",
+    "seat_swap": "座位交换",
+    "swapped_player_seats": "已交换玩家座位",
+    "swap_with": "交换对象",
+    "press_space_to_pick_up_a_player_use_arrow_keys_to_choose_a_seat_then_space_to_review_a_move_or_swap_press_escape_to_cancel": "按空格键选中玩家，使用方向键选择座位，再按空格键查看转移或交换确认。按 Escape 取消。",
+    "choose_a_seat_or_press_escape_to_cancel": "请选择座位，或按 Escape 取消。",
+    "review_the_move_or_swap_before_saving": "请确认转移或交换信息后再保存。",
+    "drag_to_an_empty_seat_to_move_or_onto_a_player_to_swap_on_a_phone_press_and_hold": "拖到空座位可转移玩家，拖到其他玩家可交换座位。手机上请长按后拖动。"
   }
 }

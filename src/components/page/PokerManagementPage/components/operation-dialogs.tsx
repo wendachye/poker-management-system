@@ -37,6 +37,7 @@ import { PlayerDetails, EditPlayer } from "./player-details";
 import {
   playerMoveBlockedReason,
   seatMoveBlockedReason,
+  seatSwapBlockedReason,
 } from "./table-seat-move";
 function useFields(initial: Record<string, string>) {
   const [values, setValues] = useState(initial);
@@ -56,6 +57,8 @@ export function OperationDialogs() {
       return <CheckInDialog initial={s.operation} />;
     case "move":
       return <MoveDialog initial={s.operation} />;
+    case "swap":
+      return <SwapDialog initial={s.operation} />;
     case "player":
       return <PlayerDetails playerId={s.operation.playerId} />;
     case "edit-player":
@@ -1197,6 +1200,143 @@ function MoveDialog({
         >
           Move player
         </FormActions>
+      </ActionForm>
+    </Modal>
+  );
+}
+
+function SwapDialog({
+  initial,
+}: {
+  initial: Extract<Operation, { kind: "swap" }>;
+}) {
+  const s = usePokerManagementContext(),
+    t = useText();
+  const [{ first, second }] = useState(() => ({
+    first: { ...initial.first },
+    second: { ...initial.second },
+  }));
+  const operator = !!s.user && s.user.role !== "DEALER";
+  const blockedReason = seatSwapBlockedReason(s.store, first, second);
+  const swapDisabled = s.locked || !operator || !!blockedReason;
+  return (
+    <Modal
+      open
+      onOpenChange={() => s.closeOperation()}
+      title="Swap players"
+      description="Review both players and their destination seats. Their seats will be exchanged in one step."
+      fallbackFocus={() =>
+        document.querySelector<HTMLElement>(
+          `[data-player-seat="${CSS.escape(first.playerId)}"]`,
+        ) ?? document.querySelector<HTMLElement>("[data-table-move-trigger]")
+      }
+    >
+      <ActionForm
+        disabled={s.locked || !operator}
+        onSubmit={() => {
+          const reason = seatSwapBlockedReason(s.store, first, second);
+          if (reason) throw new Error(reason);
+          return s.submit({ kind: "SWAP_SEATS", first, second });
+        }}
+        onSuccess={() => s.closeOperation()}
+      >
+        {blockedReason && (
+          <Alert>
+            <AlertDescription>{t(blockedReason)}</AlertDescription>
+          </Alert>
+        )}
+        <FormSection title="Seat assignment">
+          <div className="space-y-3">
+            {[
+              { player: first, destination: second },
+              { player: second, destination: first },
+            ].map(({ player, destination }) => {
+              const profile = s.store.profiles.find(
+                (profile) => profile.id === player.playerId,
+              );
+              const currentTable = s.tables.find(
+                (table) => table.id === player.tableId,
+              );
+              const destinationTable = s.tables.find(
+                (table) => table.id === destination.tableId,
+              );
+              const rules = destinationTable
+                ? effectiveTableRules(s.store, destinationTable)
+                : undefined;
+              const name = profile
+                ? displayName(profile.name)
+                : t("Player not found.");
+              return (
+                <div
+                  key={player.playerId}
+                  className="min-w-0 space-y-3 rounded-lg border bg-muted/20 p-3"
+                >
+                  <h3 className="text-sm font-semibold leading-relaxed [overflow-wrap:anywhere]">
+                    {name}
+                  </h3>
+                  <dl className="grid min-w-0 grid-cols-2 gap-3 text-sm">
+                    <div className="min-w-0 space-y-1">
+                      <dt className="text-xs text-muted-foreground">
+                        {t("Current seat")}
+                      </dt>
+                      <dd className="leading-relaxed [overflow-wrap:anywhere]">
+                        {displayName(currentTable?.name ?? t("No active seat"))}
+                        <span className="block font-medium">
+                          {t("Seat")} {player.seat}
+                        </span>
+                      </dd>
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <dt className="text-xs text-muted-foreground">
+                        {t("Destination seat")}
+                      </dt>
+                      <dd className="leading-relaxed [overflow-wrap:anywhere]">
+                        {displayName(
+                          destinationTable?.name ?? t("No active seat"),
+                        )}
+                        <span className="block font-medium">
+                          {t("Seat")} {destination.seat}
+                        </span>
+                      </dd>
+                    </div>
+                  </dl>
+                  {rules && (
+                    <div
+                      className="border-t pt-3"
+                      role="region"
+                      aria-label={t("Destination table rules") + " · " + name}
+                    >
+                      <dl className="grid min-w-0 grid-cols-2 gap-3 text-sm">
+                        <div className="min-w-0 space-y-1">
+                          <dt className="text-xs text-muted-foreground">
+                            {t("Stakes")}
+                          </dt>
+                          <dd className="break-words font-medium tabular-nums">
+                            {money(rules.smallBlind)} / {money(rules.bigBlind)}
+                          </dd>
+                        </div>
+                        <div className="min-w-0 space-y-1">
+                          <dt className="text-xs text-muted-foreground">
+                            {t("Buy-in range")}
+                          </dt>
+                          <dd className="break-words font-medium tabular-nums">
+                            {money(rules.minBuyIn)} - {money(rules.maxBuyIn)}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t(
+              "Existing balances stay with each player. New buy-ins follow their destination table's rules.",
+            )}
+          </p>
+        </FormSection>
+        <FormActions disabled={swapDisabled}>Swap players</FormActions>
       </ActionForm>
     </Modal>
   );

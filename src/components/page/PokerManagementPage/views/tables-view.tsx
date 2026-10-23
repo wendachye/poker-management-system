@@ -183,7 +183,7 @@ export function TablesView() {
       {operator && !s.locked && s.activePlayers.length > 0 && (
         <p className="text-xs leading-relaxed text-muted-foreground">
           {t(
-            "Drag a player to an empty seat. On a phone, press and hold. You can also use Move player.",
+            "Drag to an empty seat to move, or onto a player to swap. On a phone, press and hold.",
           )}
         </p>
       )}

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { gsap } from "gsap";
+import { ArrowRightLeft } from "lucide-react";
 import { useDraggable, useDroppable } from "@dnd-kit/react";
 import { pointerIntersection } from "@dnd-kit/collision";
 import type { Player, TableRecord } from "@/domain/model";
@@ -197,7 +198,9 @@ function PokerSeat({
   const blockedReason =
     player && move?.enabled ? move.blockedReason(player.id) : null;
   const dragging = move?.playerId === player?.id && !!player;
-  const available = !!move?.enabled && !player && table.status === "OPEN";
+  const available =
+    table.status === "OPEN" &&
+    !!move?.canDrop({ tableId: table.id, seat }, player?.id);
   const label = player
     ? displayName(player.name)
     : t(table.status === "CLOSED" ? "Closed" : "Available");
@@ -214,7 +217,13 @@ function PokerSeat({
     accept: "poker-player",
     disabled: !available,
     collisionDetector: pointerIntersection,
-    data: { tableId: table.id, seat, label: seatLabel },
+    data: {
+      tableId: table.id,
+      seat,
+      label: seatLabel,
+      playerId: player?.id,
+      name: player ? label : undefined,
+    },
   });
 
   return (
@@ -224,7 +233,12 @@ function PokerSeat({
       data-seat={seat}
       data-occupied={!!player}
       data-dragging={dragging || undefined}
-      data-drop-available={(!!move?.playerId && available) || undefined}
+      data-drop-available={
+        (!!move?.playerId && available && !player) || undefined
+      }
+      data-swap-available={
+        (!!move?.playerId && available && !!player) || undefined
+      }
       data-drop-target={isDropTarget || undefined}
     >
       <Tooltip
@@ -233,7 +247,7 @@ function PokerSeat({
       >
         <TooltipTrigger asChild>
           <Button
-            key={movable ? "move" : "view"}
+            key={(movable ? "move:" : "view:") + (player?.id ?? "empty")}
             ref={movable ? dragRef : undefined}
             type="button"
             variant="ghost"
@@ -258,6 +272,11 @@ function PokerSeat({
             >
               {seat}
             </span>
+            {isDropTarget && player && (
+              <span className={styles.swapIndicator} aria-hidden="true">
+                <ArrowRightLeft size={12} />
+              </span>
+            )}
             {player && (
               <span
                 className={styles.seatName}

@@ -1,4 +1,5 @@
 import type { Store } from "@/domain/model";
+import type { SeatSwapParticipant } from "@/domain/commands";
 import { currentDay } from "@/domain/selectors";
 
 export type SeatMoveDestination = { tableId: string; seat: number };
@@ -65,5 +66,68 @@ export function seatMoveBlockedReason(
     )
   )
     return "That seat is occupied.";
+  return null;
+}
+
+/** Capture the exact visit and seat that staff are being asked to exchange. */
+export function seatSwapParticipant(
+  store: Store,
+  playerId: string,
+): SeatSwapParticipant | null {
+  const session = activeSession(store, playerId);
+  return session
+    ? {
+        playerId,
+        sessionId: session.id,
+        tableId: session.tableId,
+        seat: session.seat,
+      }
+    : null;
+}
+
+export function seatSwapBlockedReason(
+  store: Store,
+  first: SeatSwapParticipant,
+  second: SeatSwapParticipant,
+) {
+  if (
+    first.playerId === second.playerId ||
+    first.sessionId === second.sessionId
+  )
+    return "Choose two different players.";
+  for (const participant of [first, second]) {
+    const blocked = playerMoveBlockedReason(store, participant.playerId);
+    if (blocked) return blocked;
+    const current = activeSession(store, participant.playerId)!;
+    if (
+      current.id !== participant.sessionId ||
+      current.tableId !== participant.tableId ||
+      current.seat !== participant.seat ||
+      !Number.isInteger(participant.seat) ||
+      participant.seat < 1 ||
+      participant.seat > 9 ||
+      !store.profiles.some((profile) => profile.id === participant.playerId) ||
+      store.sessions.some(
+        (session) =>
+          session.playerId === participant.playerId &&
+          session.status === "ACTIVE" &&
+          session.id !== participant.sessionId,
+      ) ||
+      store.sessions.some(
+        (session) =>
+          session.status === "ACTIVE" &&
+          session.tableId === participant.tableId &&
+          session.seat === participant.seat &&
+          session.id !== participant.sessionId,
+      )
+    )
+      return "The seating changed. Close this dialog and try the swap again.";
+    if (
+      !store.tables.some(
+        (table) => table.id === participant.tableId && table.status === "OPEN",
+      )
+    )
+      return "Both tables must be open to swap players.";
+  }
   return null;
 }

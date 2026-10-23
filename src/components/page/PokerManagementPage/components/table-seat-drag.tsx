@@ -25,6 +25,9 @@ import { useText } from "./shared";
 import {
   playerMoveBlockedReason,
   seatMoveBlockedReason,
+  seatSwapParticipant,
+  seatSwapBlockedReason,
+  type SeatMoveDestination,
 } from "./table-seat-move";
 
 const sensors = [
@@ -53,6 +56,7 @@ type SeatDragContextValue = {
   enabled: boolean;
   playerId: string | null;
   canDrag: (playerId: string) => boolean;
+  canDrop: (destination: SeatMoveDestination, occupantId?: string) => boolean;
   blockedReason: (playerId: string) => string | null;
   ignoreSeatClick: () => boolean;
 };
@@ -71,11 +75,12 @@ export function useTableSeatDrag() {
   return useContext(SeatDragContext);
 }
 
-/** A drop proposes the existing MOVE form; only its explicit submit moves a seat. */
+/** Drops only propose a move or swap; explicit confirmation saves the assignment. */
 export function TableSeatDragProvider({ children }: { children: ReactNode }) {
   const s = usePokerManagementContext();
   const t = useText();
   const [playerId, setPlayerId] = useState<string | null>(null);
+  const [swapName, setSwapName] = useState<string | null>(null);
   const active = useRef(false);
   const origin = useRef<DragOrigin | null>(null);
   const suppressClickUntil = useRef(0);
@@ -92,6 +97,19 @@ export function TableSeatDragProvider({ children }: { children: ReactNode }) {
         enabled,
         playerId,
         canDrag: (id) => enabled && !playerMoveBlockedReason(s.store, id),
+        canDrop: (destination, occupantId) => {
+          if (!enabled) return false;
+          if (!playerId) return !occupantId;
+          if (!occupantId)
+            return !seatMoveBlockedReason(s.store, playerId, destination);
+          const first = seatSwapParticipant(s.store, playerId);
+          const second = seatSwapParticipant(s.store, occupantId);
+          return (
+            !!first &&
+            !!second &&
+            !seatSwapBlockedReason(s.store, first, second)
+          );
+        },
         blockedReason: (id) => playerMoveBlockedReason(s.store, id),
         ignoreSeatClick: () =>
           active.current || Date.now() < suppressClickUntil.current,
@@ -104,7 +122,7 @@ export function TableSeatDragProvider({ children }: { children: ReactNode }) {
           Accessibility.configure({
             screenReaderInstructions: {
               draggable: t(
-                "Press Space to pick up a player. Use arrow keys to choose an empty seat, then Space to review the move. Press Escape to cancel. You can also use Move player.",
+                "Press Space to pick up a player. Use arrow keys to choose a seat, then Space to review a move or swap. Press Escape to cancel.",
               ),
             },
             announcements: {
@@ -114,13 +132,17 @@ export function TableSeatDragProvider({ children }: { children: ReactNode }) {
                 String(operation.source?.data.name ?? ""),
               dragover: ({ operation }: DragOverEvent) =>
                 operation.target
-                  ? t("Destination seat") +
+                  ? (operation.target.data.playerId
+                      ? t("Swap with") +
+                        " · " +
+                        String(operation.target.data.name)
+                      : t("Destination seat")) +
                     " · " +
                     String(operation.target.data.label)
-                  : t("Choose an empty seat or press Escape to cancel."),
+                  : t("Choose a seat or press Escape to cancel."),
               dragend: ({ operation, canceled }: DragEndEvent) =>
                 !canceled && operation.target
-                  ? t("Review the move before saving.")
+                  ? t("Review the move or swap before saving.")
                   : t("Move canceled."),
             },
           }),
@@ -154,12 +176,21 @@ export function TableSeatDragProvider({ children }: { children: ReactNode }) {
           active.current = true;
           setPlayerId(id);
         }}
+        onDragOver={({ operation }) => {
+          const target = operation.target?.data;
+          setSwapName(
+            target?.playerId && typeof target.name === "string"
+              ? target.name
+              : null,
+          );
+        }}
         onDragEnd={({ operation, canceled }) => {
           const started = origin.current;
           origin.current = null;
           active.current = false;
           suppressClickUntil.current = Date.now() + 250;
           setPlayerId(null);
+          setSwapName(null);
           const id = operation.source?.data.playerId;
           const destination = operation.target?.data;
           if (
@@ -191,6 +222,34 @@ export function TableSeatDragProvider({ children }: { children: ReactNode }) {
             tableId: destination.tableId,
             seat: destination.seat,
           };
+          const occupant = s.store.sessions.find(
+            (session) =>
+              session.status === "ACTIVE" &&
+              session.tableId === target.tableId &&
+              session.seat === target.seat,
+          );
+          if (destination.playerId !== occupant?.playerId) {
+            toast.error(
+              t("The seating changed. Try dragging the player again."),
+            );
+            return;
+          }
+          if (occupant) {
+            const first = seatSwapParticipant(s.store, id);
+            const second = seatSwapParticipant(s.store, occupant.playerId);
+            if (!first || !second) {
+              toast.error(t("Player has no active session."));
+              return;
+            }
+            const reason = seatSwapBlockedReason(s.store, first, second);
+            if (reason) {
+              toast.error(t(reason));
+              return;
+            }
+            s.setError("");
+            s.startOperation({ kind: "swap", first, second });
+            return;
+          }
           const reason = seatMoveBlockedReason(s.store, id, target);
           if (reason) {
             toast.error(t(reason));
@@ -209,7 +268,9 @@ export function TableSeatDragProvider({ children }: { children: ReactNode }) {
             >
               <ArrowRightLeft className="size-4 shrink-0" />
               <span className="truncate">
-                {displayName(String(source.data.name))}
+                {swapName
+                  ? t("Swap with") + " " + displayName(swapName)
+                  : displayName(String(source.data.name))}
               </span>
             </div>
           )}

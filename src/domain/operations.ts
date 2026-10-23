@@ -436,6 +436,106 @@ export function applyCommand(
       );
       break;
     }
+    case "SWAP_SEATS": {
+      permit(actor, cashiers);
+      const { first, second } = command;
+      requireThat(
+        first.playerId !== second.playerId &&
+          first.sessionId !== second.sessionId,
+        "Select two different players to swap.",
+      );
+      requireThat(
+        first.tableId !== second.tableId || first.seat !== second.seat,
+        "Choose two different seats.",
+      );
+      const participants = [first, second];
+      const sessions = participants.map((participant) => {
+        const session = store.sessions.find(
+          (value) =>
+            value.id === participant.sessionId &&
+            value.playerId === participant.playerId &&
+            value.dayId === day.id &&
+            value.status === "ACTIVE" &&
+            value.tableId === participant.tableId &&
+            value.seat === participant.seat,
+        );
+        requireThat(
+          session &&
+            store.profiles.some(
+              (profile) => profile.id === participant.playerId,
+            ) &&
+            !store.sessions.some(
+              (value) =>
+                value.playerId === participant.playerId &&
+                value.status === "ACTIVE" &&
+                value.id !== participant.sessionId,
+            ),
+          "The seating changed. Close this dialog and try the swap again.",
+        );
+        return session;
+      });
+      requireThat(
+        participants.every((participant) =>
+          store.tables.some(
+            (table) =>
+              table.id === participant.tableId && table.status === "OPEN",
+          ),
+        ),
+        "Select an open table.",
+      );
+      requireThat(
+        !store.approvals.some(
+          (request) =>
+            request.status === "PENDING" &&
+            participants.some(
+              (participant) =>
+                request.playerId === participant.playerId ||
+                request.sessionId === participant.sessionId,
+            ),
+        ),
+        "Resolve pending request first",
+      );
+      requireThat(
+        !store.sessions.some(
+          (occupant) =>
+            occupant.status === "ACTIVE" &&
+            !participants.some(
+              (participant) => participant.sessionId === occupant.id,
+            ) &&
+            participants.some(
+              (participant) =>
+                occupant.tableId === participant.tableId &&
+                occupant.seat === participant.seat,
+            ),
+        ),
+        "That seat is occupied.",
+      );
+
+      // Validate both original assignments before changing either session.
+      // The enclosing command persists one result, never two separate moves.
+      const reason = JSON.stringify({
+        swapId: uid("SWAP"),
+        players: [first.playerId, second.playerId],
+      });
+      sessions[0].tableId = second.tableId;
+      sessions[0].seat = second.seat;
+      sessions[1].tableId = first.tableId;
+      sessions[1].seat = first.seat;
+      for (const [index, participant] of participants.entries()) {
+        const destination = participants[1 - index];
+        audit(
+          store,
+          actor,
+          time,
+          "Swapped player seats",
+          participant.playerId,
+          reason,
+          `${participant.tableId}, seat ${participant.seat}`,
+          `${destination.tableId}, seat ${destination.seat}`,
+        );
+      }
+      break;
+    }
     case "REQUEST": {
       permit(
         actor,
