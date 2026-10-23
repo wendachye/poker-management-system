@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { displayName } from "@/lib/display-name";
 import type { EntryType, PlayerType, PlayerTag } from "@/domain/model";
@@ -9,6 +9,7 @@ import type { Operation } from "../usePokerManagementState";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -33,6 +34,7 @@ import {
 } from "./shared";
 import { money, parseMoney } from "../utils";
 import { CashOutSummary, EntryImpact } from "./entry-impact";
+import type { CheckInContinuation } from "./check-in-continuation";
 import { PlayerDetails, EditPlayer } from "./player-details";
 import {
   playerMoveBlockedReason,
@@ -101,6 +103,9 @@ function CheckInDialog({
       ?.focus();
   }, [step]);
   const [moreOptions, setMoreOptions] = useState(false);
+  const [buyInNext, setBuyInNext] = useState(true);
+  const buyInNextId = useId();
+  const submittedVisit = useRef<CheckInContinuation | null>(null);
   const openTables = s.tables.filter((table) => table.status === "OPEN");
   const freeSeats = (tableId: string) =>
     9 - s.activePlayers.filter((player) => player.tableId === tableId).length;
@@ -121,6 +126,11 @@ function CheckInDialog({
     operator = s.user?.role !== "DEALER";
   const returning = value("mode") === "returning",
     selected = s.players.find((p) => p.id === value("existing"));
+  const duplicate = !returning
+    ? s.players.find(
+        (player) => player.phone === value("phone").replace(/[\s()-]/g, ""),
+      )
+    : undefined;
   const creditBlocked =
     !settings.creditEnabled &&
     (returning
@@ -143,14 +153,28 @@ function CheckInDialog({
             value("table"))
         }
         onSubmit={() => {
+          if (duplicate)
+            throw new Error(
+              "This phone number belongs to an existing player. Select that player to check in.",
+            );
+          if (returning && !selected) throw new Error("Select player");
           if (creditBlocked)
             throw new Error("Credit accounts are disabled in venue settings.");
           if (step === "player") {
             setStep("seat");
             return false;
           }
+          submittedVisit.current = {
+            branchId: s.snapshot!.branch.id,
+            dayId: s.day!.id,
+            playerId: returning ? selected?.id : undefined,
+            phone: returning ? selected!.phone : value("phone"),
+            tableId: value("table"),
+            seat: Number(value("seat")),
+          };
           return s.submit({
             kind: "CHECK_IN",
+            playerId: returning ? selected?.id : undefined,
             name: returning ? (selected?.name ?? "") : value("name"),
             phone: returning ? (selected?.phone ?? "") : value("phone"),
             type: returning
@@ -171,19 +195,8 @@ function CheckInDialog({
           });
         }}
         onSuccess={() => {
-          // Keep the checked-in player visible even if the directory was filtered
-          // to checked-out players, so the operator can request their buy-in next.
-          s.setDraft(
-            "player.search",
-            returning
-              ? (selected?.phone ?? "")
-              : value("phone").replace(/[\s()-]/g, ""),
-          );
-          s.setDraft("player.status", "ACTIVE");
-          s.setDraft("player.type", "");
-          s.setDraft("player.tag", "");
-          s.setDraft("player.page", "0");
-          s.closeOperation();
+          if (submittedVisit.current)
+            s.finishCheckIn(submittedVisit.current, buyInNext);
         }}
       >
         <ol
@@ -282,6 +295,70 @@ function CheckInDialog({
                       />
                     </Field>
                   </FormGrid>
+                  {duplicate && (
+                    <Alert role="status">
+                      <AlertDescription className="min-w-0 space-y-3">
+                        <div className="space-y-1">
+                          <p className="font-medium text-foreground">
+                            {t("Existing player found")}
+                          </p>
+                          <p className="break-words text-foreground [overflow-wrap:anywhere]">
+                            {displayName(duplicate.name)} · {duplicate.phone}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge>{duplicate.type}</Badge>
+                            {duplicate.creditUsed > 0 && (
+                              <span>
+                                {t("Outstanding credit")}:{" "}
+                                {money(duplicate.creditUsed)}
+                              </span>
+                            )}
+                          </div>
+                          <p>
+                            {t(
+                              duplicate.tags.includes("Banned")
+                                ? "Banned players cannot check in."
+                                : duplicate.status === "ACTIVE"
+                                  ? "This player is already checked in."
+                                  : duplicate.type === "CREDIT" &&
+                                      !settings.creditEnabled
+                                    ? "Credit accounts are disabled in venue settings."
+                                    : "Use this profile to keep its history and account rules.",
+                            )}
+                          </p>
+                        </div>
+                        {!duplicate.tags.includes("Banned") && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-11 w-full sm:w-auto"
+                            disabled={
+                              duplicate.status !== "ACTIVE" &&
+                              duplicate.type === "CREDIT" &&
+                              !settings.creditEnabled
+                            }
+                            onClick={() => {
+                              if (duplicate.status === "ACTIVE") {
+                                s.startOperation({
+                                  kind: "player",
+                                  playerId: duplicate.id,
+                                });
+                                return;
+                              }
+                              set("existing", duplicate.id);
+                              set("mode", "returning");
+                            }}
+                          >
+                            {t(
+                              duplicate.status === "ACTIVE"
+                                ? "View player"
+                                : "Use existing player",
+                            )}
+                          </Button>
+                        )}
+                      </AlertDescription>
+                    </Alert>
+                  )}
                   <Field
                     label="Player type"
                     hint={
@@ -359,6 +436,15 @@ function CheckInDialog({
           )}
           {step === "seat" && (
             <>
+              {duplicate && (
+                <Alert variant="destructive" role="alert">
+                  <AlertDescription>
+                    {t(
+                      "This phone number belongs to an existing player. Select that player to check in.",
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
               <div className="flex min-w-0 items-start justify-between gap-3 rounded-lg border bg-muted/20 p-3">
                 <div className="min-w-0 space-y-1 text-sm">
                   <p className="break-words font-medium [overflow-wrap:anywhere]">
@@ -453,15 +539,44 @@ function CheckInDialog({
                 )}
                 <p className="text-xs leading-5 text-muted-foreground">
                   {t(
-                    "After check-in, use Buy-in to request chips. No balance changes until approval.",
+                    "Check-in reserves the seat. No balance changes until a buy-in is approved.",
                   )}
                 </p>
               </FormSection>
+              <label
+                htmlFor={buyInNextId}
+                className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-3"
+              >
+                <Checkbox
+                  id={buyInNextId}
+                  className="mt-0.5"
+                  checked={buyInNext}
+                  onCheckedChange={(checked) => setBuyInNext(checked === true)}
+                  aria-describedby={buyInNextId + "-hint"}
+                />
+                <span className="min-w-0 space-y-1 text-sm">
+                  <span className="block font-medium">
+                    {t("Open buy-in after check-in")}
+                  </span>
+                  <span
+                    id={buyInNextId + "-hint"}
+                    className="block text-xs leading-5 text-muted-foreground"
+                  >
+                    {t(
+                      "A buy-in draft opens for this player. Review the amount before sending it for approval.",
+                    )}
+                  </span>
+                </span>
+              </label>
             </>
           )}
         </div>
-        <FormActions disabled={creditBlocked}>
-          {step === "player" ? "Choose seat" : "Check in"}
+        <FormActions disabled={creditBlocked || !!duplicate}>
+          {step === "player"
+            ? "Choose seat"
+            : buyInNext
+              ? "Check in & buy-in"
+              : "Check in only"}
         </FormActions>
       </ActionForm>
     </Modal>

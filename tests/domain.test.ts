@@ -188,6 +188,7 @@ test("returning player reuses profile and bans cannot be replaced at check-in", 
     () =>
       act(s, {
         kind: "CHECK_IN",
+        playerId,
         name: "New name",
         phone: "+60 123456789",
         type: "CASH",
@@ -208,6 +209,7 @@ test("returning player reuses profile and bans cannot be replaced at check-in", 
   });
   s = act(s, {
     kind: "CHECK_IN",
+    playerId,
     name: "New name",
     phone: "+60123456789",
     type: "CASH",

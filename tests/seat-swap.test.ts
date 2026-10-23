@@ -383,6 +383,7 @@ test("a checked-out and rechecked-in player cannot be swapped using an earlier v
     store,
     {
       kind: "CHECK_IN",
+      playerId: profile.id,
       name: profile.name,
       phone: profile.phone,
       type: profile.type,

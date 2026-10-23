@@ -59,6 +59,7 @@ async function completeJourney(id: PrototypeJourneyId) {
       )!;
       await act({
         kind: "CHECK_IN",
+        playerId: player.id,
         name: player.name,
         phone: player.phone,
         type: player.type,

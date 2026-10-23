@@ -1030,6 +1030,17 @@
     "press_space_to_pick_up_a_player_use_arrow_keys_to_choose_a_seat_then_space_to_review_a_move_or_swap_press_escape_to_cancel": "按空格键选中玩家，使用方向键选择座位，再按空格键查看转移或交换确认。按 Escape 取消。",
     "choose_a_seat_or_press_escape_to_cancel": "请选择座位，或按 Escape 取消。",
     "review_the_move_or_swap_before_saving": "请确认转移或交换信息后再保存。",
-    "drag_to_an_empty_seat_to_move_or_onto_a_player_to_swap_on_a_phone_press_and_hold": "拖到空座位可转移玩家，拖到其他玩家可交换座位。手机上请长按后拖动。"
+    "drag_to_an_empty_seat_to_move_or_onto_a_player_to_swap_on_a_phone_press_and_hold": "拖到空座位可转移玩家，拖到其他玩家可交换座位。手机上请长按后拖动。",
+    "existing_player_found": "找到现有玩家",
+    "use_existing_player": "使用现有玩家",
+    "use_this_profile_to_keep_its_history_and_account_rules": "使用此档案以保留玩家的历史记录和账户规则。",
+    "this_phone_number_belongs_to_an_existing_player_select_that_player_to_check_in": "此电话号码属于现有玩家。请选择该玩家办理入场。",
+    "the_selected_player_no_longer_matches_this_phone_number_select_the_player_again": "所选玩家与此电话号码不匹配。请重新选择玩家。",
+    "open_buy_in_after_check_in": "入场后打开买入表单",
+    "a_buy_in_draft_opens_for_this_player_review_the_amount_before_sending_it_for_approval": "将为此玩家打开买入草稿。请确认金额后再提交审批。",
+    "check_in_reserves_the_seat_no_balance_changes_until_a_buy_in_is_approved": "入场仅预留座位。买入获批后才会更改余额。",
+    "check_in_buy_in": "入场并买入",
+    "check_in_only": "仅办理入场",
+    "player_checked_in": "玩家已入场。"
   }
 }

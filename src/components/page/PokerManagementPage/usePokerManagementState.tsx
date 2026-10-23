@@ -10,6 +10,10 @@ import type { StaffCommand } from "@/domain/staff";
 import type { LocationCommand } from "@/domain/locations";
 import type { EntryType, Snapshot } from "@/domain/model";
 import {
+  checkedInVisit,
+  type CheckInContinuation,
+} from "./components/check-in-continuation";
+import {
   currentDay,
   emptyStore,
   playersForDay,
@@ -43,6 +47,7 @@ export function usePokerManagementState() {
   const [operation, setOperation] = useState<Operation | null>(null);
   const inFlight = useRef(false);
   const latestRevision = useRef(-1);
+  const acceptedSnapshot = useRef<Snapshot | null>(null);
   const activeBranch = useRef<string | null>(null);
   const uncertain = useRef<{
     fingerprint: string;
@@ -62,6 +67,7 @@ export function usePokerManagementState() {
     activeBranch.current = next.branch.id;
     if (next.revision >= latestRevision.current) {
       latestRevision.current = next.revision;
+      acceptedSnapshot.current = next;
       setSnapshot(next);
     }
   }, []);
@@ -98,6 +104,7 @@ export function usePokerManagementState() {
         if (generation !== next.generation) {
           generation = next.generation;
           latestRevision.current = -1;
+          acceptedSnapshot.current = null;
           activeBranch.current = null;
           uncertain.current = null;
           setRetryRequired(false);
@@ -190,7 +197,7 @@ export function usePokerManagementState() {
         command.kind === "REQUEST" || command.kind === "CORRECT"
           ? "Request sent for approval."
           : command.kind === "CHECK_IN"
-            ? "Player checked in. Use Buy-in to request chips."
+            ? "Player checked in."
             : "Saved successfully.";
       const key = message
         .toLowerCase()
@@ -229,6 +236,31 @@ export function usePokerManagementState() {
       setOperation(next);
     },
     closeOperation: () => setOperation(null),
+    finishCheckIn: (expected: CheckInContinuation, buyInNext: boolean) => {
+      const visit = checkedInVisit(acceptedSnapshot.current, expected);
+      if (!visit) {
+        setOperation(null);
+        return;
+      }
+      setDrafts((current) => ({
+        ...current,
+        "player.search": visit.phone,
+        "player.status": "ACTIVE",
+        "player.type": "",
+        "player.tag": "",
+        "player.page": "0",
+      }));
+      setOperation(
+        buyInNext
+          ? {
+              kind: "transaction",
+              type: "Buy-in",
+              playerId: visit.playerId,
+              tableId: visit.tableId,
+            }
+          : null,
+      );
+    },
     snapshot,
     store,
     day,

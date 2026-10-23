@@ -24,6 +24,7 @@ export const commandSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("CHECK_IN"),
+      playerId: id.optional(),
       name: text,
       phone: z.string().trim().min(7).max(30),
       type: z.enum(["CASH", "CREDIT"]),

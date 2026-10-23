@@ -164,6 +164,7 @@ export function createPrototypeSample(
     run(
       {
         kind: "CHECK_IN",
+        playerId: store.profiles.find((profile) => profile.phone === phone)?.id,
         name,
         phone,
         type,

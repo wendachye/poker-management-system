@@ -134,6 +134,9 @@ async function venue({ complete = true, open = true } = {}) {
     await act(
       {
         kind: "CHECK_IN",
+        playerId: snapshot.store.profiles.find(
+          (profile) => profile.phone === phone,
+        )?.id,
         name,
         phone,
         type,
@@ -321,6 +324,7 @@ test("cash players complete seating, table-specific buy-ins, returns, closing an
     await f.denied(
       {
         kind: "CHECK_IN",
+        playerId: alice,
         name: "Cash Alice",
         phone: "+12025550201",
         type: "CASH",

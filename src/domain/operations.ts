@@ -353,7 +353,20 @@ export function applyCommand(
     case "CHECK_IN": {
       permit(actor, cashiers);
       const phone = normalizePhone(command.phone);
-      let profile = store.profiles.find((player) => player.phone === phone);
+      let profile = command.playerId
+        ? store.profiles.find((player) => player.id === command.playerId)
+        : undefined;
+      if (command.playerId) {
+        requireThat(
+          profile && profile.phone === phone,
+          "The selected player no longer matches this phone number. Select the player again.",
+        );
+      } else {
+        requireThat(
+          !store.profiles.some((player) => player.phone === phone),
+          "This phone number belongs to an existing player. Select that player to check in.",
+        );
+      }
       requireThat(
         (profile?.type ?? command.type) !== "CREDIT" || settings.creditEnabled,
         "Credit accounts are disabled in venue settings.",

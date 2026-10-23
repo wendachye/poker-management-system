@@ -88,28 +88,28 @@ export function PlayerActions({
       }
       aria-describedby={compact && pending ? pendingDescriptionId : undefined}
     >
+      {pendingRequest && (
+        <Button asChild size="sm" variant="outline" className="h-11 sm:h-9">
+          <Link
+            href="/transactions"
+            aria-label={t("View request") + " · " + displayName(player.name)}
+            aria-describedby={pendingDescriptionId}
+            onClick={() => {
+              s.setDraft("tx.status", "PENDING");
+              s.setDraft("tx.day", "");
+              s.setDraft("tx.filter", "");
+              s.setDraft("tx.search", pendingRequest.id);
+              s.setDraft("tx.page", "0");
+              s.closeOperation();
+            }}
+          >
+            {t("View request")}
+          </Link>
+        </Button>
+      )}
       {operator && player.status === "ACTIVE" && (
         <>
-          {compact && pendingRequest ? (
-            <Button asChild size="sm" variant="outline" className="h-11 sm:h-9">
-              <Link
-                href="/transactions"
-                aria-label={
-                  t("View request") + " · " + displayName(player.name)
-                }
-                onClick={() => {
-                  s.setDraft("tx.status", "PENDING");
-                  s.setDraft("tx.day", "");
-                  s.setDraft("tx.filter", "");
-                  s.setDraft("tx.search", pendingRequest.id);
-                  s.setDraft("tx.page", "0");
-                  s.closeOperation();
-                }}
-              >
-                {t("View request")}
-              </Link>
-            </Button>
-          ) : (
+          {!pending && (
             <Button
               size="sm"
               variant="outline"

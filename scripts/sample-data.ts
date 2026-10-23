@@ -95,6 +95,8 @@ export function buildSampleStore(actors: SampleStaff, now = new Date()): Store {
       i === 0 || i === 1 ? ["VIP"] : i === 3 ? ["Risk"] : [];
     run({
       kind: "CHECK_IN",
+      playerId: store.profiles.find((profile) => profile.phone === phone(i))
+        ?.id,
       name: "Sample · " + names[i],
       phone: phone(i),
       type: limits[i] ? "CREDIT" : "CASH",

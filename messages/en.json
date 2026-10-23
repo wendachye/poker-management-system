@@ -1030,6 +1030,17 @@
     "press_space_to_pick_up_a_player_use_arrow_keys_to_choose_a_seat_then_space_to_review_a_move_or_swap_press_escape_to_cancel": "Press Space to pick up a player. Use arrow keys to choose a seat, then Space to review a move or swap. Press Escape to cancel.",
     "choose_a_seat_or_press_escape_to_cancel": "Choose a seat or press Escape to cancel.",
     "review_the_move_or_swap_before_saving": "Review the move or swap before saving.",
-    "drag_to_an_empty_seat_to_move_or_onto_a_player_to_swap_on_a_phone_press_and_hold": "Drag to an empty seat to move, or onto a player to swap. On a phone, press and hold."
+    "drag_to_an_empty_seat_to_move_or_onto_a_player_to_swap_on_a_phone_press_and_hold": "Drag to an empty seat to move, or onto a player to swap. On a phone, press and hold.",
+    "existing_player_found": "Existing player found",
+    "use_existing_player": "Use existing player",
+    "use_this_profile_to_keep_its_history_and_account_rules": "Use this profile to keep its history and account rules.",
+    "this_phone_number_belongs_to_an_existing_player_select_that_player_to_check_in": "This phone number belongs to an existing player. Select that player to check in.",
+    "the_selected_player_no_longer_matches_this_phone_number_select_the_player_again": "The selected player no longer matches this phone number. Select the player again.",
+    "open_buy_in_after_check_in": "Open buy-in after check-in",
+    "a_buy_in_draft_opens_for_this_player_review_the_amount_before_sending_it_for_approval": "A buy-in draft opens for this player. Review the amount before sending it for approval.",
+    "check_in_reserves_the_seat_no_balance_changes_until_a_buy_in_is_approved": "Check-in reserves the seat. No balance changes until a buy-in is approved.",
+    "check_in_buy_in": "Check in & buy-in",
+    "check_in_only": "Check in only",
+    "player_checked_in": "Player checked in."
   }
 }
