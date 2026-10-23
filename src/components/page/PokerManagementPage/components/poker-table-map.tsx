@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { gsap } from "gsap";
+import { useDraggable, useDroppable } from "@dnd-kit/react";
+import { pointerIntersection } from "@dnd-kit/collision";
 import type { Player, TableRecord } from "@/domain/model";
 import { displayName } from "@/lib/display-name";
 import { Button } from "@/components/ui/button";
@@ -17,6 +19,7 @@ import {
   type PokerSeatPosition,
 } from "./poker-table-geometry";
 import styles from "./poker-table-map.module.css";
+import { useTableSeatDrag } from "./table-seat-drag";
 
 const seatNumbers = Array.from({ length: 9 }, (_, index) => index + 1);
 // CSS chooses the appropriate server-rendered fallback before the rail is measured.
@@ -142,16 +145,14 @@ export function PokerTableMap({
               const desktop = desktopPositions[seat - 1];
               const position = positions?.[seat - 1];
               const player = occupants.get(seat);
-              const playerName = player ? displayName(player.name) : undefined;
-              const label =
-                playerName ??
-                t(table.status === "CLOSED" ? "Closed" : "Available");
-              const accessibleLabel =
-                tableName + " · " + t("Seat") + " " + seat + " · " + label;
               return (
-                <li
+                <PokerSeat
                   key={seat}
-                  className={styles.seat}
+                  table={table}
+                  seat={seat}
+                  player={player}
+                  disabled={disabled || (!player && !canCheckIn)}
+                  onSelect={() => onSeatSelect(seat, player)}
                   style={
                     {
                       "--mobile-seat-x": `${mobile.xPercent}%`,
@@ -164,48 +165,123 @@ export function PokerTableMap({
                       }),
                     } as CSSProperties
                   }
-                  data-seat={seat}
-                  data-occupied={!!player}
-                >
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className={styles.seatButton}
-                        aria-label={accessibleLabel}
-                        disabled={disabled || (!player && !canCheckIn)}
-                        onClick={() => onSeatSelect(seat, player)}
-                      >
-                        <span
-                          className={styles.seatCircle}
-                          data-seat-circle
-                          aria-hidden="true"
-                        >
-                          {seat}
-                        </span>
-                        {player && (
-                          <span
-                            className={styles.seatName}
-                            data-player-label
-                            aria-hidden="true"
-                          >
-                            <PlayerSeatName name={label} />
-                          </span>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" sideOffset={4}>
-                      <p className="max-w-60 break-words">{accessibleLabel}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </li>
+                />
               );
             })}
           </ol>
         </TooltipProvider>
       </div>
     </div>
+  );
+}
+
+function PokerSeat({
+  table,
+  seat,
+  player,
+  disabled,
+  onSelect,
+  style,
+}: {
+  table: PokerTableMapProps["table"];
+  seat: number;
+  player?: Player;
+  disabled: boolean;
+  onSelect: () => void;
+  style: CSSProperties;
+}) {
+  const t = useText();
+  const move = useTableSeatDrag();
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const movable = !!player && !!move?.canDrag(player.id);
+  const blockedReason =
+    player && move?.enabled ? move.blockedReason(player.id) : null;
+  const dragging = move?.playerId === player?.id && !!player;
+  const available = !!move?.enabled && !player && table.status === "OPEN";
+  const label = player
+    ? displayName(player.name)
+    : t(table.status === "CLOSED" ? "Closed" : "Available");
+  const seatLabel = displayName(table.name) + " · " + t("Seat") + " " + seat;
+  const accessibleLabel = seatLabel + " · " + label;
+  const { ref: dragRef } = useDraggable({
+    id: "player:" + (player?.id ?? table.id + ":" + seat),
+    type: "poker-player",
+    disabled: !movable,
+    data: { playerId: player?.id, name: label },
+  });
+  const { ref: dropRef, isDropTarget } = useDroppable({
+    id: "seat:" + table.id + ":" + seat,
+    accept: "poker-player",
+    disabled: !available,
+    collisionDetector: pointerIntersection,
+    data: { tableId: table.id, seat, label: seatLabel },
+  });
+
+  return (
+    <li
+      className={styles.seat}
+      style={style}
+      data-seat={seat}
+      data-occupied={!!player}
+      data-dragging={dragging || undefined}
+      data-drop-available={(!!move?.playerId && available) || undefined}
+      data-drop-target={isDropTarget || undefined}
+    >
+      <Tooltip
+        open={tooltipOpen && !move?.playerId}
+        onOpenChange={(open) => setTooltipOpen(open && !move?.playerId)}
+      >
+        <TooltipTrigger asChild>
+          <Button
+            key={movable ? "move" : "view"}
+            ref={movable ? dragRef : undefined}
+            type="button"
+            variant="ghost"
+            className={styles.seatButton}
+            aria-label={accessibleLabel}
+            aria-description={blockedReason ? t(blockedReason) : undefined}
+            disabled={disabled}
+            data-movable={movable || undefined}
+            data-player-seat={player?.id}
+            onContextMenu={(event) => {
+              if (movable) event.preventDefault();
+            }}
+            onClick={() => {
+              if (!move?.ignoreSeatClick()) onSelect();
+            }}
+          >
+            <span
+              ref={dropRef}
+              className={styles.seatCircle}
+              data-seat-circle
+              aria-hidden="true"
+            >
+              {seat}
+            </span>
+            {player && (
+              <span
+                className={styles.seatName}
+                data-player-label
+                aria-hidden="true"
+              >
+                <PlayerSeatName name={label} />
+              </span>
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={4}>
+          <div className="max-w-60 space-y-1 break-words">
+            <p>{accessibleLabel}</p>
+            {movable && (
+              <p className="text-xs">
+                {t("Drag to move, or click to view player.")}
+              </p>
+            )}
+            {blockedReason && <p className="text-xs">{t(blockedReason)}</p>}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </li>
   );
 }
 

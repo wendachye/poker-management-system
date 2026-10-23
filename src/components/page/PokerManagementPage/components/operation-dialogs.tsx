@@ -34,6 +34,10 @@ import {
 import { money, parseMoney } from "../utils";
 import { CashOutSummary, EntryImpact } from "./entry-impact";
 import { PlayerDetails, EditPlayer } from "./player-details";
+import {
+  playerMoveBlockedReason,
+  seatMoveBlockedReason,
+} from "./table-seat-move";
 function useFields(initial: Record<string, string>) {
   const [values, setValues] = useState(initial);
   return {
@@ -994,32 +998,57 @@ function MoveDialog({
   const { value: val, set } = useFields({
     player: initial.playerId ?? "",
     destination: initial.tableId ?? player?.tableId ?? "",
-    seat: "",
+    seat: initial.seat ? String(initial.seat) : "",
   });
   const operator = s.user?.role !== "DEALER";
   const selectedPlayer = s.activePlayers.find((p) => p.id === val("player"));
   const currentTable = s.tables.find(
     (table) => table.id === selectedPlayer?.tableId,
   );
+  const destination = s.tables.find((table) => table.id === val("destination"));
+  const destinationRules = destination
+    ? effectiveTableRules(s.store, destination)
+    : undefined;
+  const blockedReason = val("player")
+    ? (playerMoveBlockedReason(s.store, val("player")) ??
+      (val("destination") && val("seat")
+        ? seatMoveBlockedReason(s.store, val("player"), {
+            tableId: val("destination"),
+            seat: Number(val("seat")),
+          })
+        : null))
+    : null;
+  const moveDisabled = s.locked || !operator || !!blockedReason;
   return (
     <Modal
       open
       onOpenChange={() => s.closeOperation()}
       title="Move player"
-      description="Select an available seat. Pending transactions must be resolved first."
+      description="Review the player and destination before moving. Pending transactions must be resolved first."
+      fallbackFocus={() =>
+        document.querySelector<HTMLElement>(
+          `[data-player-seat="${CSS.escape(val("player"))}"]`,
+        ) ?? document.querySelector<HTMLElement>("[data-table-move-trigger]")
+      }
     >
       <ActionForm
         disabled={s.locked || !operator}
-        onSubmit={() =>
-          s.submit({
+        onSubmit={() => {
+          if (blockedReason) throw new Error(blockedReason);
+          return s.submit({
             kind: "MOVE",
             playerId: val("player"),
             tableId: val("destination"),
             seat: Number(val("seat")),
-          })
-        }
+          });
+        }}
         onSuccess={() => s.closeOperation()}
       >
+        {blockedReason && (
+          <Alert>
+            <AlertDescription>{t(blockedReason)}</AlertDescription>
+          </Alert>
+        )}
         <FormSection title="Player details">
           <Field label="Player">
             <SearchSelect
@@ -1090,9 +1119,7 @@ function MoveDialog({
                       (seat) =>
                         !s.activePlayers.some(
                           (p) =>
-                            p.tableId === val("destination") &&
-                            p.seat === seat &&
-                            p.id !== val("player"),
+                            p.tableId === val("destination") && p.seat === seat,
                         ),
                     )
                     .map((seat) => ({
@@ -1103,8 +1130,73 @@ function MoveDialog({
               />
             </Field>
           </FormGrid>
+          {destinationRules && (
+            <div
+              className="space-y-3 rounded-lg border bg-muted/30 p-3"
+              role="region"
+              aria-label={t("Destination table rules")}
+            >
+              <dl className="grid min-w-0 gap-3 text-sm sm:grid-cols-3">
+                <div className="min-w-0 space-y-1">
+                  <dt className="text-xs text-muted-foreground">
+                    {t("Stakes")}
+                  </dt>
+                  <dd className="break-words font-medium tabular-nums">
+                    {money(destinationRules.smallBlind)} /{" "}
+                    {money(destinationRules.bigBlind)}
+                  </dd>
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <dt className="text-xs text-muted-foreground">
+                    {t("Buy-in range")}
+                  </dt>
+                  <dd className="break-words font-medium tabular-nums">
+                    {money(destinationRules.minBuyIn)} -{" "}
+                    {money(destinationRules.maxBuyIn)}
+                  </dd>
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <dt className="text-xs text-muted-foreground">
+                    {t("Buy-in increment")}
+                  </dt>
+                  <dd className="break-words font-medium tabular-nums">
+                    {destinationRules.buyInStep
+                      ? money(destinationRules.buyInStep)
+                      : t("Any amount")}
+                  </dd>
+                </div>
+              </dl>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {t(
+                  "New buy-ins use the destination table's rules. Existing balances stay unchanged.",
+                )}
+              </p>
+            </div>
+          )}
         </FormSection>
-        <FormActions>Move player</FormActions>
+        <FormActions
+          disabled={moveDisabled}
+          summary={
+            selectedPlayer && destination && val("seat") ? (
+              <div className="min-w-0 space-y-1 text-sm">
+                <p className="break-words font-medium">
+                  {displayName(selectedPlayer.name)}
+                </p>
+                <p className="break-words text-xs leading-relaxed text-muted-foreground">
+                  <span className="sr-only">{t("Current seat")}: </span>
+                  {displayName(
+                    currentTable?.name ?? t("No active seat"),
+                  )} · {t("Seat")} {selectedPlayer.seat}
+                  <span aria-hidden="true"> → </span>
+                  <span className="sr-only">{t("Destination seat")}: </span>
+                  {displayName(destination.name)} · {t("Seat")} {val("seat")}
+                </p>
+              </div>
+            ) : undefined
+          }
+        >
+          Move player
+        </FormActions>
       </ActionForm>
     </Modal>
   );

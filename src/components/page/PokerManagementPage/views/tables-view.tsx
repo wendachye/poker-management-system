@@ -11,6 +11,7 @@ import { money, parseMoney } from "../utils";
 import { ListToolbar } from "../components/list-toolbar";
 import { VenueRulesButton } from "../components/venue-rules";
 import { TableFloorCard } from "../components/table-floor-card";
+import { TableSeatDragProvider } from "../components/table-seat-drag";
 import {
   ActionForm,
   Field,
@@ -92,6 +93,7 @@ export function TablesView() {
           {operator && !s.locked && s.activePlayers.length > 0 && (
             <Button
               variant="outline"
+              data-table-move-trigger
               disabled={s.locked || !s.activePlayers.length}
               onClick={() => {
                 s.setError("");
@@ -178,28 +180,37 @@ export function TablesView() {
           </Button>
         </EmptyState>
       )}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] items-start gap-6">
-        {visibleTables.slice(page * 20, page * 20 + 20).map((table) => (
-          <TableFloorCard
-            key={table.id}
-            table={table}
-            players={s.activePlayers.filter(
-              (player) => player.tableId === table.id,
-            )}
-            rules={effectiveTableRules(s.store, table)}
-            busy={s.busy}
-            canCheckIn={operator && !s.locked && table.status === "OPEN"}
-            onEdit={manager ? () => edit(table) : undefined}
-            onSeatSelect={(seat, player) => {
-              s.startOperation(
-                player
-                  ? { kind: "player", playerId: player.id }
-                  : { kind: "check-in", tableId: table.id, seat },
-              );
-            }}
-          />
-        ))}
-      </div>
+      {operator && !s.locked && s.activePlayers.length > 0 && (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t(
+            "Drag a player to an empty seat. On a phone, press and hold. You can also use Move player.",
+          )}
+        </p>
+      )}
+      <TableSeatDragProvider>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] items-start gap-6">
+          {visibleTables.slice(page * 20, page * 20 + 20).map((table) => (
+            <TableFloorCard
+              key={table.id}
+              table={table}
+              players={s.activePlayers.filter(
+                (player) => player.tableId === table.id,
+              )}
+              rules={effectiveTableRules(s.store, table)}
+              busy={s.busy}
+              canCheckIn={operator && !s.locked && table.status === "OPEN"}
+              onEdit={manager ? () => edit(table) : undefined}
+              onSeatSelect={(seat, player) => {
+                s.startOperation(
+                  player
+                    ? { kind: "player", playerId: player.id }
+                    : { kind: "check-in", tableId: table.id, seat },
+                );
+              }}
+            />
+          ))}
+        </div>
+      </TableSeatDragProvider>
       <Pager
         page={page}
         total={visibleTables.length}

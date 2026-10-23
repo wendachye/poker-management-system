@@ -24,7 +24,7 @@ export type Operation =
       tableId?: string;
     }
   | { kind: "check-in"; playerId?: string; tableId?: string; seat?: number }
-  | { kind: "move"; playerId?: string; tableId?: string }
+  | { kind: "move"; playerId?: string; tableId?: string; seat?: number }
   | { kind: "player"; playerId: string }
   | { kind: "edit-player"; playerId: string };
 export function usePokerManagementState() {

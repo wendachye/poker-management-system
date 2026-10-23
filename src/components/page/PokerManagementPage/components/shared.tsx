@@ -734,6 +734,7 @@ export function Modal({
   description,
   children,
   trackChanges = true,
+  fallbackFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -741,6 +742,7 @@ export function Modal({
   description: string;
   children: ReactNode;
   trackChanges?: boolean;
+  fallbackFocus?: () => HTMLElement | null;
 }) {
   const s = usePokerManagementContext(),
     t = useText();
@@ -776,9 +778,14 @@ export function Modal({
             returnFocus.current = document.activeElement as HTMLElement;
           }}
           onCloseAutoFocus={(event) => {
-            if (returnFocus.current?.isConnected) {
+            const target =
+              returnFocus.current?.isConnected &&
+              returnFocus.current !== document.body
+                ? returnFocus.current
+                : fallbackFocus?.();
+            if (target) {
               event.preventDefault();
-              returnFocus.current.focus();
+              target.focus();
             }
           }}
           onInteractOutside={(event) => event.preventDefault()}

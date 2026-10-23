@@ -1000,6 +1000,20 @@
     "create_a_fictional_staff_record_to_demonstrate_venue_setup_prototype_access_uses_the_built_in_accounts_in_demo_role": "创建虚构员工记录，以演示场所设置流程。通过“演示角色”中的内置账号体验原型。",
     "simulate_a_password_reset_for_this_sample_record_prototype_access_uses_demo_role_no_password_is_stored": "为此示例记录模拟重置密码。通过“演示角色”体验原型，不会保存密码。",
     "this_sample_change_applies_only_to_this_tab_and_resets_when_you_refresh": "此示例修改仅适用于当前标签页，刷新页面后会重置。",
-    "this_sample_account_will_be_disabled_in_the_current_tab_its_past_transactions_and_audit_history_remain_available": "此示例账号将在当前标签页中停用，其历史交易和审计记录仍可查看。"
+    "this_sample_account_will_be_disabled_in_the_current_tab_its_past_transactions_and_audit_history_remain_available": "此示例账号将在当前标签页中停用，其历史交易和审计记录仍可查看。",
+    "drag_a_player_to_an_empty_seat_on_a_phone_press_and_hold_you_can_also_use_move_player": "将玩家拖到空座位。手机上请长按后拖动，也可以使用“转移玩家”。",
+    "drag_to_move_or_click_to_view_player": "拖动以移动，或点击查看玩家。",
+    "press_space_to_pick_up_a_player_use_arrow_keys_to_choose_an_empty_seat_then_space_to_review_the_move_press_escape_to_cancel_you_can_also_use_move_player": "按空格键选中玩家，使用方向键选择空座位，再按空格键查看移动确认。按 Escape 取消，也可以使用“转移玩家”。",
+    "moving_player": "正在移动玩家",
+    "destination_seat": "目标座位",
+    "choose_an_empty_seat_or_press_escape_to_cancel": "请选择空座位，或按 Escape 取消。",
+    "review_the_move_before_saving": "请确认移动信息后再保存。",
+    "move_canceled": "已取消移动。",
+    "review_the_player_and_destination_before_moving_pending_transactions_must_be_resolved_first": "移动前请确认玩家及目标座位，并先处理待审批交易。",
+    "destination_table_rules": "目标牌桌规则",
+    "new_buy_ins_use_the_destination_table_s_rules_existing_balances_stay_unchanged": "新的买入使用目标牌桌的规则，现有余额保持不变。",
+    "select_a_seat_from_1_to_9": "请选择 1 至 9 号座位。",
+    "choose_a_different_seat": "请选择其他座位。",
+    "the_player_s_seat_changed_try_moving_them_again": "玩家座位已发生变化，请重新移动。"
   }
 }

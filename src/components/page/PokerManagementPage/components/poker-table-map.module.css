@@ -109,6 +109,38 @@
   box-shadow: none;
 }
 
+.seatButton[data-movable] {
+  cursor: grab;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.seat[data-dragging]::before {
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--muted-foreground);
+  border-radius: 50%;
+  content: "";
+}
+
+.seat[data-dragging] .seatCircle,
+.seat[data-dragging] .seatName {
+  opacity: 0.45;
+}
+
+.seat[data-drop-available] .seatCircle {
+  border-style: dashed;
+  border-color: var(--foreground);
+  background: var(--card);
+}
+
+.seat[data-drop-target] .seatCircle {
+  border-style: solid;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: 0 0 0 5px color-mix(in oklab, var(--primary) 28%, transparent);
+}
+
 .seatCircle {
   display: flex;
   width: 44px;

@@ -1000,6 +1000,20 @@
     "create_a_fictional_staff_record_to_demonstrate_venue_setup_prototype_access_uses_the_built_in_accounts_in_demo_role": "Create a fictional staff record to demonstrate venue setup. Prototype access uses the built-in accounts in Demo role.",
     "simulate_a_password_reset_for_this_sample_record_prototype_access_uses_demo_role_no_password_is_stored": "Simulate a password reset for this sample record. Prototype access uses Demo role; no password is stored.",
     "this_sample_change_applies_only_to_this_tab_and_resets_when_you_refresh": "This sample change applies only to this tab and resets when you refresh.",
-    "this_sample_account_will_be_disabled_in_the_current_tab_its_past_transactions_and_audit_history_remain_available": "This sample account will be disabled in the current tab. Its past transactions and audit history remain available."
+    "this_sample_account_will_be_disabled_in_the_current_tab_its_past_transactions_and_audit_history_remain_available": "This sample account will be disabled in the current tab. Its past transactions and audit history remain available.",
+    "drag_a_player_to_an_empty_seat_on_a_phone_press_and_hold_you_can_also_use_move_player": "Drag a player to an empty seat. On a phone, press and hold. You can also use Move player.",
+    "drag_to_move_or_click_to_view_player": "Drag to move, or click to view player.",
+    "press_space_to_pick_up_a_player_use_arrow_keys_to_choose_an_empty_seat_then_space_to_review_the_move_press_escape_to_cancel_you_can_also_use_move_player": "Press Space to pick up a player. Use arrow keys to choose an empty seat, then Space to review the move. Press Escape to cancel. You can also use Move player.",
+    "moving_player": "Moving player",
+    "destination_seat": "Destination seat",
+    "choose_an_empty_seat_or_press_escape_to_cancel": "Choose an empty seat or press Escape to cancel.",
+    "review_the_move_before_saving": "Review the move before saving.",
+    "move_canceled": "Move canceled.",
+    "review_the_player_and_destination_before_moving_pending_transactions_must_be_resolved_first": "Review the player and destination before moving. Pending transactions must be resolved first.",
+    "destination_table_rules": "Destination table rules",
+    "new_buy_ins_use_the_destination_table_s_rules_existing_balances_stay_unchanged": "New buy-ins use the destination table's rules. Existing balances stay unchanged.",
+    "select_a_seat_from_1_to_9": "Select a seat from 1 to 9.",
+    "choose_a_different_seat": "Choose a different seat.",
+    "the_player_s_seat_changed_try_moving_them_again": "The player's seat changed. Try moving them again."
   }
 }
