@@ -1,6 +1,6 @@
 import { mutationSchema, type Command } from "@/domain/commands";
 import { locationCommandSchema } from "@/domain/locations";
-import type { Branch, Snapshot, Staff, Store } from "@/domain/model";
+import type { Branch, Role, Snapshot, Staff, Store } from "@/domain/model";
 import { applyCommand, DomainError } from "@/domain/operations";
 import { emptyStore } from "@/domain/selectors";
 import { defaultSettings } from "@/domain/settings";
@@ -17,6 +17,7 @@ import {
   prototypePersonas,
   prototypeScenarios,
   type PrototypeAccount,
+  type PrototypePersonaId,
   type PrototypeScenario,
 } from "./sample-data";
 
@@ -76,8 +77,7 @@ function state() {
 function currentVenue() {
   return state().venues.get(state().branchId)!;
 }
-function currentUser(): Staff {
-  const venue = currentVenue();
+function currentUser(venue = currentVenue()): Staff {
   const account = venue.accounts.find(
     (entry) => entry.personaId === state().info.personaId && entry.active,
   );
@@ -117,6 +117,21 @@ function emit() {
 }
 export function getPrototypeInfo(): PrototypeInfo {
   return state().info;
+}
+export function getPrototypeRoleOptions(): {
+  id: PrototypePersonaId;
+  role: Role;
+  active: boolean;
+}[] {
+  const accounts = currentVenue().accounts;
+  return prototypePersonas.map((persona) => {
+    const account = accounts.find((entry) => entry.personaId === persona.id);
+    return {
+      id: persona.id,
+      role: account?.role ?? persona.role,
+      active: account?.active ?? false,
+    };
+  });
 }
 export function subscribePrototype(listener: () => void) {
   listeners.add(listener);
@@ -309,11 +324,12 @@ export async function prototypeRequest(
       return Response.json({ user: currentUser(), branches: branches() });
     }
     if (path === "/api/branch" && method === "POST") {
-      if (!state().venues.has(payload.branchId))
-        throw new DomainError("Location not found.", 404);
+      const venue = state().venues.get(payload.branchId);
+      if (!venue) throw new DomainError("Location not found.", 404);
+      const user = currentUser(venue);
       state().branchId = payload.branchId;
       emit();
-      return Response.json({ user: currentUser(), branches: branches() });
+      return Response.json({ user, branches: branches() });
     }
     if (path === "/api/state" && method === "GET")
       return Response.json(snapshot());

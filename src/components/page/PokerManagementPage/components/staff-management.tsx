@@ -7,9 +7,14 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { Role } from "@/domain/model";
-import type { StaffAccount, StaffCommand } from "@/domain/staff";
+import type { StaffAccount } from "@/domain/staff";
 import { displayName } from "@/lib/display-name";
 import { managementRequest } from "@/lib/management-request";
+import {
+  staffFormCommand,
+  type StaffFormAction,
+} from "@/lib/staff-form-command";
+import { prototypeEnabled } from "@/prototype/config";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
@@ -30,7 +35,7 @@ import {
 } from "./shared";
 
 type Edit = {
-  action: "create" | "role" | "password" | "disable";
+  action: StaffFormAction;
   account?: StaffAccount;
 };
 const roleHelp: Record<Role, string> = {
@@ -100,30 +105,28 @@ export function StaffManagement() {
         : edit?.action === "disable"
           ? "Disable account"
           : edit?.account?.active
-            ? "Reset password"
+            ? prototypeEnabled
+              ? "Simulate password reset"
+              : "Reset password"
             : "Enable account";
   const needsPassword =
-    edit?.action === "create" || edit?.action === "password";
+    !prototypeEnabled &&
+    (edit?.action === "create" || edit?.action === "password");
   async function save() {
     if (!edit) return false;
-    if (needsPassword && password !== confirm)
-      throw new Error("Passwords do not match.");
-    let command: StaffCommand;
-    if (edit.action === "create")
-      command = { kind: "STAFF_CREATE", username, password, role, reason };
-    else if (edit.action === "role")
-      command = { kind: "STAFF_ROLE", userId: edit.account!.id, role, reason };
-    else if (edit.action === "disable")
-      command = { kind: "STAFF_DISABLE", userId: edit.account!.id, reason };
-    else
-      command = {
-        kind: "STAFF_PASSWORD",
-        userId: edit.account!.id,
-        password,
-        enable: !edit.account!.active,
-        reason,
-      };
-    return s.submitStaff(command);
+    return s.submitStaff(
+      staffFormCommand(
+        {
+          ...edit,
+          username,
+          role,
+          password,
+          confirmation: confirm,
+          reason,
+        },
+        prototypeEnabled,
+      ),
+    );
   }
   const rows = (accounts ?? []).filter(
     (a) =>
@@ -171,7 +174,11 @@ export function StaffManagement() {
       },
       {
         key: "password",
-        label: account.active ? "Reset password" : "Enable account",
+        label: account.active
+          ? prototypeEnabled
+            ? "Simulate password reset"
+            : "Reset password"
+          : "Enable account",
         disabled: blocked,
         onSelect: () => start({ action: "password", account }),
       },
@@ -197,7 +204,11 @@ export function StaffManagement() {
     <>
       <Panel
         title="Staff accounts"
-        description="Manage staff access for this location. Every change is recorded in the audit history."
+        description={
+          prototypeEnabled
+            ? "Manage fictional staff records in this tab. Use Demo role to try the built-in sample accounts. Changes reset when you refresh."
+            : "Manage staff access for this location. Every change is recorded in the audit history."
+        }
         compact
         action={
           <Button
@@ -328,7 +339,9 @@ export function StaffManagement() {
             description={
               accounts.length
                 ? "Try another search or clear the filters."
-                : "Create a staff account to give someone access to this location."
+                : prototypeEnabled
+                  ? "Create a fictional staff record to demonstrate venue setup."
+                  : "Create a staff account to give someone access to this location."
             }
           >
             {accounts.length > 0 && (
@@ -403,11 +416,21 @@ export function StaffManagement() {
         }}
         title={title}
         description={
-          edit?.action === "create"
-            ? "Create a login for this location and share its password privately with the staff member."
-            : displayName(edit?.account?.username ?? "") +
-              " · " +
-              t("Existing sessions will be signed out after this change.")
+          prototypeEnabled
+            ? edit?.action === "create"
+              ? "Create a fictional staff record to demonstrate venue setup. Prototype access uses the built-in accounts in Demo role."
+              : edit?.action === "password" && edit.account?.active
+                ? "Simulate a password reset for this sample record. Prototype access uses Demo role; no password is stored."
+                : displayName(edit?.account?.username ?? "") +
+                  " · " +
+                  t(
+                    "This sample change applies only to this tab and resets when you refresh.",
+                  )
+            : edit?.action === "create"
+              ? "Create a login for this location and share its password privately with the staff member."
+              : displayName(edit?.account?.username ?? "") +
+                " · " +
+                t("Existing sessions will be signed out after this change.")
         }
       >
         <ActionForm
@@ -501,7 +524,9 @@ export function StaffManagement() {
             <Alert>
               <AlertDescription>
                 {t(
-                  "This staff member will lose access immediately. Their past transactions and audit history remain available.",
+                  prototypeEnabled
+                    ? "This sample account will be disabled in the current tab. Its past transactions and audit history remain available."
+                    : "This staff member will lose access immediately. Their past transactions and audit history remain available.",
                 )}
               </AlertDescription>
             </Alert>

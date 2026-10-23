@@ -992,6 +992,13 @@
     "cash_payout_reversal": "现金支付冲销",
     "the_original_player_session_is_no_longer_active": "原玩家场次已结束。",
     "credit_debt_restored": "恢复信贷欠款",
-    "unexpected_entries_changed_this_example_restart_this_journey": "额外交易已改变此示例，请重新开始此流程。"
+    "unexpected_entries_changed_this_example_restart_this_journey": "额外交易已改变此示例，请重新开始此流程。",
+    "simulate_password_reset": "模拟重置密码",
+    "manage_fictional_staff_records_in_this_tab_use_demo_role_to_try_the_built_in_sample_accounts_changes_reset_when_you_refresh": "在当前标签页中管理虚构员工记录。通过“演示角色”体验内置示例账号。刷新页面后，修改会重置。",
+    "create_a_fictional_staff_record_to_demonstrate_venue_setup": "创建虚构员工记录，以演示场所设置流程。",
+    "create_a_fictional_staff_record_to_demonstrate_venue_setup_prototype_access_uses_the_built_in_accounts_in_demo_role": "创建虚构员工记录，以演示场所设置流程。通过“演示角色”中的内置账号体验原型。",
+    "simulate_a_password_reset_for_this_sample_record_prototype_access_uses_demo_role_no_password_is_stored": "为此示例记录模拟重置密码。通过“演示角色”体验原型，不会保存密码。",
+    "this_sample_change_applies_only_to_this_tab_and_resets_when_you_refresh": "此示例修改仅适用于当前标签页，刷新页面后会重置。",
+    "this_sample_account_will_be_disabled_in_the_current_tab_its_past_transactions_and_audit_history_remain_available": "此示例账号将在当前标签页中停用，其历史交易和审计记录仍可查看。"
   }
 }

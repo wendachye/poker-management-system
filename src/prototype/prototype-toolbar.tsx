@@ -48,6 +48,7 @@ import {
 } from "./journeys";
 import {
   getPrototypeInfo,
+  getPrototypeRoleOptions,
   prototypePersonas,
   prototypeScenarios,
   resetPrototype,
@@ -81,6 +82,17 @@ export function PrototypeToolbar() {
   const [reset, setReset] = useState<ResetIntent | null>(null);
   if (!info) return null;
 
+  const roleOptions = getPrototypeRoleOptions();
+  function roleLabel(option: (typeof roleOptions)[number]) {
+    const role = prototypePersonas.find(
+      (persona) => persona.role === option.role,
+    )!;
+    return (
+      t(role.label) +
+      (role.id !== option.id ? ` · demo.${option.id}` : "") +
+      (!option.active ? " · " + t("Disabled") : "")
+    );
+  }
   const blocked = s.busy || !!s.operation || !s.snapshot;
   const run = info.journey;
   const activeJourneyId = run ? run.id : journeyChoice;
@@ -127,13 +139,20 @@ export function PrototypeToolbar() {
         <SelectTrigger
           className={`h-11 min-w-0 [&>span]:truncate ${className}`}
           aria-label={t("Demo role")}
+          title={roleLabel(
+            roleOptions.find((option) => option.id === info!.personaId)!,
+          )}
         >
           <SelectValue />
         </SelectTrigger>
         <SelectContent align="end">
-          {prototypePersonas.map((persona) => (
-            <SelectItem key={persona.id} value={persona.id}>
-              {t(persona.label)}
+          {roleOptions.map((option) => (
+            <SelectItem
+              key={option.id}
+              value={option.id}
+              disabled={!option.active}
+            >
+              {roleLabel(option)}
             </SelectItem>
           ))}
         </SelectContent>
