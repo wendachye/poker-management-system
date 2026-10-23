@@ -994,6 +994,7 @@
     "credit_debt_restored": "Credit debt restored",
     "unexpected_entries_changed_this_example_restart_this_journey": "Unexpected entries changed this example. Restart this journey.",
     "simulate_password_reset": "Simulate password reset",
+    "journey_paused": "Journey paused",
     "manage_fictional_staff_records_in_this_tab_use_demo_role_to_try_the_built_in_sample_accounts_changes_reset_when_you_refresh": "Manage fictional staff records in this tab. Use Demo role to try the built-in sample accounts. Changes reset when you refresh.",
     "create_a_fictional_staff_record_to_demonstrate_venue_setup": "Create a fictional staff record to demonstrate venue setup.",
     "create_a_fictional_staff_record_to_demonstrate_venue_setup_prototype_access_uses_the_built_in_accounts_in_demo_role": "Create a fictional staff record to demonstrate venue setup. Prototype access uses the built-in accounts in Demo role.",

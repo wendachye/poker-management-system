@@ -994,6 +994,7 @@
     "credit_debt_restored": "恢复信贷欠款",
     "unexpected_entries_changed_this_example_restart_this_journey": "额外交易已改变此示例，请重新开始此流程。",
     "simulate_password_reset": "模拟重置密码",
+    "journey_paused": "演示流程已暂停",
     "manage_fictional_staff_records_in_this_tab_use_demo_role_to_try_the_built_in_sample_accounts_changes_reset_when_you_refresh": "在当前标签页中管理虚构员工记录。通过“演示角色”体验内置示例账号。刷新页面后，修改会重置。",
     "create_a_fictional_staff_record_to_demonstrate_venue_setup": "创建虚构员工记录，以演示场所设置流程。",
     "create_a_fictional_staff_record_to_demonstrate_venue_setup_prototype_access_uses_the_built_in_accounts_in_demo_role": "创建虚构员工记录，以演示场所设置流程。通过“演示角色”中的内置账号体验原型。",

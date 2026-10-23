@@ -170,6 +170,13 @@ export function PrototypeToolbar() {
     s.setDraft("tx.page", "0");
     router.push("/transactions");
   }
+  function openJourneyReport() {
+    if (!run) return;
+    s.setDraft("report.day", run.dayId);
+    s.setDraft("report.mode", "day");
+    setOpen(false);
+    router.push("/reports");
+  }
   async function continueJourney() {
     if (blocked || !run || !progress?.current || progress.problem) return;
     const step = progress.current;
@@ -214,9 +221,7 @@ export function PrototypeToolbar() {
     } else if (action.kind === "reversal") {
       transactionScreen("APPROVED", action.transactionId);
     } else {
-      s.setDraft("report.day", targetDayId);
-      s.setDraft("report.mode", "day");
-      router.push("/reports");
+      openJourneyReport();
     }
   }
   async function confirmReset() {
@@ -294,7 +299,9 @@ export function PrototypeToolbar() {
                 {t(journey.label)} ·{" "}
                 {progress.complete
                   ? t("Journey complete")
-                  : `${t("Step")} ${progress.index + 1} ${t("of")} ${progress.steps.length}`}
+                  : progress.problem || progress.index < 0
+                    ? t("Journey paused")
+                    : `${t("Step")} ${progress.index + 1} ${t("of")} ${progress.steps.length}`}
                 {!progress.problem && progress.current && (
                   <> · {t(currentRole ?? "")}</>
                 )}
@@ -323,7 +330,7 @@ export function PrototypeToolbar() {
                 variant="outline"
                 className="h-11 shrink-0"
                 disabled={blocked}
-                onClick={() => router.push("/reports")}
+                onClick={openJourneyReport}
               >
                 {t("View report")}
               </Button>
@@ -409,7 +416,11 @@ export function PrototypeToolbar() {
                     <p className="text-xs text-muted-foreground">
                       {t(journey.label)} ·{" "}
                       {t(
-                        progress.complete ? "Journey complete" : "Current step",
+                        progress.complete
+                          ? "Journey complete"
+                          : progress.problem || progress.index < 0
+                            ? "Journey paused"
+                            : "Current step",
                       )}
                     </p>
                     <p className="text-sm font-medium">
@@ -458,6 +469,17 @@ export function PrototypeToolbar() {
                   {progress.current &&
                     !progress.problem &&
                     continueButton("w-full")}
+                  {progress.complete && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-11 w-full"
+                      disabled={blocked}
+                      onClick={openJourneyReport}
+                    >
+                      {t("View report")}
+                    </Button>
+                  )}
                   <ol className="space-y-2" aria-label={t("Journey steps")}>
                     {progress.steps.map((step, index) => (
                       <li

@@ -293,7 +293,10 @@ export function journeyProgress(
   let problem = "";
   if (branchId !== run.branchId)
     problem = "Return to the original venue or restart this journey.";
-  else if (store.currentDayId !== run.dayId || !day)
+  else if (
+    !day ||
+    (store.currentDayId !== run.dayId && steps.some((step) => !step.complete))
+  )
     problem = "The business day changed. Restart this journey.";
   else if (extraRequest || extraEntry || unexpectedSession)
     problem = "Unexpected entries changed this example. Restart this journey.";
