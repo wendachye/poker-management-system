@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { Role } from "@/domain/model";
 import type { StaffAccount } from "@/domain/staff";
 import { displayName } from "@/lib/display-name";
+import { matchesListSearch } from "@/lib/list-search";
 import { managementRequest } from "@/lib/management-request";
 import {
   staffFormCommand,
@@ -18,6 +19,7 @@ import { prototypeEnabled } from "@/prototype/config";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
+import { QuickFilters } from "./quick-filters";
 import { RowActions, type RowAction } from "./row-actions";
 import {
   ActionForm,
@@ -128,11 +130,18 @@ export function StaffManagement() {
       ),
     );
   }
-  const rows = (accounts ?? []).filter(
+  const matchingAccounts = (accounts ?? []).filter(
     (a) =>
-      a.username.toLowerCase().includes(query.trim().toLowerCase()) &&
-      (filter === "all" || a.active === (filter === "active")) &&
+      matchesListSearch(query, [
+        a.username,
+        displayName(a.username),
+        a.role,
+        t(a.role),
+      ]) &&
       (!roleFilter || a.role === roleFilter),
+  );
+  const rows = matchingAccounts.filter(
+    (a) => filter === "all" || a.active === (filter === "active"),
   );
   const page = Math.min(
     requestedPage,
@@ -213,24 +222,52 @@ export function StaffManagement() {
         action={
           <Button
             size="sm"
-            className="size-11 px-0 sm:h-9 sm:w-auto sm:px-3"
+            className="h-11 px-3 sm:h-9"
             aria-label={t("Create staff account")}
             title={t("Create staff account")}
             disabled={s.busy || s.retryRequired}
             onClick={() => start({ action: "create" })}
           >
             <UserPlus />
+            <span className="sm:hidden">{t("Add staff")}</span>
             <span className="hidden sm:inline">
               {t("Create staff account")}
             </span>
           </Button>
         }
       >
+        <QuickFilters
+          label="Account status"
+          value={filter}
+          onValueChange={(value) => {
+            setFilter(value);
+            setPage(0);
+          }}
+          options={[
+            {
+              value: "all",
+              label: "All accounts",
+              count: matchingAccounts.length,
+            },
+            {
+              value: "active",
+              label: "Enabled",
+              count: matchingAccounts.filter((account) => account.active)
+                .length,
+            },
+            {
+              value: "disabled",
+              label: "Disabled",
+              count: matchingAccounts.filter((account) => !account.active)
+                .length,
+            },
+          ]}
+        />
         <ListToolbar
           compact
           search={query}
           searchLabel="Search staff accounts"
-          searchPlaceholder="Username"
+          searchPlaceholder="Username or role"
           onSearchChange={(value) => {
             setQuery(value);
             setPage(0);
@@ -253,6 +290,7 @@ export function StaffManagement() {
                       setFilter("all");
                       setPage(0);
                     },
+                    hideChip: true,
                   },
                 ]),
             ...(roleFilter
@@ -271,20 +309,6 @@ export function StaffManagement() {
           onClear={clearCriteria}
           resultCount={rows.length}
         >
-          <Field label="Account status">
-            <Select
-              value={filter}
-              onValueChange={(value) => {
-                setFilter(value);
-                setPage(0);
-              }}
-              options={[
-                { value: "active", label: "Enabled accounts" },
-                { value: "disabled", label: "Disabled accounts" },
-                { value: "all", label: "All accounts" },
-              ]}
-            />
-          </Field>
           <Field label="Role">
             <Select
               value={roleFilter}

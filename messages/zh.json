@@ -1,5 +1,13 @@
 {
   "ui": {
+    "show": "查看",
+    "new_entry": "新增记录",
+    "add_staff": "新增员工",
+    "today": "今天",
+    "all_time": "全部时间",
+    "activity_dates": "活动日期",
+    "username_or_role": "用户名或角色",
+    "add_and_open_a_table_before_checking_in_players": "请先新增并开放牌桌，再为玩家办理入场。",
     "dashboard": "总览",
     "players": "玩家",
     "tables": "牌桌",

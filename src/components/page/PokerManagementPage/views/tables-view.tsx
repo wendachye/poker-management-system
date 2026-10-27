@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { PokerTable } from "@/domain/model";
 import { effectiveTableRules } from "@/domain/settings";
+import { displayName } from "@/lib/display-name";
+import { matchesListSearch } from "@/lib/list-search";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money, parseMoney } from "../utils";
 import { ListToolbar } from "../components/list-toolbar";
@@ -57,9 +59,12 @@ export function TablesView() {
       s.activePlayers.filter((p) => p.tableId === table.id).length >= 9;
     const filter = val("filter", "ALL");
     return (
-      [table.name, table.dealer].some((text) =>
-        text.toLowerCase().includes(val("search").trim().toLowerCase()),
-      ) &&
+      matchesListSearch(val("search"), [
+        table.name,
+        displayName(table.name),
+        table.dealer,
+        displayName(table.dealer),
+      ]) &&
       (filter === "ALL" ||
         (filter === "FULL"
           ? table.status === "OPEN" && full
@@ -115,7 +120,7 @@ export function TablesView() {
       {!s.tables.length && (
         <EmptyState
           title="No tables yet"
-          description="Add a table and assign a dealer before checking in players."
+          description="Add and open a table before checking in players."
         />
       )}
       {!!s.tables.length && (
@@ -147,28 +152,30 @@ export function TablesView() {
                       set("filter", "ALL");
                       set("page", "0");
                     },
+                    hideChip: true,
                   },
                 ]
           }
           onClear={clearFilters}
           resultCount={visibleTables.length}
-        >
-          <Field label="Availability">
-            <Select
-              value={val("filter", "ALL")}
-              onValueChange={(v) => {
-                set("filter", v);
-                set("page", "0");
-              }}
-              options={[
-                { value: "ALL", label: "All tables" },
-                { value: "AVAILABLE", label: "Available seats" },
-                { value: "FULL", label: "Full tables" },
-                { value: "CLOSED", label: "Closed tables" },
-              ]}
-            />
-          </Field>
-        </ListToolbar>
+          primaryFilters={
+            <Field label="Availability">
+              <Select
+                value={val("filter", "ALL")}
+                onValueChange={(v) => {
+                  set("filter", v);
+                  set("page", "0");
+                }}
+                options={[
+                  { value: "ALL", label: "All tables" },
+                  { value: "AVAILABLE", label: "Available seats" },
+                  { value: "FULL", label: "Full tables" },
+                  { value: "CLOSED", label: "Closed tables" },
+                ]}
+              />
+            </Field>
+          }
+        />
       )}
       {!!s.tables.length && !visibleTables.length && (
         <EmptyState
@@ -180,13 +187,19 @@ export function TablesView() {
           </Button>
         </EmptyState>
       )}
-      {operator && !s.locked && s.activePlayers.length > 0 && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {t(
-            "Drag to an empty seat to move, or onto a player to swap. On a phone, press and hold.",
-          )}
-        </p>
-      )}
+      {operator &&
+        !s.locked &&
+        visibleTables.some(
+          (table) =>
+            table.status === "OPEN" &&
+            s.activePlayers.some((player) => player.tableId === table.id),
+        ) && (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t(
+              "Drag to an empty seat to move, or onto a player to swap. On a phone, press and hold.",
+            )}
+          </p>
+        )}
       <TableSeatDragProvider>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] items-start gap-6">
           {visibleTables.slice(page * 20, page * 20 + 20).map((table) => (

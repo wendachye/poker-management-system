@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Link } from "@/i18n/navigation";
 import { displayName } from "@/lib/display-name";
+import { matchesListSearch } from "@/lib/list-search";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import type { Player } from "@/domain/model";
 import { money } from "../utils";
@@ -27,6 +28,7 @@ import {
 import { PlayerActions } from "../components/player-actions";
 import { ListToolbar } from "../components/list-toolbar";
 import { RecordTable } from "../components/record-list";
+import { QuickFilters } from "../components/quick-filters";
 
 export function PlayersView() {
   const s = usePokerManagementContext(),
@@ -43,7 +45,6 @@ export function PlayersView() {
     ["search", "status", "type", "tag"].forEach((key) => set(key, ""));
     set("page", "0");
   };
-  const query = value("search").trim().toLowerCase();
   const available = s.tables.filter(
     (table) =>
       table.status === "OPEN" &&
@@ -51,8 +52,10 @@ export function PlayersView() {
   );
   const matchingPlayers = s.players.filter(
     (p) =>
-      [p.name, p.phone, p.id].some((text) =>
-        text.toLowerCase().includes(query),
+      matchesListSearch(
+        value("search"),
+        [p.name, displayName(p.name), p.phone, p.id],
+        [p.phone],
       ) &&
       (!value("type") || p.type === value("type")) &&
       (!value("tag") || p.tags.some((tag) => tag === value("tag"))),
@@ -198,34 +201,31 @@ export function PlayersView() {
               </Link>
             </p>
           )}
-          <div
-            role="group"
-            aria-label={t("Player status")}
-            className="grid grid-cols-3 gap-1 rounded-lg border bg-muted/30 p-1 sm:w-fit"
-          >
-            {statusOptions.map((status) => (
-              <Button
-                key={status.value}
-                type="button"
-                variant="ghost"
-                aria-pressed={value("status") === status.value}
-                aria-label={t(status.label) + " · " + status.count}
-                className={`h-11 min-w-0 flex-col gap-0 px-2 text-xs sm:h-9 sm:flex-row sm:gap-2 sm:px-3 ${value("status") === status.value ? "bg-background text-foreground shadow-xs hover:bg-background" : "text-muted-foreground"}`}
-                onClick={() => setCriteria("status", status.value)}
-              >
-                <span>{t(status.label)}</span>
-                <span className="text-[11px] font-normal tabular-nums text-muted-foreground">
-                  {status.count}
-                </span>
-              </Button>
-            ))}
-          </div>
+          <QuickFilters
+            label="Player status"
+            value={value("status")}
+            onValueChange={(next) => setCriteria("status", next)}
+            options={statusOptions}
+          />
           <ListToolbar
             compact
             search={value("search")}
             searchLabel="Search players"
             searchPlaceholder="Name, phone, or ID"
             onSearchChange={(v) => setCriteria("search", v)}
+            primaryFilters={
+              <Field label="Player type">
+                <Select
+                  value={value("type")}
+                  onValueChange={(v) => setCriteria("type", v)}
+                  options={[
+                    { value: "", label: "All player types" },
+                    { value: "CASH", label: "CASH" },
+                    { value: "CREDIT", label: "CREDIT" },
+                  ]}
+                />
+              </Field>
+            }
             activeFilters={[
               ["status", "Status"],
               ["type", "Player type"],
@@ -236,33 +236,11 @@ export function PlayersView() {
                 key,
                 label: t(label) + ": " + t(value(key)),
                 onRemove: () => setCriteria(key, ""),
-                hideChip: key === "status",
+                hideChip: key === "status" || key === "type",
               }))}
             onClear={clearCriteria}
             resultCount={filtered.length}
           >
-            <Field label="Status">
-              <Select
-                value={value("status")}
-                onValueChange={(v) => setCriteria("status", v)}
-                options={[
-                  { value: "", label: "All statuses" },
-                  { value: "ACTIVE", label: "ACTIVE" },
-                  { value: "OUT", label: "OUT" },
-                ]}
-              />
-            </Field>
-            <Field label="Player type">
-              <Select
-                value={value("type")}
-                onValueChange={(v) => setCriteria("type", v)}
-                options={[
-                  { value: "", label: "All player types" },
-                  { value: "CASH", label: "CASH" },
-                  { value: "CREDIT", label: "CREDIT" },
-                ]}
-              />
-            </Field>
             <Field label="Tag">
               <Select
                 value={value("tag")}

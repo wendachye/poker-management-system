@@ -23,7 +23,7 @@ export type ListFilter = {
   key: string;
   label: string;
   onRemove: () => void;
-  /** Keep a visible quick filter in the criteria count without repeating its chip. */
+  /** The criterion has a visible control, so omit its chip and popup badge count. */
   hideChip?: boolean;
 };
 
@@ -35,6 +35,7 @@ export function ListToolbar({
   activeFilters = [],
   onClear,
   resultCount,
+  primaryFilters,
   children,
   compact = false,
 }: {
@@ -45,6 +46,8 @@ export function ListToolbar({
   activeFilters?: (string | ListFilter)[];
   onClear: () => void;
   resultCount: number;
+  /** Frequently used criteria, visible without opening the filter panel. */
+  primaryFilters?: ReactNode;
   children?: ReactNode;
   compact?: boolean;
 }) {
@@ -54,19 +57,22 @@ export function ListToolbar({
   const [open, setOpen] = useState(false);
   const hasCriteria = !!search.trim() || activeFilters.length > 0;
   const hasFilters = Children.count(children) > 0;
+  const advancedFilterCount = activeFilters.filter(
+    (filter) => typeof filter === "string" || !filter.hideChip,
+  ).length;
   const filterLabel = `${t("Filters")} · ${t(searchLabel)}`;
   return (
     <div className={cn("min-w-0 space-y-3", compact && "space-y-2")}>
       <div
         className={cn(
-          "flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between",
-          compact && "flex-row items-center gap-2",
+          "flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end",
+          compact && !primaryFilters && "flex-row items-center",
         )}
       >
         <div
           className={cn(
-            "relative w-full sm:max-w-[430px] sm:flex-1",
-            compact && "min-w-0 flex-1",
+            "relative min-w-0 w-full sm:flex-1 sm:basis-56",
+            compact && !primaryFilters && "flex-1",
           )}
         >
           <Search
@@ -80,7 +86,14 @@ export function ListToolbar({
             aria-describedby={`${id}-results`}
             placeholder={t(searchPlaceholder)}
             value={search}
+            autoComplete="off"
             onChange={(event) => onSearchChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && search) {
+                event.preventDefault();
+                onSearchChange("");
+              }
+            }}
             className="h-11 pl-9 pr-11 sm:h-10 [&::-webkit-search-cancel-button]:appearance-none"
           />
           {search.length > 0 && (
@@ -101,10 +114,15 @@ export function ListToolbar({
         </div>
         <div
           className={cn(
-            "flex flex-wrap items-center gap-2 sm:ml-auto",
-            compact && "shrink-0 flex-nowrap",
+            "flex items-end gap-2 sm:ml-auto",
+            primaryFilters ? "w-full sm:w-auto" : "shrink-0",
           )}
         >
+          {primaryFilters && (
+            <div className="min-w-0 flex-1 sm:w-48 sm:flex-none [&_button[role=combobox]]:h-11 sm:[&_button[role=combobox]]:h-10">
+              {primaryFilters}
+            </div>
+          )}
           {hasFilters && (
             <Popover open={open} onOpenChange={setOpen}>
               <PopoverTrigger asChild>
@@ -115,16 +133,14 @@ export function ListToolbar({
                   className={cn(
                     "h-11 sm:h-10",
                     compact && "min-w-11 px-3 sm:px-4",
-                    activeFilters.length > 0 && "border-primary text-primary",
+                    advancedFilterCount > 0 && "border-primary text-primary",
                   )}
                 >
                   <SlidersHorizontal aria-hidden="true" />
-                  <span className={compact ? "hidden sm:inline" : undefined}>
-                    {t("Filters")}
-                  </span>
-                  {activeFilters.length > 0 && (
+                  <span>{t("Filters")}</span>
+                  {advancedFilterCount > 0 && (
                     <Badge className="min-w-5 justify-center px-1.5 tabular-nums">
-                      {activeFilters.length}
+                      {advancedFilterCount}
                     </Badge>
                   )}
                   <ChevronDown
@@ -166,7 +182,8 @@ export function ListToolbar({
                     className="h-11 w-full sm:h-10"
                     onClick={() => setOpen(false)}
                   >
-                    {t("Done")}
+                    {t("Show")} {resultCount}{" "}
+                    {t(resultCount === 1 ? "result" : "results")}
                   </Button>
                 </div>
               </PopoverContent>

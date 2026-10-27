@@ -6,8 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { RecordList } from "../components/record-list";
 import { ListToolbar } from "../components/list-toolbar";
+import { QuickFilters } from "../components/quick-filters";
 import { auditChanges, auditReason } from "@/lib/audit-presentation";
+import { businessDayDates } from "@/lib/business-day-dates";
 import { displayName } from "@/lib/display-name";
+import { matchesListSearch } from "@/lib/list-search";
+import { shiftDate } from "@/domain/reporting";
 import type { AuditLog } from "@/domain/model";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 
@@ -41,7 +45,17 @@ export function AdminView({
   };
   const clearCriteria = () =>
     ["search", "staff", "action", "from", "to"].forEach((key) => set(key, ""));
-  const query = val("search").trim().toLowerCase(),
+  const { today } = businessDayDates([], s.snapshot!.branch.timezone);
+  const weekStart = shiftDate(today, -6);
+  const datePreset =
+    !val("from") && !val("to")
+      ? "all"
+      : val("from") === today && val("to") === today
+        ? "today"
+        : val("from") === weekStart && val("to") === today
+          ? "week"
+          : "";
+  const query = val("search"),
     logs = s.store.auditLogs.filter((log) => {
       const date = new Intl.DateTimeFormat("en-CA", {
         timeZone: s.snapshot!.branch.timezone,
@@ -50,9 +64,15 @@ export function AdminView({
         day: "2-digit",
       }).format(new Date(log.time));
       return (
-        [log.actor, log.action, auditReason(log, s.store), log.entity].some(
-          (text) => text.toLowerCase().includes(query),
-        ) &&
+        matchesListSearch(query, [
+          log.actor,
+          displayName(log.actor),
+          log.action,
+          t(log.action),
+          auditReason(log, s.store),
+          t(auditReason(log, s.store)),
+          log.entity,
+        ]) &&
         (!val("staff") || log.actor === val("staff")) &&
         (!val("action") || log.action === val("action")) &&
         (!val("from") || date >= val("from")) &&
@@ -108,6 +128,22 @@ export function AdminView({
       )}
       {section === "audit" && (
         <Panel title="Audit history" compact>
+          <QuickFilters
+            label="Activity dates"
+            value={datePreset}
+            onValueChange={(value) => {
+              set(
+                "from",
+                value === "all" ? "" : value === "today" ? today : weekStart,
+              );
+              set("to", value === "all" ? "" : today);
+            }}
+            options={[
+              { value: "all", label: "All time" },
+              { value: "today", label: "Today" },
+              { value: "week", label: "Last 7 days" },
+            ]}
+          />
           <ListToolbar
             compact
             search={val("search")}
@@ -128,6 +164,7 @@ export function AdminView({
                   ": " +
                   t(key === "staff" ? displayName(val(key)) : val(key)),
                 onRemove: () => set(key, ""),
+                hideChip: (key === "from" || key === "to") && !!datePreset,
               }))}
             onClear={clearCriteria}
             resultCount={logs.length}

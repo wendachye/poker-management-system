@@ -1,5 +1,13 @@
 {
   "ui": {
+    "show": "Show",
+    "new_entry": "New entry",
+    "add_staff": "Add staff",
+    "today": "Today",
+    "all_time": "All time",
+    "activity_dates": "Activity dates",
+    "username_or_role": "Username or role",
+    "add_and_open_a_table_before_checking_in_players": "Add and open a table before checking in players.",
     "dashboard": "Dashboard",
     "players": "Players",
     "tables": "Tables",

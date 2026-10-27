@@ -20,6 +20,7 @@ import { playersForDay, totalsForDay } from "@/domain/selectors";
 import { venueSettings } from "@/domain/settings";
 import { businessDayDates } from "@/lib/business-day-dates";
 import { displayName } from "@/lib/display-name";
+import { matchesListSearch } from "@/lib/list-search";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money, parseMoney, toCsv } from "../utils";
 import {
@@ -60,8 +61,10 @@ export function ReportsView() {
   const filteredPlayers = players.filter(
     (player) =>
       (!val("playerStatus") || player.status === val("playerStatus")) &&
-      [player.name, player.phone].some((value) =>
-        value.toLowerCase().includes(val("playerSearch").trim().toLowerCase()),
+      matchesListSearch(
+        val("playerSearch"),
+        [displayName(player.name)],
+        [player.phone],
       ),
   );
   const playerPage = Math.min(
@@ -70,9 +73,7 @@ export function ReportsView() {
   );
   const closes = day?.closes.toReversed() ?? [];
   const filteredCloses = closes.filter((close) =>
-    [close.actor, close.reason].some((value) =>
-      value.toLowerCase().includes(val("closeSearch").trim().toLowerCase()),
-    ),
+    matchesListSearch(val("closeSearch"), [close.actor, close.reason]),
   );
   const closePage = Math.min(
     Math.max(0, Number(val("closePage")) || 0),

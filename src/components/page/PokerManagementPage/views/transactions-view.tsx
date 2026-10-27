@@ -74,6 +74,7 @@ export function TransactionsView() {
               set("day", "");
               set("page", "0");
             },
+            hideChip: true,
           },
         ]
       : []),
@@ -278,7 +279,7 @@ export function TransactionsView() {
             </h2>
             <div className="flex shrink-0 items-center gap-1.5">
               <Button
-                className="size-11 p-0 sm:h-9 sm:w-auto sm:px-3"
+                className="h-11 px-3 sm:h-9"
                 aria-label={t("New transaction")}
                 title={t("New transaction")}
                 disabled={s.locked}
@@ -288,6 +289,7 @@ export function TransactionsView() {
                 }}
               >
                 <Plus />
+                <span className="sm:hidden">{t("New entry")}</span>
                 <span className="hidden sm:inline">{t("New transaction")}</span>
               </Button>
               <div className="sm:hidden">
@@ -328,22 +330,24 @@ export function TransactionsView() {
             resultCount={
               status === "APPROVED" ? transactions.length : requests.length
             }
+            primaryFilters={
+              <Field label="Business day">
+                <Select
+                  value={val("day", s.store.currentDayId ?? "")}
+                  onValueChange={(v) => {
+                    set("day", v);
+                    set("page", "0");
+                  }}
+                  options={[
+                    { value: "", label: "All days" },
+                    ...s.store.days
+                      .toReversed()
+                      .map((d) => ({ value: d.id, label: d.date })),
+                  ]}
+                />
+              </Field>
+            }
           >
-            <Field label="Business day">
-              <Select
-                value={val("day", s.store.currentDayId ?? "")}
-                onValueChange={(v) => {
-                  set("day", v);
-                  set("page", "0");
-                }}
-                options={[
-                  { value: "", label: "All days" },
-                  ...s.store.days
-                    .toReversed()
-                    .map((d) => ({ value: d.id, label: d.date })),
-                ]}
-              />
-            </Field>
             <Field label="Transaction type">
               <Select
                 value={val("filter")}
