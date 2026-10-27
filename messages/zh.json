@@ -1,5 +1,12 @@
 {
   "ui": {
+    "use_amount": "使用金额",
+    "credit_requested": "申请信贷金额",
+    "enter_a_valid_buy_in_amount": "请输入有效的买入金额。",
+    "record_approval": "记录审批",
+    "request_rejected": "申请已拒绝。",
+    "approved_and_posted": "已批准并入账。",
+    "approval_recorded_another_reviewer_is_required": "已记录审批，还需要另一名审批人审核。",
     "show": "查看",
     "new_entry": "新增记录",
     "add_staff": "新增员工",

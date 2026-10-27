@@ -92,6 +92,10 @@ import {
 import { Link } from "@/i18n/navigation";
 import { fieldError } from "@/lib/form-validation";
 import { cn } from "@/lib/utils";
+import {
+  matchesSearchChoice,
+  type SearchChoiceOption,
+} from "@/lib/operation-form-options";
 import { timestamp as formatTimestamp } from "../utils";
 import {
   AlertDialog,
@@ -298,7 +302,7 @@ export function FormGrid({
   );
 }
 type ChoiceProps = {
-  options: { value: string; label: string; disabled?: boolean }[];
+  options: SearchChoiceOption[];
   value: string;
   onValueChange: (value: string) => void;
   required?: boolean;
@@ -410,6 +414,12 @@ export function SearchSelect({
   const [open, setOpen] = useState(false),
     t = useText();
   const markDirty = useContext(DirtyContext);
+  const searchOptions = new Map(
+    options.map((option) => [
+      (option.value + " " + option.label).trim(),
+      option,
+    ]),
+  );
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -440,7 +450,12 @@ export function SearchSelect({
         align="start"
         className="w-[var(--radix-popover-trigger-width)] p-0"
       >
-        <Command>
+        <Command
+          filter={(itemValue, query) => {
+            const option = searchOptions.get(itemValue);
+            return option && matchesSearchChoice(option, query) ? 1 : 0;
+          }}
+        >
           <CommandInput
             placeholder={t("Search by name or phone")}
             aria-label={t("Search by name or phone")}

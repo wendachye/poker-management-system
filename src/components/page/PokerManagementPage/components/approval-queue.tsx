@@ -1,12 +1,17 @@
 "use client";
 import { useState } from "react";
-import { ReceiptText } from "lucide-react";
+import { ChevronDown, ReceiptText } from "lucide-react";
 import { displayName } from "@/lib/display-name";
 import { Button } from "@/components/ui/button";
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Table,
   TableHeader,
@@ -453,39 +458,14 @@ export function ApprovalQueue({
               <p>
                 {t("Requested by")}: {displayName(request.requestedBy)}
               </p>
-              <p>{timestamp(request.createdAt, s.snapshot!.branch.timezone)}</p>
-              {requestDay && (
-                <p>
-                  {t("Business day")}: {requestDay}
+              {request.note && (
+                <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                  {t("Note")}: {request.note}
                 </p>
               )}
-              <p className="break-words [overflow-wrap:anywhere]">
-                {request.note}
-              </p>
-              <p>{t(request.riskReason)}</p>
               <p>{reviewProgress.label}</p>
-              {!!reviewProgress.reviewers.length && (
-                <p>
-                  {t("Reviewed by")}:{" "}
-                  {reviewProgress.reviewers
-                    .map((v) => displayName(v.username))
-                    .join(", ")}
-                </p>
-              )}
-              {request.decidedAt && (
-                <p>
-                  {t("Decision recorded")}:{" "}
-                  {timestamp(request.decidedAt, s.snapshot!.branch.timezone)} ·{" "}
-                  {displayName(request.decidedBy ?? "")}
-                </p>
-              )}
-              {request.rejectionReason && (
-                <p>
-                  {t("Rejection reason")}: {request.rejectionReason}
-                </p>
-              )}
-              <p className="break-all text-xs text-muted-foreground">
-                {t("Reference")}: {request.id}
+              <p className="text-xs text-muted-foreground">
+                {t(request.riskReason)}
               </p>
             </div>
             {request.status === "PENDING" &&
@@ -505,6 +485,11 @@ export function ApprovalQueue({
                 <AlertDescription>
                   {t(
                     "This request was rejected. Cash and credit were not changed.",
+                  )}
+                  {request.rejectionReason && (
+                    <p className="mt-2 break-words font-medium text-foreground [overflow-wrap:anywhere]">
+                      {t("Rejection reason")}: {request.rejectionReason}
+                    </p>
                   )}
                 </AlertDescription>
               </Alert>
@@ -536,7 +521,13 @@ export function ApprovalQueue({
                     reason: decision === "REJECTED" ? reason : undefined,
                   })
                 }
-                onSuccess={() => setReviewId("")}
+                onSuccess={() => {
+                  setReviewId("");
+                  if (s.draft("tx.search").trim() === request.id) {
+                    s.setDraft("tx.search", "");
+                    s.setDraft("tx.page", "0");
+                  }
+                }}
               >
                 <FormSection title="Review decision">
                   <Tabs value={decision} onValueChange={setDecision}>
@@ -582,7 +573,9 @@ export function ApprovalQueue({
                 >
                   {decision === "REJECTED"
                     ? "Reject request"
-                    : "Approve request"}
+                    : request.approvalLevel === "DUAL"
+                      ? "Record approval"
+                      : "Approve request"}
                 </FormActions>
               </ActionForm>
             ) : (
@@ -613,6 +606,72 @@ export function ApprovalQueue({
                 {t("View posted receipt")}
               </Button>
             )}
+            <Collapsible key={request.id} className="min-w-0 rounded-lg border">
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="group h-auto min-h-11 w-full justify-between gap-3 whitespace-normal px-3 py-2 text-left"
+                >
+                  {t("Request details")}
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180"
+                  />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-3 border-t p-3 text-sm [overflow-wrap:anywhere]">
+                <dl className="space-y-2 text-xs">
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-1">
+                    <dt className="text-muted-foreground">{t("Date")}</dt>
+                    <dd>
+                      {timestamp(
+                        request.createdAt,
+                        s.snapshot!.branch.timezone,
+                      )}
+                    </dd>
+                  </div>
+                  {requestDay && (
+                    <div className="flex flex-wrap justify-between gap-x-3 gap-y-1">
+                      <dt className="text-muted-foreground">
+                        {t("Business day")}
+                      </dt>
+                      <dd>{requestDay}</dd>
+                    </div>
+                  )}
+                  {!!reviewProgress.reviewers.length && (
+                    <div className="space-y-1">
+                      <dt className="text-muted-foreground">
+                        {t("Reviewed by")}
+                      </dt>
+                      <dd>
+                        {reviewProgress.reviewers
+                          .map((vote) => displayName(vote.username))
+                          .join(", ")}
+                      </dd>
+                    </div>
+                  )}
+                  {request.decidedAt && (
+                    <div className="space-y-1">
+                      <dt className="text-muted-foreground">
+                        {t("Decision recorded")}
+                      </dt>
+                      <dd>
+                        {timestamp(
+                          request.decidedAt,
+                          s.snapshot!.branch.timezone,
+                        )}{" "}
+                        · {displayName(request.decidedBy ?? "")}
+                      </dd>
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <dt className="text-muted-foreground">{t("Reference")}</dt>
+                    <dd className="break-all">{request.id}</dd>
+                  </div>
+                </dl>
+              </CollapsibleContent>
+            </Collapsible>
           </>
         )}
       </Modal>

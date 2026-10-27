@@ -2,6 +2,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { displayName } from "@/lib/display-name";
+import {
+  buyInQuickAmounts,
+  validBuyInDraftAmount,
+} from "@/lib/operation-form-options";
 import type { EntryType, PlayerType, PlayerTag } from "@/domain/model";
 import { effectiveTableRules, venueSettings } from "@/domain/settings";
 import { MAX_MONEY } from "@/domain/money";
@@ -254,6 +258,8 @@ function CheckInDialog({
                           .map((p) => ({
                             value: p.id,
                             label: displayName(p.name) + " · " + p.phone,
+                            searchTerms: [p.name],
+                            phoneNumbers: [p.phone],
                             disabled:
                               p.type === "CREDIT" && !settings.creditEnabled,
                           })),
@@ -593,6 +599,13 @@ function TransactionDialog({
   const [changingType, setChangingType] = useState(!initial.type);
   const [changingPlayer, setChangingPlayer] = useState(!initial.playerId);
   const [noteOpen, setNoteOpen] = useState(false);
+  const typePanel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (changingType)
+      typePanel.current
+        ?.querySelector<HTMLElement>('[role="combobox"]')
+        ?.focus();
+  }, [changingType]);
   const { value: val, set } = useFields({
     type: initial.type ?? (s.user?.role === "DEALER" ? "Rake" : "Buy-in"),
     player: initial.playerId ?? "",
@@ -670,6 +683,12 @@ function TransactionDialog({
   try {
     amount = parseMoney(val("amount", "0"), true);
   } catch {}
+  const quickAmounts = buyInQuickAmounts(minimum, maximum, rules.buyInStep);
+  const validBuyInAmount =
+    !disabledReason &&
+    selectedPlayer?.status === "ACTIVE" &&
+    !!selectedTable &&
+    validBuyInDraftAmount(amount, minimum, maximum, rules.buyInStep);
   const noteField = (
     <Field
       label="Note"
@@ -734,34 +753,40 @@ function TransactionDialog({
       >
         <FormSection title="Request details">
           {changingType ? (
-            <Field label="Transaction type">
-              <Select
-                required
-                value={type}
-                onValueChange={(v) => {
-                  set("type", v);
-                  set("player", "");
-                  set("table", "");
-                  set("amount", "");
-                  setChangingPlayer(true);
-                  setChangingType(false);
-                }}
-                options={entryTypes
-                  .filter(
-                    (v) =>
-                      s.user?.role !== "DEALER" ||
-                      ![
-                        "Buy-in",
-                        "Cash-out",
-                        "Credit Repayment",
-                        "Cash Received",
-                        "Cash Payout",
-                      ].includes(v),
-                  )
-                  .map((v) => ({ value: v, label: v, disabled: !enabled(v) }))}
-              />
-            </Field>
-          ) : (
+            <div ref={typePanel}>
+              <Field label="Transaction type">
+                <Select
+                  required
+                  value={type}
+                  onValueChange={(v) => {
+                    set("type", v);
+                    set("player", "");
+                    set("table", "");
+                    set("amount", "");
+                    setChangingPlayer(true);
+                    setChangingType(false);
+                  }}
+                  options={entryTypes
+                    .filter(
+                      (v) =>
+                        s.user?.role !== "DEALER" ||
+                        ![
+                          "Buy-in",
+                          "Cash-out",
+                          "Credit Repayment",
+                          "Cash Received",
+                          "Cash Payout",
+                        ].includes(v),
+                    )
+                    .map((v) => ({
+                      value: v,
+                      label: v,
+                      disabled: !enabled(v),
+                    }))}
+                />
+              </Field>
+            </div>
+          ) : type !== "Buy-in" ? (
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <p className="min-w-0 break-words text-sm">
                 <span className="font-medium">{t(title)}</span>
@@ -775,7 +800,7 @@ function TransactionDialog({
                 {t("Change type")}
               </Button>
             </div>
-          )}
+          ) : null}
           {disabledReason && (
             <Alert>
               <AlertDescription>{t(disabledReason)}</AlertDescription>
@@ -846,6 +871,8 @@ function TransactionDialog({
                   ...options.map((p) => ({
                     value: p.id,
                     label: displayName(p.name) + " · " + p.phone,
+                    searchTerms: [p.name],
+                    phoneNumbers: [p.phone],
                     disabled:
                       type === "Buy-in" &&
                       p.type === "CREDIT" &&
@@ -1002,6 +1029,25 @@ function TransactionDialog({
                       <span className="tabular-nums">{money(minimum)}</span>
                     </Button>
                   )}
+                  {quickAmounts.map((suggestedAmount) => (
+                    <Button
+                      key={suggestedAmount}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-auto min-h-11 max-w-full whitespace-normal text-xs leading-4 sm:min-h-9"
+                      aria-label={
+                        t("Use amount") + " · " + money(suggestedAmount)
+                      }
+                      data-mark-dirty="true"
+                      onClick={() => {
+                        set("amount", (suggestedAmount / 100).toFixed(2));
+                        s.setError("");
+                      }}
+                    >
+                      {money(suggestedAmount)}
+                    </Button>
+                  ))}
                   {maximum < MAX_MONEY &&
                     maximum >= minimum &&
                     maximum !== minimum && (
@@ -1061,7 +1107,11 @@ function TransactionDialog({
           {cashMovement ? (
             noteField
           ) : (
-            <Collapsible open={noteOpen} onOpenChange={setNoteOpen}>
+            <Collapsible
+              open={noteOpen}
+              onOpenChange={setNoteOpen}
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2"
+            >
               <CollapsibleTrigger asChild>
                 <Button
                   type="button"
@@ -1075,27 +1125,67 @@ function TransactionDialog({
                   />
                 </Button>
               </CollapsibleTrigger>
-              <CollapsibleContent className="pt-2">
+              {type === "Buy-in" && !changingType && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11 px-2 text-xs text-muted-foreground"
+                  onClick={() => setChangingType(true)}
+                >
+                  {t("Change type")}
+                </Button>
+              )}
+              <CollapsibleContent className="col-span-2 pt-2">
                 {noteField}
               </CollapsibleContent>
             </Collapsible>
           )}
         </FormSection>
         <div className="min-w-0 space-y-2">
-          <EntryImpact
-            request={{ type, amount, playerId: val("player") || undefined }}
-          />
+          {(type !== "Buy-in" || validBuyInAmount) && (
+            <EntryImpact
+              request={{ type, amount, playerId: val("player") || undefined }}
+            />
+          )}
           <p className="text-xs text-muted-foreground">
             {t("Balances change only after independent approval.")}
           </p>
         </div>
         <FormActions
-          disabled={!!disabledReason}
+          disabled={
+            !!disabledReason || (type === "Buy-in" && !validBuyInAmount)
+          }
           summary={
             type === "Cash-out" ? (
               <CashOutSummary
                 request={{ type, amount, playerId: val("player") || undefined }}
               />
+            ) : type === "Buy-in" && selectedPlayer ? (
+              <div
+                className="min-w-0 space-y-1"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <p className="truncate text-xs text-muted-foreground">
+                  {displayName(selectedPlayer.name)}
+                </p>
+                {validBuyInAmount ? (
+                  <dl>
+                    <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                      <dt className="text-xs text-muted-foreground">
+                        {t(creditPlayer ? "Credit requested" : "Cash received")}
+                      </dt>
+                      <dd className="whitespace-nowrap text-base font-semibold tabular-nums">
+                        {money(amount)}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {t("Enter a valid buy-in amount.")}
+                  </p>
+                )}
+              </div>
             ) : undefined
           }
         >
@@ -1181,6 +1271,8 @@ function MoveDialog({
                 ...s.activePlayers.map((p) => ({
                   value: p.id,
                   label: displayName(p.name) + " · " + p.phone,
+                  searchTerms: [p.name],
+                  phoneNumbers: [p.phone],
                 })),
               ]}
             />

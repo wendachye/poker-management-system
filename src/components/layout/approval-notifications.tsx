@@ -53,11 +53,11 @@ export function ApprovalNotifications() {
     ? `${summary.total} ${t("pending approvals")}`
     : t(error ? "Cannot load branch records." : "Loading branch records…");
 
-  function openQueue() {
+  function openQueue(requestId = "") {
     s.setDraft("tx.status", "PENDING");
     s.setDraft("tx.day", "");
     s.setDraft("tx.filter", "");
-    s.setDraft("tx.search", "");
+    s.setDraft("tx.search", requestId);
     s.setDraft("tx.page", "0");
     setOpen(false);
   }
@@ -189,7 +189,7 @@ export function ApprovalNotifications() {
                 <li key={request.id}>
                   <Link
                     href="/transactions"
-                    onClick={openQueue}
+                    onClick={() => openQueue(request.id)}
                     className="block space-y-1.5 p-4 outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 font-medium">
@@ -235,7 +235,7 @@ export function ApprovalNotifications() {
         {loaded && (
           <div className="shrink-0 border-t p-3">
             <Button variant="outline" className="w-full" asChild>
-              <Link href="/transactions" onClick={openQueue}>
+              <Link href="/transactions" onClick={() => openQueue()}>
                 {t("View all requests")}
                 <ArrowRight />
               </Link>

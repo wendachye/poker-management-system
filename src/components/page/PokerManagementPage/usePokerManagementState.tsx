@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { toast } from "sonner";
 import { useLocale, useMessages } from "next-intl";
 import { managementRequest } from "@/lib/management-request";
+import { approvalDecisionMessage } from "@/lib/approval-decision-message";
 import { prototypeEnabled } from "@/prototype/config";
 import type { Command, SeatSwapParticipant } from "@/domain/commands";
 import type { StaffCommand } from "@/domain/staff";
@@ -192,13 +193,15 @@ export function usePokerManagementState() {
         } catch {}
       }
       setNow(Date.now());
-      setNotice("Saved successfully.");
       const message =
-        command.kind === "REQUEST" || command.kind === "CORRECT"
-          ? "Request sent for approval."
-          : command.kind === "CHECK_IN"
-            ? "Player checked in."
-            : "Saved successfully.";
+        command.kind === "DECIDE"
+          ? approvalDecisionMessage(data.store, command.approvalId)
+          : command.kind === "REQUEST" || command.kind === "CORRECT"
+            ? "Request sent for approval."
+            : command.kind === "CHECK_IN"
+              ? "Player checked in."
+              : "Saved successfully.";
+      setNotice(message);
       const key = message
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "_")
@@ -245,7 +248,7 @@ export function usePokerManagementState() {
       setDrafts((current) => ({
         ...current,
         "player.search": visit.phone,
-        "player.status": "ACTIVE",
+        "player.status": "",
         "player.type": "",
         "player.tag": "",
         "player.page": "0",

@@ -1,5 +1,12 @@
 {
   "ui": {
+    "use_amount": "Use amount",
+    "credit_requested": "Credit requested",
+    "enter_a_valid_buy_in_amount": "Enter a valid buy-in amount.",
+    "record_approval": "Record approval",
+    "request_rejected": "Request rejected.",
+    "approved_and_posted": "Approved and posted.",
+    "approval_recorded_another_reviewer_is_required": "Approval recorded. Another reviewer is required.",
     "show": "Show",
     "new_entry": "New entry",
     "add_staff": "Add staff",
