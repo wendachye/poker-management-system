@@ -8,6 +8,7 @@ import {
   CircleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -19,6 +20,7 @@ import { Link } from "@/i18n/navigation";
 import { playersForDay, totalsForDay } from "@/domain/selectors";
 import { venueSettings } from "@/domain/settings";
 import { businessDayDates } from "@/lib/business-day-dates";
+import { closingCashDraft } from "@/lib/closing-cash-draft";
 import { displayName } from "@/lib/display-name";
 import { matchesListSearch } from "@/lib/list-search";
 import { usePokerManagementContext } from "../PokerManagementProvider";
@@ -100,11 +102,14 @@ export function ReportsView() {
   );
   const ready =
     !s.locked && !s.activePlayers.length && !s.pendingApprovals.length;
-  let counted: number | null = null;
-  try {
-    counted = parseMoney(val("count"), true);
-  } catch {}
-  const variance = counted === null ? null : counted - s.totals.expectedCash;
+  const reconciliation = closingCashDraft(
+    val("count"),
+    s.totals.expectedCash,
+    val("reason"),
+  );
+  const { countedCash: counted, variance } = reconciliation;
+  const closingDay = s.store.days.find((entry) => entry.id === closingDayId);
+  const closingDayMatches = closingDayId === s.store.currentDayId;
   function varianceLabel(value: number) {
     return value < 0
       ? "Cash short by"
@@ -553,132 +558,205 @@ export function ReportsView() {
         onOpenChange={setClosing}
         title="Close business day"
         description={
-          (s.day?.date ?? "") +
+          (closingDay?.date ?? "") +
           " · " +
-          (variance === null
-            ? t(
-                "Resolve pending approvals and check out all players before closing.",
-              )
-            : varianceSummary(variance) +
-              (variance === 0
-                ? ""
-                : " · " + t("Explain the difference before closing.")))
+          t("Count the cash physically available, then review the difference.")
         }
       >
-        <FormSection title="Closing checklist">
-          {[
-            [s.activePlayers.length, "active players", "/players"],
-            [s.pendingApprovals.length, "pending approvals", "/transactions"],
-          ].map(([count, label, href]) => (
-            <div
-              key={label}
-              className="flex items-center gap-2 rounded-lg border p-3 text-sm"
-            >
-              {Number(count) === 0 ? (
-                <CheckCircle2 className="size-4 text-emerald-600" />
-              ) : (
-                <CircleAlert className="size-4 text-amber-600" />
+        {!closingDayMatches ? (
+          <Alert variant="warning">
+            <AlertDescription>
+              {t(
+                "The active business day changed. Reopen the closing form and review its totals.",
               )}
-              <span>
-                {count} {t(String(label))}
-              </span>
-              {Number(count) > 0 && (
-                <Button
-                  variant="link"
-                  size="sm"
-                  className="ml-auto h-11 shrink-0 sm:h-9"
-                  asChild
+            </AlertDescription>
+          </Alert>
+        ) : s.locked ? (
+          <Alert>
+            <AlertDescription>
+              {t("The business day is closed.")}
+            </AlertDescription>
+          </Alert>
+        ) : !ready ? (
+          <FormSection title="Closing checklist">
+            <p className="text-sm text-muted-foreground">
+              {t("Complete these items before counting cash.")}
+            </p>
+            {[
+              {
+                count: s.pendingApprovals.length,
+                label: "pending approvals",
+                href: "/transactions",
+                action: "Review requests",
+              },
+              {
+                count: s.activePlayers.length,
+                label: "active players",
+                href: "/players",
+                action: "Check out players",
+              },
+            ]
+              .filter((item) => item.count > 0)
+              .map(({ count, label, href, action }) => (
+                <div
+                  key={label}
+                  className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-sm"
                 >
-                  <Link
-                    href={String(href)}
-                    onClick={() => {
-                      if (href === "/players") {
-                        s.setDraft("player.status", "ACTIVE");
-                        s.setDraft("player.search", "");
-                        s.setDraft("player.type", "");
-                        s.setDraft("player.tag", "");
-                        s.setDraft("player.page", "0");
-                      } else if (href === "/transactions") {
-                        s.setDraft("tx.status", "PENDING");
-                        s.setDraft("tx.day", s.store.currentDayId ?? "");
-                        s.setDraft("tx.filter", "");
-                        s.setDraft("tx.search", "");
-                        s.setDraft("tx.page", "0");
-                      }
-                    }}
+                  <CircleAlert
+                    className="size-4 shrink-0 text-amber-600"
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1">
+                    {count} {t(label)}
+                  </span>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="ml-auto h-11 shrink-0 sm:h-9"
+                    asChild
                   >
-                    {t("Resolve")}
-                  </Link>
-                </Button>
-              )}
-            </div>
-          ))}
-        </FormSection>
-        <ActionForm
-          disabled={!ready || !supervisor}
-          validationKey={`${closingDayId}:${variance !== null && variance !== 0}`}
-          onSubmit={() =>
-            s.submit({
-              kind: "CLOSE_DAY",
-              dayId: closingDayId,
-              countedCash: parseMoney(val("count"), true),
-              reason: val("reason"),
-            })
-          }
-          onSuccess={() => {
-            setClosing(false);
-            selectDay("");
-            set("date", "");
-            set("opening", "");
-            set("count", "");
-            set("reason", "");
-          }}
-        >
-          <FormSection title="Cash reconciliation">
-            <Stat
-              compact
-              label="Expected cash"
-              value={money(s.totals.expectedCash)}
+                    <Link
+                      href={href}
+                      onClick={() => {
+                        if (href === "/players") {
+                          s.setDraft("player.status", "ACTIVE");
+                          s.setDraft("player.search", "");
+                          s.setDraft("player.type", "");
+                          s.setDraft("player.tag", "");
+                          s.setDraft("player.page", "0");
+                        } else if (href === "/transactions") {
+                          s.setDraft("tx.status", "PENDING");
+                          s.setDraft("tx.day", s.store.currentDayId ?? "");
+                          s.setDraft("tx.filter", "");
+                          s.setDraft("tx.search", "");
+                          s.setDraft("tx.page", "0");
+                        }
+                        setClosing(false);
+                      }}
+                    >
+                      {t(action)}
+                    </Link>
+                  </Button>
+                </div>
+              ))}
+          </FormSection>
+        ) : (
+          <div
+            className="flex items-center gap-2 rounded-lg border bg-muted/20 p-3 text-sm"
+            role="status"
+          >
+            <CheckCircle2
+              className="size-4 shrink-0 text-emerald-600"
+              aria-hidden="true"
             />
-            <Field
-              label="Counted cash (RM)"
-              hint="Count the cash physically available. Enter 0 if there is none."
-            >
-              <MoneyInput
-                required
-                value={val("count")}
-                onChange={(e) => set("count", e.target.value)}
+            <span>{t("Ready to close")}</span>
+          </div>
+        )}
+        {(!ready || !closingDayMatches) && (
+          <DialogClose asChild>
+            <Button variant="outline" className="h-11 w-full">
+              {t("Cancel")}
+            </Button>
+          </DialogClose>
+        )}
+        {ready && closingDayMatches && (
+          <ActionForm
+            disabled={!ready || !supervisor || !closingDayMatches}
+            validationKey={`${closingDayId}:${variance !== null && variance !== 0}`}
+            onSubmit={() =>
+              s.submit({
+                kind: "CLOSE_DAY",
+                dayId: closingDayId,
+                countedCash: parseMoney(val("count"), true),
+                reason: val("reason"),
+              })
+            }
+            onSuccess={() => {
+              setClosing(false);
+              selectDay("");
+              set("date", "");
+              set("opening", "");
+              set("count", "");
+              set("reason", "");
+            }}
+          >
+            <FormSection title="Cash reconciliation">
+              <Stat
+                compact
+                label="Expected cash"
+                value={money(s.totals.expectedCash)}
               />
-            </Field>
-            {variance !== null && (
-              <Alert variant={variance !== 0 ? "destructive" : "default"}>
-                <AlertDescription>
-                  <p className="font-semibold">{varianceSummary(variance)}</p>
-                  {variance !== 0 && (
-                    <p>
-                      {t("Variance")}: {money(variance)}
-                    </p>
-                  )}
-                </AlertDescription>
-              </Alert>
-            )}
-            {variance !== null && variance !== 0 && (
               <Field
-                label="Variance explanation"
-                hint="Explain the difference before closing."
+                label="Counted cash (RM)"
+                hint="Count the cash physically available. Enter 0 if there is none."
               >
-                <Textarea
+                <MoneyInput
                   required
-                  minLength={3}
-                  maxLength={500}
-                  value={val("reason")}
-                  onChange={(e) => set("reason", e.target.value)}
+                  value={val("count")}
+                  onChange={(e) => set("count", e.target.value)}
                 />
               </Field>
-            )}
-          </FormSection>
-          <FormActions>Close business day</FormActions>
-        </ActionForm>
+              {variance !== null && (
+                <Alert variant={variance !== 0 ? "warning" : "success"}>
+                  <AlertDescription>
+                    <p className="font-semibold">{varianceSummary(variance)}</p>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {variance !== null && (variance !== 0 || val("reason")) && (
+                <Field
+                  label={
+                    variance !== 0 ? "Variance explanation" : "Closing note"
+                  }
+                  optional={variance === 0}
+                  hint={
+                    variance !== 0
+                      ? "Explain the difference in at least 3 characters."
+                      : "This note will be saved with the closing. Edit or clear it if the count changed."
+                  }
+                >
+                  <Textarea
+                    required={variance !== 0}
+                    minLength={variance !== 0 ? 3 : undefined}
+                    maxLength={500}
+                    value={val("reason")}
+                    onChange={(e) => set("reason", e.target.value)}
+                  />
+                </Field>
+              )}
+            </FormSection>
+            <FormActions
+              disabled={!reconciliation.valid}
+              summary={
+                <div className="min-w-0 space-y-1 text-xs">
+                  <p className="text-muted-foreground">{closingDay?.date}</p>
+                  {counted === null ? (
+                    <p>{t("Enter the counted cash to continue.")}</p>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <span className="text-muted-foreground">
+                          {t("Counted cash")}
+                        </span>
+                        <span className="text-sm font-semibold tabular-nums">
+                          {money(counted)}
+                        </span>
+                      </div>
+                      <p>{varianceSummary(variance!)}</p>
+                      {!reconciliation.valid && (
+                        <p className="text-muted-foreground">
+                          {t("Explain the difference before closing.")}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              }
+            >
+              Close business day
+            </FormActions>
+          </ActionForm>
+        )}
       </Modal>
     </div>
   );

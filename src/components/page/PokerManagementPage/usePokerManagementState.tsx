@@ -200,7 +200,9 @@ export function usePokerManagementState() {
             ? "Request sent for approval."
             : command.kind === "CHECK_IN"
               ? "Player checked in."
-              : "Saved successfully.";
+              : command.kind === "CLOSE_DAY"
+                ? "Business day closed."
+                : "Saved successfully.";
       setNotice(message);
       const key = message
         .toLowerCase()

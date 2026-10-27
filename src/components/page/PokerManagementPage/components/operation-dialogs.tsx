@@ -2,6 +2,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { displayName } from "@/lib/display-name";
+import { parseCashOutDraftAmount } from "@/lib/cash-out-form";
 import {
   buyInQuickAmounts,
   validBuyInDraftAmount,
@@ -679,16 +680,24 @@ function TransactionDialog({
     rules.buyInStep > 0
       ? Math.floor(buyInCap / rules.buyInStep) * rules.buyInStep
       : buyInCap;
-  let amount = 0;
-  try {
-    amount = parseMoney(val("amount", "0"), true);
-  } catch {}
+  const cashOutAmount =
+    type === "Cash-out" ? parseCashOutDraftAmount(val("amount")) : null;
+  let amount = cashOutAmount ?? 0;
+  if (type !== "Cash-out") {
+    try {
+      amount = parseMoney(val("amount", "0"), true);
+    } catch {}
+  }
   const quickAmounts = buyInQuickAmounts(minimum, maximum, rules.buyInStep);
   const validBuyInAmount =
     !disabledReason &&
     selectedPlayer?.status === "ACTIVE" &&
     !!selectedTable &&
     validBuyInDraftAmount(amount, minimum, maximum, rules.buyInStep);
+  const validCashOutAmount =
+    cashOutAmount !== null &&
+    selectedPlayer?.status === "ACTIVE" &&
+    selectedTable?.status === "OPEN";
   const noteField = (
     <Field
       label="Note"
@@ -786,7 +795,7 @@ function TransactionDialog({
                 />
               </Field>
             </div>
-          ) : type !== "Buy-in" ? (
+          ) : !sessionEntry ? (
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <p className="min-w-0 break-words text-sm">
                 <span className="font-medium">{t(title)}</span>
@@ -884,10 +893,18 @@ function TransactionDialog({
           )}
           {(sessionEntry || repayment) && creditPlayer && selectedPlayer && (
             <div className="min-w-0 space-y-2 text-xs">
-              <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
+              <dl
+                className={
+                  type === "Cash-out"
+                    ? "space-y-2"
+                    : "grid grid-cols-2 gap-x-3 gap-y-2"
+                }
+              >
                 {[
                   ["Outstanding credit", selectedPlayer.creditUsed],
-                  ["Available credit", availableCredit],
+                  ...(type === "Cash-out"
+                    ? []
+                    : [["Available credit", availableCredit]]),
                 ].map(([label, value]) => (
                   <div key={label} className="min-w-0 space-y-1">
                     <dt className="text-muted-foreground">
@@ -899,16 +916,18 @@ function TransactionDialog({
                   </div>
                 ))}
               </dl>
-              <p className="text-muted-foreground">
-                {t("Credit limit")}: {money(selectedPlayer.creditLimit)}
-                {pendingCredit > 0 && (
-                  <>
-                    {" "}
-                    · {t("Reserved for pending buy-ins")}:{" "}
-                    {money(pendingCredit)}
-                  </>
-                )}
-              </p>
+              {type !== "Cash-out" && (
+                <p className="text-muted-foreground">
+                  {t("Credit limit")}: {money(selectedPlayer.creditLimit)}
+                  {pendingCredit > 0 && (
+                    <>
+                      {" "}
+                      · {t("Reserved for pending buy-ins")}:{" "}
+                      {money(pendingCredit)}
+                    </>
+                  )}
+                </p>
+              )}
             </div>
           )}
           {(sessionEntry || repayment) && !options.length && (
@@ -971,7 +990,7 @@ function TransactionDialog({
             }
             hint={
               type === "Cash-out"
-                ? "Enter the total value of chips returned. Enter 0 to check out without returning chips."
+                ? "Enter the total value of chips returned."
                 : repayment
                   ? "Repayment cannot exceed outstanding credit."
                   : undefined
@@ -983,6 +1002,21 @@ function TransactionDialog({
               onChange={(e) => set("amount", e.target.value)}
             />
           </Field>
+          {type === "Cash-out" && selectedPlayer && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-auto min-h-11 max-w-full whitespace-normal text-xs sm:min-h-9"
+              data-mark-dirty="true"
+              onClick={() => {
+                set("amount", "0.00");
+                s.setError("");
+              }}
+            >
+              {t("No chips returned")}
+            </Button>
+          )}
           {repayment && selectedPlayer && (
             <Button
               type="button"
@@ -1125,7 +1159,7 @@ function TransactionDialog({
                   />
                 </Button>
               </CollapsibleTrigger>
-              {type === "Buy-in" && !changingType && (
+              {sessionEntry && !changingType && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -1142,7 +1176,9 @@ function TransactionDialog({
           )}
         </FormSection>
         <div className="min-w-0 space-y-2">
-          {(type !== "Buy-in" || validBuyInAmount) && (
+          {(type === "Cash-out"
+            ? validCashOutAmount
+            : type !== "Buy-in" || validBuyInAmount) && (
             <EntryImpact
               request={{ type, amount, playerId: val("player") || undefined }}
             />
@@ -1153,13 +1189,33 @@ function TransactionDialog({
         </div>
         <FormActions
           disabled={
-            !!disabledReason || (type === "Buy-in" && !validBuyInAmount)
+            !!disabledReason ||
+            (type === "Buy-in" && !validBuyInAmount) ||
+            (type === "Cash-out" && !validCashOutAmount)
           }
           summary={
             type === "Cash-out" ? (
-              <CashOutSummary
-                request={{ type, amount, playerId: val("player") || undefined }}
-              />
+              validCashOutAmount ? (
+                <CashOutSummary
+                  request={{
+                    type,
+                    amount,
+                    playerId: val("player") || undefined,
+                  }}
+                  showPlayer
+                />
+              ) : (
+                <div className="min-w-0 space-y-1" aria-live="polite">
+                  {selectedPlayer && (
+                    <p className="truncate text-xs text-muted-foreground">
+                      {displayName(selectedPlayer.name)}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    {t("Enter a valid chips amount.")}
+                  </p>
+                </div>
+              )
             ) : type === "Buy-in" && selectedPlayer ? (
               <div
                 className="min-w-0 space-y-1"

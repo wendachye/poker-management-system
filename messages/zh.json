@@ -1056,6 +1056,17 @@
     "check_in_reserves_the_seat_no_balance_changes_until_a_buy_in_is_approved": "入场仅预留座位。买入获批后才会更改余额。",
     "check_in_buy_in": "入场并买入",
     "check_in_only": "仅办理入场",
-    "player_checked_in": "玩家已入场。"
+    "player_checked_in": "玩家已入场。",
+    "business_day_closed": "营业日已关闭。",
+    "no_chips_returned": "没有退回筹码",
+    "enter_the_total_value_of_chips_returned": "请输入退回筹码的总金额。",
+    "enter_a_valid_chips_amount": "请输入有效的筹码金额。",
+    "count_the_cash_physically_available_then_review_the_difference": "清点实际现金，然后核对差额。",
+    "complete_these_items_before_counting_cash": "请先完成以下事项，再清点现金。",
+    "check_out_players": "办理玩家离场",
+    "explain_the_difference_in_at_least_3_characters": "请用至少3个字符说明差额原因。",
+    "enter_the_counted_cash_to_continue": "输入实点现金金额后继续。",
+    "closing_note": "结账备注",
+    "this_note_will_be_saved_with_the_closing_edit_or_clear_it_if_the_count_changed": "此备注将随结账记录保存。如果清点金额有变，请修改或清除备注。"
   }
 }

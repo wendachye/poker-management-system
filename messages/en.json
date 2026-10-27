@@ -1056,6 +1056,17 @@
     "check_in_reserves_the_seat_no_balance_changes_until_a_buy_in_is_approved": "Check-in reserves the seat. No balance changes until a buy-in is approved.",
     "check_in_buy_in": "Check in & buy-in",
     "check_in_only": "Check in only",
-    "player_checked_in": "Player checked in."
+    "player_checked_in": "Player checked in.",
+    "business_day_closed": "Business day closed.",
+    "no_chips_returned": "No chips returned",
+    "enter_the_total_value_of_chips_returned": "Enter the total value of chips returned.",
+    "enter_a_valid_chips_amount": "Enter a valid chips amount.",
+    "count_the_cash_physically_available_then_review_the_difference": "Count the cash physically available, then review the difference.",
+    "complete_these_items_before_counting_cash": "Complete these items before counting cash.",
+    "check_out_players": "Check out players",
+    "explain_the_difference_in_at_least_3_characters": "Explain the difference in at least 3 characters.",
+    "enter_the_counted_cash_to_continue": "Enter the counted cash to continue.",
+    "closing_note": "Closing note",
+    "this_note_will_be_saved_with_the_closing_edit_or_clear_it_if_the_count_changed": "This note will be saved with the closing. Edit or clear it if the count changed."
   }
 }

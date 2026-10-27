@@ -1,6 +1,7 @@
 "use client";
 import type { ApprovalRequest } from "@/domain/model";
 import { ledgerImpact } from "@/domain/ledger-impact";
+import { displayName } from "@/lib/display-name";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money } from "../utils";
 import { useText } from "./shared";
@@ -9,30 +10,59 @@ type ImpactRequest = Pick<
   "type" | "amount" | "playerId" | "reversesId"
 >;
 
-export function CashOutSummary({ request }: { request: ImpactRequest }) {
+export function CashOutSummary({
+  request,
+  showPlayer = false,
+}: {
+  request: ImpactRequest;
+  showPlayer?: boolean;
+}) {
   const s = usePokerManagementContext(),
     t = useText();
   if (request.type !== "Cash-out") return null;
   const impact = ledgerImpact(s.store, request);
+  const player = s.players.find((entry) => entry.id === request.playerId);
+  const remainingCredit =
+    player?.type === "CREDIT"
+      ? Math.max(0, player.creditUsed + impact.creditDelta)
+      : 0;
   return (
-    <dl className="min-w-0 space-y-1" aria-live="polite" aria-atomic="true">
-      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-        <dt className="text-xs text-muted-foreground">
-          {t("Cash payout after approval")}
-        </dt>
-        <dd className="whitespace-nowrap text-base font-semibold tabular-nums">
-          {money(impact.cashPayout)}
-        </dd>
-      </div>
-      {impact.creditDelta < 0 && (
-        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-          <dt>{t("Credit settled")}</dt>
-          <dd className="whitespace-nowrap tabular-nums">
-            {money(-impact.creditDelta)}
+    <div className="min-w-0 space-y-1" aria-live="polite" aria-atomic="true">
+      {showPlayer && player && (
+        <p
+          className="truncate text-xs text-muted-foreground"
+          title={displayName(player.name)}
+        >
+          {displayName(player.name)}
+        </p>
+      )}
+      <dl className="space-y-1">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+          <dt className="text-xs text-muted-foreground">
+            {t("Cash payout after approval")}
+          </dt>
+          <dd className="whitespace-nowrap text-base font-semibold tabular-nums">
+            {money(impact.cashPayout)}
           </dd>
         </div>
-      )}
-    </dl>
+        {impact.creditDelta < 0 && (
+          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+            <dt>{t("Credit settled")}</dt>
+            <dd className="whitespace-nowrap tabular-nums">
+              {money(-impact.creditDelta)}
+            </dd>
+          </div>
+        )}
+        {remainingCredit > 0 && (
+          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+            <dt>{t("Credit still owed")}</dt>
+            <dd className="whitespace-nowrap tabular-nums">
+              {money(remainingCredit)}
+            </dd>
+          </div>
+        )}
+      </dl>
+    </div>
   );
 }
 
