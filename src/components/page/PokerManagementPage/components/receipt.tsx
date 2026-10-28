@@ -35,13 +35,22 @@ export function Receipt({
     timestamp = useTimestamp();
   const { focusRead, setError } = s;
   useEffect(() => {
+    const controller = new AbortController();
     void Promise.resolve()
-      .then(() => focusRead({ resource: "receipt", id: tx.id }))
-      .catch((error: unknown) =>
+      .then(() =>
+        focusRead({ resource: "receipt", id: tx.id }, controller.signal),
+      )
+      .catch((error: unknown) => {
+        if (
+          controller.signal.aborted ||
+          (error instanceof DOMException && error.name === "AbortError")
+        )
+          return;
         setError(
           error instanceof Error ? error.message : "Cannot load receipt.",
-        ),
-      );
+        );
+      });
+    return () => controller.abort();
   }, [tx.id, focusRead, setError]);
   const original = tx.reversesId
     ? s.store.transactions.find((entry) => entry.id === tx.reversesId)

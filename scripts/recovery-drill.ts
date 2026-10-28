@@ -487,7 +487,7 @@ async function main() {
     const venues = await measure("populate_genuine_legacy_v1_records", () =>
       seedLegacy(source.ownerDb!, hash),
     );
-    await measure("verify_failed_v1_to_v4_upgrade_rollback", async () => {
+    await measure("verify_failed_v1_to_v5_upgrade_rollback", async () => {
       const before = await legacySnapshot(source.ownerDb!, false);
       await expectSqlFailure(
         () => migrate(source.ownerDb!),
@@ -512,7 +512,7 @@ async function main() {
       );
     });
     await measure(
-      "upgrade_v1_to_v4_and_preserve_order_and_operation_ids",
+      "upgrade_v1_to_v5_and_preserve_order_and_operation_ids",
       async () => {
         const before = await legacySnapshot(source.ownerDb!, false);
         await migrate(source.ownerDb!);
@@ -529,8 +529,8 @@ async function main() {
         );
         same(
           await schemaMigrationStatus(source.ownerDb!),
-          { ready: true, appliedVersion: 4, expectedVersion: 4 },
-          "all four migrations applied",
+          { ready: true, appliedVersion: 5, expectedVersion: 5 },
+          "all five migrations applied",
         );
         const backup = await createBackup(source.ownerDb!);
         report.migrationProjection = await financialParity(

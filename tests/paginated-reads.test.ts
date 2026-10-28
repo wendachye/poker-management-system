@@ -97,16 +97,22 @@ async function fixture() {
     const approvalId =
         i === 777 ? "history-approval-8765432109" : "history-approval-" + i,
       txId = i === 777 ? "history-tx-9876543210" : "history-tx-" + i;
-    store.approvals.push({ ...structuredClone(approved), id: approvalId });
+    store.approvals.push({
+      ...structuredClone(approved),
+      id: approvalId,
+      ...(i === 777 ? { note: "Café résumé control" } : {}),
+    });
     store.transactions.push({
       ...structuredClone(original),
       id: txId,
       approvalId,
+      ...(i === 777 ? { note: "Café résumé control" } : {}),
     });
     store.auditLogs.push({
       ...structuredClone(store.auditLogs[0]),
       id: "history-log-" + i,
       entity: txId,
+      ...(i === 777 ? { reason: "Café résumé audit" } : {}),
     });
   }
   await importStore(db, "local", store, 70);
@@ -198,6 +204,24 @@ test("indexed paginated reads preserve complete money, search, context and expor
         });
         assert.equal(phone.total, 1);
         assert.equal(phone.items[0].id, "extra-44");
+        for (const query of [
+          "  PÁGINATION\t JOSE   FINAL  ",
+          "José 0044",
+          "202 556 0044",
+        ]) {
+          const normalized = await readPage(db, token, {
+            resource: "players",
+            query,
+          });
+          assert.equal(normalized.total, 1);
+          assert.equal(normalized.items[0].id, "extra-44");
+        }
+        for (const query of ["%", "_", "(12)"])
+          assert.equal(
+            (await readPage(db, token, { resource: "players", query })).total,
+            0,
+            "Search punctuation stays literal: " + query,
+          );
         assert.equal(
           (
             await readPage(db, token, {
@@ -246,6 +270,175 @@ test("indexed paginated reads preserve complete money, search, context and expor
             (row) => "playerId" in row && row.playerId === player.id,
           ),
         );
+      },
+    );
+    await t.test(
+      "joined history search preserves accents, receipt references and literal numeric punctuation",
+      async () => {
+        for (const resource of ["requests", "transactions", "audit"] as const) {
+          const found = await readPage(db, token, {
+            resource,
+            query: "  CAFE\t RÉSUMÉ  ",
+            page: 1_000_000,
+          });
+          assert.equal(found.total, 1);
+          assert.equal(found.page, 0);
+          assert.equal(
+            found.items[0].id,
+            resource === "requests"
+              ? "history-approval-8765432109"
+              : resource === "transactions"
+                ? "history-tx-9876543210"
+                : "history-log-777",
+          );
+        }
+        for (const resource of ["requests", "transactions"] as const) {
+          const acrossFields = await readPage(db, token, {
+            resource,
+            query: "cafe 9876543210",
+          });
+          assert.equal(acrossFields.total, 1);
+          assert.equal(acrossFields.counts.APPROVED, 1);
+          assert.equal(acrossFields.counts.PENDING, 0);
+          assert.equal(
+            (
+              await readPage(db, token, {
+                resource,
+                query: "987-654-3210",
+              })
+            ).total,
+            0,
+            "A formatted number must not rewrite a house receipt reference",
+          );
+        }
+        assert.equal(
+          (
+            await readPage(db, token, {
+              resource: "requests",
+              query: "cafe missing-term",
+            })
+          ).total,
+          0,
+          "All search tokens must match, even when they span joined fields",
+        );
+        const approval = store.approvals.find(
+          (row) => row.id === "history-approval-8765432109",
+        )!;
+        const expectedCounts = {
+          APPROVED: 1,
+          PENDING: 0,
+          REJECTED: 0,
+          MINE: Number(approval.requestedById === actors.admin.id),
+        };
+        for (const status of ["APPROVED", "PENDING", "MINE"] as const) {
+          const found = await readPage(db, token, {
+            resource: "requests",
+            query: "cafe",
+            status,
+            page: 1_000_000,
+          });
+          assert.deepEqual(found.counts, expectedCounts);
+          assert.equal(found.total, expectedCounts[status]);
+          assert.equal(found.page, 0);
+          assert.deepEqual(
+            found.items.map((row) => row.id),
+            expectedCounts[status] ? [approval.id] : [],
+          );
+        }
+        const selected = await readPage(db, token, {
+          resource: "requests",
+          query: "cafe",
+          id: approval.id,
+          status: "PENDING",
+          page: 1_000_000,
+        });
+        assert.deepEqual(selected.counts, expectedCounts);
+        assert.equal(selected.total, 1);
+        assert.equal(selected.page, 0);
+        assert.equal(selected.items[0].id, approval.id);
+        const receipt = await readPage(db, token, {
+          resource: "receipt",
+          query: "cafe",
+          id: "history-tx-9876543210",
+          page: 1_000_000,
+        });
+        assert.deepEqual(receipt.counts, expectedCounts);
+        assert.equal(receipt.total, 1);
+        assert.equal(receipt.page, 0);
+        assert.equal(receipt.items[0].id, "history-tx-9876543210");
+        assert.ok(
+          receipt.context.store.approvals.some((row) => row.id === approval.id),
+        );
+        for (const resource of ["requests", "receipt"] as const)
+          await assert.rejects(
+            readPage(db, token, {
+              resource,
+              query: "cafe",
+              id: "missing-reference",
+            }),
+            (error: unknown) =>
+              error instanceof DomainError && error.status === 404,
+          );
+      },
+    );
+    await t.test(
+      "request tab counts stay exact before status and detail filters",
+      async () => {
+        const expectedCounts = {
+          PENDING: store.approvals.filter((row) => row.status === "PENDING")
+            .length,
+          APPROVED: store.approvals.filter((row) => row.status === "APPROVED")
+            .length,
+          REJECTED: store.approvals.filter((row) => row.status === "REJECTED")
+            .length,
+          MINE: store.approvals.filter(
+            (row) => row.requestedById === actors.admin.id,
+          ).length,
+        };
+        assert.ok(expectedCounts.PENDING > 0);
+        assert.ok(expectedCounts.REJECTED > 0);
+        for (const status of [
+          "PENDING",
+          "APPROVED",
+          "REJECTED",
+          "MINE",
+        ] as const) {
+          const expected = store.approvals.filter((row) =>
+            status === "MINE"
+              ? row.requestedById === actors.admin.id
+              : row.status === status,
+          );
+          const found = await readPage(db, token, {
+            resource: "requests",
+            status,
+          });
+          assert.deepEqual(found.counts, expectedCounts);
+          assert.equal(found.total, expectedCounts[status]);
+          assert.deepEqual(
+            found.items.map((row) => row.id),
+            expected.slice(0, 20).map((row) => row.id),
+          );
+        }
+        const selected = await readPage(db, token, {
+          resource: "requests",
+          id: store.approvals.at(-1)!.id,
+        });
+        assert.equal(selected.total, 1);
+        assert.deepEqual(selected.counts, expectedCounts);
+        const filteredRows = store.approvals.filter(
+          (row) => row.dayId === store.currentDayId && row.type === "Rake",
+        );
+        const filtered = await readPage(db, token, {
+          resource: "requests",
+          dayId: store.currentDayId!,
+          type: "Rake",
+          status: "PENDING",
+        });
+        for (const status of ["PENDING", "APPROVED", "REJECTED"] as const)
+          assert.equal(
+            filtered.counts[status],
+            filteredRows.filter((row) => row.status === status).length,
+          );
       },
     );
     await t.test(
@@ -439,6 +632,81 @@ test("indexed paginated reads preserve complete money, search, context and expor
           (error: unknown) =>
             error instanceof DomainError && error.status === 404,
         );
+      },
+    );
+    await t.test(
+      "history pages preserve exact ordering, tied keys and high or empty page clamping",
+      async () => {
+        for (const { resource, table, ids } of [
+          {
+            resource: "requests",
+            table: "poker_approvals",
+            ids: store.approvals.map((row) => row.id),
+          },
+          {
+            resource: "transactions",
+            table: "poker_ledger",
+            ids: store.transactions.map((row) => row.id),
+          },
+          {
+            resource: "audit",
+            table: "poker_audit",
+            ids: store.auditLogs.map((row) => row.id),
+          },
+        ] as const) {
+          const lastPage = Math.ceil(ids.length / 20) - 1;
+          for (const requested of [0, 1, 1_000_000]) {
+            const page = await readPage(db, token, {
+              resource,
+              page: requested,
+            });
+            const expectedPage = Math.min(requested, lastPage);
+            assert.equal(page.total, ids.length);
+            assert.equal(page.page, expectedPage);
+            assert.deepEqual(
+              page.items.map((row) => row.id),
+              ids.slice(expectedPage * 20, expectedPage * 20 + 20),
+              resource + " preserves authoritative list order",
+            );
+          }
+
+          // These columns are intentionally not unique. A second key must keep
+          // adjacent pages deterministic even if imported records share one.
+          const tiedIds = ids.slice(-3);
+          await db.query(
+            `UPDATE ${table} SET order_no=-1 WHERE branch_id=$1 AND id=ANY($2::text[])`,
+            ["local", tiedIds],
+          );
+          const ordered = [
+            ...[...tiedIds].sort(),
+            ...ids.filter((id) => !tiedIds.includes(id)),
+          ];
+          const shown: string[] = [];
+          for (const requested of [0, 1]) {
+            const page = await readPage(db, token, {
+              resource,
+              page: requested,
+            });
+            const actual = page.items.map((row) => row.id);
+            assert.equal(page.total, ids.length);
+            assert.deepEqual(
+              actual,
+              ordered.slice(requested * 20, requested * 20 + 20),
+            );
+            shown.push(...actual);
+          }
+          assert.equal(new Set(shown).size, shown.length);
+
+          const empty = await readPage(db, token, {
+            resource,
+            page: 1_000_000,
+            query: "zzzz-unmatched-pagination-sentinel-20261029",
+          });
+          assert.equal(empty.total, 0);
+          assert.equal(empty.page, 0);
+          assert.deepEqual(empty.items, []);
+          assert.equal(empty.pageSize, 20);
+        }
       },
     );
   } finally {

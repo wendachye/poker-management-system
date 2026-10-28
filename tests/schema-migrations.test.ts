@@ -6,6 +6,8 @@ import type { Database, SqlConnection } from "../src/server/database";
 import { migrate, schema, schemaMigrationStatus } from "../src/server/schema";
 import { configuredStore } from "./helpers/store";
 import { importStore, readStore } from "../src/server/storage";
+import { buildSampleStore } from "../scripts/sample-data";
+import type { Role, Staff } from "../src/domain/model";
 
 async function isolatedDatabase() {
   const engine = await PGlite.create();
@@ -85,7 +87,7 @@ test("a fresh install records its baseline version checksum and application time
     assert.deepEqual(await schemaMigrationStatus(db), {
       ready: false,
       appliedVersion: 0,
-      expectedVersion: 4,
+      expectedVersion: 5,
     });
     await migrate(db);
     const history = await db.query<{
@@ -94,17 +96,18 @@ test("a fresh install records its baseline version checksum and application time
       checksum: string;
       applied_at: Date;
     }>("SELECT * FROM poker_schema_migrations ORDER BY version");
-    assert.equal(history.rows.length, 4);
+    assert.equal(history.rows.length, 5);
     assert.equal(history.rows[0].version, 1);
     assert.equal(history.rows[0].name, "initial_schema");
     assert.deepEqual(
-      history.rows.slice(0, 3).map((row) => row.checksum),
+      history.rows.slice(0, 4).map((row) => row.checksum),
       [
         "b0e60da76b6ac5e2ee16eeb4e79e800f03a97dfea4d3ea62926b5e0778dd2a6d",
         "845d08bbb67983f3a72516a002392a93c619abcb377d2cb172db4387db601134",
         "04edbd9c06ced69f8aefd0b737e8a9598ba4d75c3e20475c473275dcef8c6a10",
+        "b0d921b0384ac8cb287af434fb21b9f29b7e39d01e39723729824a062b3b0aaa",
       ],
-      "Published v1-v3 migration fingerprints must not change",
+      "Published v1-v4 migration fingerprints must not change",
     );
     assert.equal(
       history.rows[0].checksum,
@@ -113,8 +116,8 @@ test("a fresh install records its baseline version checksum and application time
     assert.ok(Number.isFinite(new Date(history.rows[0].applied_at).getTime()));
     assert.deepEqual(await schemaMigrationStatus(db), {
       ready: true,
-      appliedVersion: 4,
-      expectedVersion: 4,
+      appliedVersion: 5,
+      expectedVersion: 5,
     });
     await legacyRecords(db);
   } finally {
@@ -150,13 +153,19 @@ test("the authentication upgrade preserves released history and rolls quota chan
     await db.query("DROP TABLE poker_login_budget");
     await db.query("DROP INDEX poker_login_attempts_expiry");
     await db.query("DROP INDEX poker_sessions_user");
+    for (const index of [
+      "poker_ledger_order",
+      "poker_approvals_order",
+      "poker_audit_order",
+    ])
+      await db.query(`DROP INDEX ${index}`);
     await db.query(
       "ALTER TABLE poker_login_attempts DROP CONSTRAINT poker_login_attempts_count",
     );
     await db.query(
       "ALTER TABLE poker_users DROP CONSTRAINT poker_users_login_namespace",
     );
-    await db.query("DELETE FROM poker_schema_migrations WHERE version=4");
+    await db.query("DELETE FROM poker_schema_migrations WHERE version>=4");
     const released = (
       await db.query("SELECT * FROM poker_schema_migrations ORDER BY version")
     ).rows;
@@ -211,9 +220,162 @@ test("the authentication upgrade preserves released history and rolls quota chan
     );
     assert.deepEqual(await schemaMigrationStatus(db), {
       ready: true,
-      appliedVersion: 4,
-      expectedVersion: 4,
+      appliedVersion: 5,
+      expectedVersion: 5,
     });
+  } finally {
+    await engine.close();
+  }
+});
+
+test("the v4 history-order upgrade preserves populated venues and rolls index creation back on failure", async () => {
+  const { db, engine } = await isolatedDatabase();
+  const indexNames = [
+    "poker_ledger_order",
+    "poker_approvals_order",
+    "poker_audit_order",
+  ];
+  try {
+    await migrate(db);
+    const actors = Object.fromEntries(
+      ["admin", "manager", "cashier", "dealer"].map((name) => [
+        name,
+        {
+          id: "upgrade-" + name,
+          username: "upgrade." + name,
+          role: name.toUpperCase() as Role,
+          branchId: "upgrade-main",
+        },
+      ]),
+    ) as Record<"admin" | "manager" | "cashier" | "dealer", Staff>;
+    for (const actor of Object.values(actors))
+      await db.query(
+        "INSERT INTO poker_users(id,username,password_hash) VALUES($1,$2,'fictional-unusable-hash')",
+        [actor.id, actor.username],
+      );
+    const store = buildSampleStore(actors, new Date("2026-10-28T05:00:00Z"));
+    for (const [branchId, revision] of [
+      ["upgrade-main", 7],
+      ["upgrade-other", 13],
+    ] as const) {
+      await db.query("INSERT INTO poker_branches(id,name) VALUES($1,$1)", [
+        branchId,
+      ]);
+      for (const actor of Object.values(actors))
+        await db.query(
+          "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,$3)",
+          [actor.id, branchId, actor.role],
+        );
+      const venue = structuredClone(store);
+      // Matching entity IDs deliberately exist in two venues. Their names and
+      // revisions remain different, so index lookups must retain branch scope.
+      venue.profiles[0].name = branchId + " retained player";
+      await importStore(db, branchId, venue, revision);
+      await db.query(
+        "INSERT INTO poker_operations(branch_id,operation_id,actor_id,fingerprint,revision) VALUES($1,'retained-operation',$2,$3,$4)",
+        [branchId, actors.admin.id, "a".repeat(64), revision],
+      );
+    }
+
+    // Construct the published v4 seam without changing a released statement.
+    for (const index of indexNames) await db.query(`DROP INDEX ${index}`);
+    await db.query("DELETE FROM poker_schema_migrations WHERE version=5");
+    const original = await records(db);
+    const released = (
+      await db.query("SELECT * FROM poker_schema_migrations ORDER BY version")
+    ).rows;
+    assert.deepEqual(await schemaMigrationStatus(db), {
+      ready: false,
+      appliedVersion: 4,
+      expectedVersion: 5,
+    });
+    const faulty: Database = {
+      ...db,
+      transaction: (work) =>
+        db.transaction((connection) =>
+          work({
+            async query<T>(sql: string, values?: unknown[]) {
+              if (
+                sql.startsWith("INSERT INTO poker_schema_migrations") &&
+                values?.[0] === 5
+              )
+                throw new Error("Simulated v5 ledger write failure");
+              return connection.query<T>(sql, values);
+            },
+          }),
+        ),
+    };
+    await assert.rejects(migrate(faulty), /Simulated v5 ledger/);
+    assert.deepEqual(await records(db), original);
+    assert.deepEqual(
+      (await db.query("SELECT * FROM poker_schema_migrations ORDER BY version"))
+        .rows,
+      released,
+    );
+    assert.equal(
+      (
+        await db.query(
+          "SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND indexname=ANY($1::text[])",
+          [indexNames],
+        )
+      ).rows.length,
+      0,
+      "Failed migration rolls every newly created index back",
+    );
+
+    await migrate(db);
+    assert.deepEqual(await records(db), original);
+    assert.deepEqual(
+      (
+        await db.query(
+          "SELECT * FROM poker_schema_migrations WHERE version<=4 ORDER BY version",
+        )
+      ).rows,
+      released,
+    );
+    const indexes = (
+      await db.query<{ indexname: string; indexdef: string }>(
+        "SELECT indexname,indexdef FROM pg_indexes WHERE schemaname=current_schema() AND indexname=ANY($1::text[]) ORDER BY indexname",
+        [indexNames],
+      )
+    ).rows;
+    assert.deepEqual(
+      indexes.map((row) => row.indexname),
+      [...indexNames].sort(),
+    );
+    for (const index of indexes)
+      assert.match(index.indexdef, /\(branch_id, order_no, id\)/);
+    for (const branchId of ["upgrade-main", "upgrade-other"]) {
+      const saved = await readStore(db, branchId);
+      assert.equal(saved.profiles[0].name, branchId + " retained player");
+      assert.deepEqual(
+        saved.transactions.map((row) => row.id),
+        store.transactions.map((row) => row.id),
+      );
+      assert.deepEqual(
+        saved.approvals.map((row) => row.id),
+        store.approvals.map((row) => row.id),
+      );
+      assert.deepEqual(
+        saved.auditLogs.map((row) => row.id),
+        store.auditLogs.map((row) => row.id),
+      );
+    }
+    assert.deepEqual(await schemaMigrationStatus(db), {
+      ready: true,
+      appliedVersion: 5,
+      expectedVersion: 5,
+    });
+    const upgraded = (
+      await db.query("SELECT * FROM poker_schema_migrations ORDER BY version")
+    ).rows;
+    await migrate(db);
+    assert.deepEqual(await records(db), original);
+    assert.deepEqual(
+      (await db.query("SELECT * FROM poker_schema_migrations ORDER BY version"))
+        .rows,
+      upgraded,
+    );
   } finally {
     await engine.close();
   }
@@ -232,7 +394,7 @@ test("existing unversioned tables adopt the baseline without resetting any recor
     assert.equal(
       (await db.query("SELECT version FROM poker_schema_migrations")).rows
         .length,
-      4,
+      5,
     );
   } finally {
     await engine.close();
@@ -306,7 +468,7 @@ test("unknown future migration versions are rejected without changing business d
     assert.equal(
       (await db.query("SELECT version FROM poker_schema_migrations")).rows
         .length,
-      5,
+      6,
     );
   } finally {
     await engine.close();
@@ -381,7 +543,7 @@ test("the migration advisory lock precedes ledger bootstrap and repeated callers
       calls.filter((sql) =>
         sql.startsWith("INSERT INTO poker_schema_migrations"),
       ).length,
-      4,
+      5,
     );
     assert.equal((await schemaMigrationStatus(db)).ready, true);
   } finally {

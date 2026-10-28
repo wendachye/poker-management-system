@@ -46,6 +46,8 @@ Samples include a populated venue, a separate venue for clean-day exercises, fle
 
 Use `npm run local:postgres -- --backup` to save and independently verify a read-only native backup. See the [native PostgreSQL local guide](docs/local-postgres.md) for accounts, persistence, rules, backup limits and the desktop/mobile verification record.
 
+For a separate multi-staff financial concurrency check, `npm run capacity:mixed` requires an explicitly configured disposable loopback test database. It refuses the sample venue database and never falls back to `DATABASE_URL`. See [local concurrency checks](docs/local-concurrency.md) for bounded options, race safeguards and the measured large-history limitations.
+
 ## Local first (no Docker or cloud account)
 
 Use Node.js 22.13+ and install the project dependencies once with `yarn install --frozen-lockfile`. Start both the app and persistent local database with:

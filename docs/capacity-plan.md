@@ -1,5 +1,7 @@
 # Capacity plan for venue operations
 
+The [local mixed financial concurrency checks](local-concurrency.md) add a later PostgreSQL 18.6 sample run with cash/credit journeys, explicit race controls and deeper pages at 1,000/10,000 retained entries per venue. They complement the original nonfinancial baseline below. The workload and evidence boundaries differ; these timings are not a matched performance-improvement claim.
+
 The launch target is 2–5 venues, roughly 20–50 staff accounts and up to ten staff using each venue at the same time. Daily turnover is approximately RM100,000 or more **per venue**. Transaction count is unknown; monetary turnover is not used to infer record count, request rate or storage requirements.
 
 ## Confirmed targets and assumptions

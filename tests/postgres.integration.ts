@@ -303,13 +303,13 @@ async function sessionChangeWhileBlocked<T>(
 test("independent migration runners serialize fresh bootstrap and record the baseline once", async () => {
   assert.deepEqual(await schemaMigrationStatus(firstDb), {
     ready: true,
-    appliedVersion: 4,
-    expectedVersion: 4,
+    appliedVersion: 5,
+    expectedVersion: 5,
   });
   const recorded = await firstDb.query<{ total: string }>(
     "SELECT count(*)::text AS total FROM poker_schema_migrations",
   );
-  assert.equal(recorded.rows[0].total, "4");
+  assert.equal(recorded.rows[0].total, "5");
 });
 
 test("PostgreSQL integration target guard rejects operational and overridden destinations", () => {

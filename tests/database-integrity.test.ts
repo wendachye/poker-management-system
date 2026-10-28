@@ -96,7 +96,7 @@ test("verification uses one read-only repeatable-read transaction and rejects in
       ).length,
       0,
     );
-    await db.query("DELETE FROM poker_schema_migrations WHERE version=4");
+    await db.query("DELETE FROM poker_schema_migrations WHERE version=5");
     await assert.rejects(
       verifyDatabaseIntegrity(db),
       (error: unknown) =>

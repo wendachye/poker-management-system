@@ -128,12 +128,19 @@ async function operationalSnapshot(
     approvalIds = safeIds(extra.approvalIds);
   const initialTx = await records<Transaction>(
     connection,
-    "SELECT data FROM poker_ledger WHERE branch_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT id FROM poker_ledger WHERE branch_id=$1 ORDER BY order_no,id LIMIT 20)) ORDER BY order_no,id",
+    `WITH wanted AS MATERIALIZED (
+      SELECT id FROM poker_ledger WHERE branch_id=$1 AND id=ANY($2::text[])
+      UNION SELECT id FROM (SELECT id FROM poker_ledger WHERE branch_id=$1 ORDER BY order_no,id LIMIT 20) recent
+    ) SELECT entry.data FROM wanted JOIN poker_ledger entry ON entry.branch_id=$1 AND entry.id=wanted.id ORDER BY entry.order_no,entry.id`,
     [branchId, txIds],
   );
   const approvals = await records<ApprovalRequest>(
     connection,
-    "SELECT data FROM poker_approvals WHERE branch_id=$1 AND (id=ANY($2::text[]) OR (status='PENDING' AND reverses_id=ANY($3::text[])) OR id IN (SELECT id FROM poker_approvals WHERE branch_id=$1 AND status='PENDING' ORDER BY order_no,id LIMIT 20)) ORDER BY order_no,id",
+    `WITH wanted AS MATERIALIZED (
+      SELECT id FROM poker_approvals WHERE branch_id=$1 AND id=ANY($2::text[])
+      UNION SELECT id FROM poker_approvals WHERE branch_id=$1 AND status='PENDING' AND reverses_id=ANY($3::text[])
+      UNION SELECT id FROM (SELECT id FROM poker_approvals WHERE branch_id=$1 AND status='PENDING' ORDER BY order_no,id LIMIT 20) recent
+    ) SELECT request.data FROM wanted JOIN poker_approvals request ON request.branch_id=$1 AND request.id=wanted.id ORDER BY request.order_no,request.id`,
     [
       branchId,
       unique([...approvalIds, ...initialTx.map((tx) => tx.approvalId)]),
@@ -142,7 +149,11 @@ async function operationalSnapshot(
   );
   const transactions = await records<Transaction>(
     connection,
-    "SELECT data FROM poker_ledger WHERE branch_id=$1 AND (id=ANY($2::text[]) OR approval_id=ANY($3::text[]) OR reverses_id=ANY($4::text[])) ORDER BY order_no,id",
+    `WITH wanted AS MATERIALIZED (
+      SELECT id FROM poker_ledger WHERE branch_id=$1 AND id=ANY($2::text[])
+      UNION SELECT id FROM poker_ledger WHERE branch_id=$1 AND approval_id=ANY($3::text[])
+      UNION SELECT id FROM poker_ledger WHERE branch_id=$1 AND reverses_id=ANY($4::text[])
+    ) SELECT entry.data FROM wanted JOIN poker_ledger entry ON entry.branch_id=$1 AND entry.id=wanted.id ORDER BY entry.order_no,entry.id`,
     [
       branchId,
       unique([
@@ -305,7 +316,45 @@ async function paged<T>(
   order: string,
   page: number,
   pageSize: number,
+  payload?: {
+    table: string;
+    alias: string;
+    descending?: boolean;
+    materializeFilter?: boolean;
+  },
 ) {
+  if (payload?.materializeFilter) {
+    const requestedPage = `$${target.values.length + 1}`,
+      size = `$${target.values.length + 2}`,
+      direction = payload.descending ? " DESC" : "";
+    const result = await connection.query<{
+      total: string;
+      page: number;
+      data: unknown | null;
+    }>(
+      `WITH matches AS MATERIALIZED (
+        SELECT ${payload.alias}.branch_id,${payload.alias}.id,${payload.alias}.order_no
+        FROM ${source} WHERE ${sqlWhere(target)}
+      ), totals AS (SELECT count(*)::text AS total FROM matches), page_info AS (
+        SELECT total,LEAST(${requestedPage}::numeric,GREATEST(0,ceil(total::numeric/${size}::int)-1))::int AS page FROM totals
+      ), page_keys AS MATERIALIZED (
+        SELECT branch_id,id,order_no FROM matches ORDER BY order_no${direction},id${direction}
+        LIMIT ${size}::int OFFSET (SELECT page FROM page_info)*${size}::int
+      ) SELECT page_info.total,page_info.page,item.data FROM page_info
+        LEFT JOIN page_keys picked ON true
+        LEFT JOIN ${payload.table} item ON item.branch_id=picked.branch_id AND item.id=picked.id
+        ORDER BY picked.order_no${direction},picked.id${direction}`,
+      [...target.values, page, pageSize],
+    );
+    return {
+      rows: result.rows
+        .filter((row) => row.data !== null)
+        .map((row) => ({ data: row.data }) as T),
+      total: checkedTotal(result.rows[0].total),
+      page: result.rows[0].page,
+      pageSize,
+    };
+  }
   const total = checkedTotal(
     (
       await connection.query<{ total: string }>(
@@ -315,10 +364,18 @@ async function paged<T>(
     ).rows[0].total,
   );
   const current = Math.min(page, Math.max(0, Math.ceil(total / pageSize) - 1));
-  const result = await connection.query<T>(
-    `SELECT ${select} FROM ${source} WHERE ${sqlWhere(target)} ORDER BY ${order} LIMIT $${target.values.length + 1} OFFSET $${target.values.length + 2}`,
-    [...target.values, pageSize, current * pageSize],
-  );
+  // Sort/skip narrow indexed keys. Fetch large JSON payloads only for the page;
+  // historical pages must not sort or spill every matching record's JSON.
+  const sql = payload
+    ? `WITH page_keys AS MATERIALIZED (
+      SELECT ${payload.alias}.branch_id,${payload.alias}.id,${payload.alias}.order_no FROM ${source} WHERE ${sqlWhere(target)} ORDER BY ${order} LIMIT $${target.values.length + 1} OFFSET $${target.values.length + 2}
+    ) SELECT item.data FROM page_keys picked JOIN ${payload.table} item ON item.branch_id=picked.branch_id AND item.id=picked.id ORDER BY picked.order_no${payload.descending ? " DESC" : ""},picked.id${payload.descending ? " DESC" : ""}`
+    : `SELECT ${select} FROM ${source} WHERE ${sqlWhere(target)} ORDER BY ${order} LIMIT $${target.values.length + 1} OFFSET $${target.values.length + 2}`;
+  const result = await connection.query<T>(sql, [
+    ...target.values,
+    pageSize,
+    current * pageSize,
+  ]);
   return { rows: result.rows, total, page: current, pageSize };
 }
 function pageNumbers(page: { total: number; page: number; pageSize: number }) {
@@ -382,6 +439,7 @@ async function requestCounts(
   connection: SqlConnection,
   target: Where,
   user: Staff,
+  source = requestSource,
 ) {
   const row = (
     await connection.query<{
@@ -390,7 +448,7 @@ async function requestCounts(
       rejected: string;
       mine: string;
     }>(
-      `SELECT count(*) FILTER(WHERE r.status='PENDING')::text AS pending,count(*) FILTER(WHERE r.status='APPROVED')::text AS approved,count(*) FILTER(WHERE r.status='REJECTED')::text AS rejected,count(*) FILTER(WHERE r.requested_by_id=$${target.values.length + 1})::text AS mine FROM ${requestSource} WHERE ${sqlWhere(target)}`,
+      `SELECT count(*) FILTER(WHERE r.status='PENDING')::text AS pending,count(*) FILTER(WHERE r.status='APPROVED')::text AS approved,count(*) FILTER(WHERE r.status='REJECTED')::text AS rejected,count(*) FILTER(WHERE r.requested_by_id=$${target.values.length + 1})::text AS mine FROM ${source} WHERE ${sqlWhere(target)}`,
       [...target.values, user.id],
     )
   ).rows[0];
@@ -399,6 +457,86 @@ async function requestCounts(
     APPROVED: checkedTotal(row.approved),
     REJECTED: checkedTotal(row.rejected),
     MINE: checkedTotal(row.mine),
+  };
+}
+
+/** Search joined historical fields once. Only narrow keys and tab metadata are
+ * materialized; full JSON is fetched after the exact count and page clamp.
+ * Status/id filters intentionally follow tab counts, matching the list contract.
+ */
+async function searchedRequestPage<T>(
+  connection: SqlConnection,
+  target: Where,
+  user: Staff,
+  query: ReadQuery & { page: number; pageSize: number },
+) {
+  const selected: Where = { clauses: [], values: [...target.values] };
+  const requests = query.resource === "requests";
+  if (requests) {
+    if (query.id) condition(selected, "id=?", query.id);
+    else if (query.status === "MINE")
+      condition(selected, "requested_by_id=?", user.id);
+    else if (query.status) {
+      if (!["PENDING", "APPROVED", "REJECTED"].includes(query.status))
+        throw new DomainError("Choose a valid request status.");
+      condition(selected, "status=?", query.status);
+    }
+  } else {
+    selected.clauses.push("receipt_id IS NOT NULL");
+    if (query.resource === "receipt") {
+      if (!query.id) throw new DomainError("Choose a receipt.");
+      condition(selected, "receipt_id=?", query.id);
+    }
+  }
+  selected.values.push(user.id, query.page, query.pageSize);
+  const actor = `$${selected.values.length - 2}`,
+    requestedPage = `$${selected.values.length - 1}`,
+    pageSize = `$${selected.values.length}`;
+  const key = requests ? "id" : "receipt_id",
+    order = requests ? "order_no" : "receipt_order_no",
+    table = requests ? "poker_approvals" : "poker_ledger";
+  const row = (
+    await connection.query<{
+      total: string;
+      page: number;
+      pending: string;
+      approved: string;
+      rejected: string;
+      mine: string;
+      items: T[];
+    }>(
+      `WITH matches AS MATERIALIZED (
+        SELECT r.id,r.status,r.requested_by_id,r.order_no,receipt.id AS receipt_id,receipt.order_no AS receipt_order_no
+        FROM ${requestSource} WHERE ${sqlWhere(target)}
+      ), counts AS (
+        SELECT count(*) FILTER(WHERE status='PENDING')::text AS pending,
+          count(*) FILTER(WHERE status='APPROVED')::text AS approved,
+          count(*) FILTER(WHERE status='REJECTED')::text AS rejected,
+          count(*) FILTER(WHERE requested_by_id=${actor})::text AS mine FROM matches
+      ), filtered AS MATERIALIZED (
+        SELECT ${key} AS id,${order} AS order_no FROM matches${selected.clauses.length ? ` WHERE ${sqlWhere(selected)}` : ""}
+      ), totals AS (SELECT count(*)::text AS total FROM filtered), page_info AS (
+        SELECT total,LEAST(${requestedPage}::numeric,GREATEST(0,ceil(total::numeric/${pageSize}::int)-1))::int AS page FROM totals
+      ), page_keys AS MATERIALIZED (
+        SELECT id,order_no FROM filtered ORDER BY order_no,id LIMIT ${pageSize}::int OFFSET (SELECT page FROM page_info)*${pageSize}::int
+      ) SELECT page_info.total,page_info.page,counts.*,
+        COALESCE((SELECT jsonb_agg(item.data ORDER BY picked.order_no,picked.id) FROM page_keys picked
+          JOIN ${table} item ON item.branch_id=$1 AND item.id=picked.id),'[]'::jsonb) AS items
+      FROM page_info CROSS JOIN counts`,
+      selected.values,
+    )
+  ).rows[0];
+  return {
+    items: row.items,
+    total: checkedTotal(row.total),
+    page: row.page,
+    pageSize: query.pageSize,
+    counts: {
+      PENDING: checkedTotal(row.pending),
+      APPROVED: checkedTotal(row.approved),
+      REJECTED: checkedTotal(row.rejected),
+      MINE: checkedTotal(row.mine),
+    },
   };
 }
 function playerExtra(ids: string[], dayId?: string | null): SnapshotExtra {
@@ -528,7 +666,37 @@ async function readPageWithin(
   ) {
     const target = where(branchId, "r");
     requestFilters(target, query);
-    const counts = await requestCounts(connection, target, user);
+    if (query.query?.trim()) {
+      const page = await searchedRequestPage<ApprovalRequest | Transaction>(
+        connection,
+        target,
+        user,
+        query,
+      );
+      if (
+        (query.resource === "receipt" ||
+          (query.resource === "requests" && query.id)) &&
+        !page.total
+      )
+        throw new DomainError(
+          query.resource === "requests"
+            ? "Request not found."
+            : "Receipt not found.",
+          404,
+        );
+      const context = await operationalSnapshot(connection, user, {
+        ...(query.resource === "requests"
+          ? { approvalIds: page.items.map((item) => item.id) }
+          : { transactionIds: page.items.map((item) => item.id) }),
+      });
+      return { ...base, ...page, context, revision: context.revision };
+    }
+    const counts = await requestCounts(
+      connection,
+      target,
+      user,
+      "poker_approvals r",
+    );
     if (query.resource === "requests") {
       if (query.id) condition(target, "r.id=?", query.id);
       else if (query.status === "MINE")
@@ -540,12 +708,13 @@ async function readPageWithin(
       }
       const page = await paged<{ data: ApprovalRequest }>(
         connection,
-        requestSource,
+        "poker_approvals r",
         "r.data",
         target,
         "r.order_no,r.id",
         query.page,
         query.pageSize,
+        { table: "poker_approvals", alias: "r" },
       );
       if (query.id && !page.total)
         throw new DomainError("Request not found.", 404);
@@ -569,12 +738,13 @@ async function readPageWithin(
     }
     const page = await paged<{ data: Transaction }>(
       connection,
-      requestSource,
+      "poker_ledger receipt JOIN poker_approvals r ON r.branch_id=receipt.branch_id AND r.id=receipt.approval_id",
       "receipt.data",
       target,
       "receipt.order_no,receipt.id",
       query.page,
       query.pageSize,
+      { table: "poker_ledger", alias: "receipt" },
     );
     if (query.resource === "receipt" && !page.total)
       throw new DomainError("Receipt not found.", 404);
@@ -616,6 +786,11 @@ async function readPageWithin(
       "a.order_no,a.id",
       query.page,
       query.pageSize,
+      {
+        table: "poker_audit",
+        alias: "a",
+        materializeFilter: !!query.query?.trim(),
+      },
     );
     const items = page.rows.map((row) => row.data),
       context = await operationalSnapshot(connection, user, {
@@ -660,6 +835,7 @@ async function readPageWithin(
       "v.order_no DESC,v.id DESC",
       query.page,
       query.pageSize,
+      { table: "poker_visits", alias: "v", descending: true },
     );
     const items = page.rows.map((row) => row.data),
       context = await operationalSnapshot(connection, user, {

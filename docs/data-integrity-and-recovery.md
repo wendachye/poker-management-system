@@ -95,7 +95,7 @@ The [native drill](../scripts/recovery-drill.ts) records 14 measured phases:
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Verify the guarded server target and create only fresh generated resources.                                                                                                       |
 | 2     | Populate two fictional venues with complete sample histories in the legacy v1 schema.                                                                                             |
-| 3     | Force a v1-to-v4 migration failure and verify rollback of data, migration history, counters and intermediate DDL.                                                                 |
+| 3     | Force a v1-to-v5 migration failure and verify rollback of data, migration history, counters and intermediate DDL.                                                                 |
 | 4     | Remove the deliberately incompatible fixture and upgrade successfully, preserving record order, prior migration metadata and saved operation IDs.                                 |
 | 5     | Provision and verify restricted application roles.                                                                                                                                |
 | 6     | Sign in staff through those application roles.                                                                                                                                    |

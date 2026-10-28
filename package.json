@@ -21,6 +21,7 @@
     "test:postgres": "node --conditions=react-server --import tsx --test tests/postgres.integration.ts",
     "test:operations-http": "node --conditions=react-server --import tsx --test tests/operations-http.integration.ts",
     "capacity:baseline": "node --conditions=react-server --import tsx scripts/capacity-baseline.ts",
+    "capacity:mixed": "node --conditions=react-server --import tsx scripts/mixed-workload.ts",
     "recovery:drill": "node --conditions=react-server --import tsx scripts/recovery-drill.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "production:check": "node --import tsx scripts/check-production.ts",

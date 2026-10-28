@@ -3,6 +3,7 @@ import type { Database, SqlConnection } from "./database";
 import { indexedStorageStatements } from "./storage-schema";
 import { financialRollupStatements } from "./rollup-schema";
 import { authenticationAdmissionStatements } from "./auth-schema";
+import { historyOrderingStatements } from "./performance-schema";
 
 // Schema changes are applied explicitly by db:migrate, never during a request.
 export const schema = `
@@ -67,6 +68,7 @@ const migrations = [
     "bounded_authentication_admission",
     authenticationAdmissionStatements,
   ),
+  migration(5, "indexed_history_ordering", historyOrderingStatements),
 ];
 
 const migrationLedger = `CREATE TABLE IF NOT EXISTS poker_schema_migrations (

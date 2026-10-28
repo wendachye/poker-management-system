@@ -57,9 +57,9 @@ Run `npm run production:check` in the target environment before release. A passi
 
 `vercel.json` remains the demo profile. The separate `vercel.operations.json` profile is selected with the documented [Vercel CLI local configuration option](https://vercel.com/docs/cli/global-options#local-config) and an explicitly selected operations project. Do not reuse the current demo project or implicitly deploy to the project linked in `.vercel`. Git-based deployment needs its own reviewed pipeline that selects the operations profile; a repository push alone still selects the default demo configuration.
 
-Apply the versioned migrations explicitly before starting an operations release. Migration v2 validates and imports the existing Store records before replacing the blob with metadata; v3 rebuilds financial summaries from that ledger; v4 adds bounded authentication admission and expiry indexes. Take a verified backup before any real upgrade and rehearse the complete release/restore procedure in staging. The local tests did not migrate real venues.
+Apply the versioned migrations explicitly before starting an operations release. Migration v2 validates and imports the existing Store records before replacing the blob with metadata; v3 rebuilds financial summaries from that ledger; v4 adds bounded authentication admission and expiry indexes; v5 adds ledger, approval and audit ordering indexes. Take a verified backup before any real upgrade and rehearse the complete release/restore procedure in staging. The local tests did not migrate real venues.
 
-After applying migrations, `/api/health` must report `{"status":"ok","mode":"operations"}`. Missing schema, missing migration history or incompatible migration checksums/versions return 503. The check covers connectivity, all four known migration versions and required indexed-record/summary column presence; it does not prove write privileges, primary status, column types, constraints, staff provisioning or venue setup. Hosted acceptance must perform actual isolated writes and verify the intended primary and application privileges. The runtime database account needs read access to the migration ledger.
+After applying migrations, `/api/health` must report `{"status":"ok","mode":"operations"}`. Missing schema, missing migration history or incompatible migration checksums/versions return 503. The check covers connectivity, all five known migration versions and required indexed-record/summary column presence; it does not prove write privileges, primary status, column types, constraints, staff provisioning or venue setup. Hosted acceptance must perform actual isolated writes and verify the intended primary and application privileges. The runtime database account needs read access to the migration ledger.
 
 ## Foundation verification on 28 October 2026
 
@@ -140,7 +140,7 @@ Before a hosted pilot, run the integration suite against the intended PostgreSQL
 ## Next implementation work
 
 1. Configure verified host/WAF source protection, auth monitoring and controlled operator access; application login limits and operator safeguards are implemented.
-2. Repeat the implemented v1–v4 upgrade and financial recovery rehearsal against the selected hosted PostgreSQL release, actual application privileges and provider connection path.
+2. Repeat the implemented v1–v5 upgrade and financial recovery rehearsal against the selected hosted PostgreSQL release, actual application privileges and provider connection path.
 3. Deploy a separate authenticated staging application against the provisioned database, agree recovery targets, configure backup/PITR and monitoring, then demonstrate a timed hosted restore.
-4. Verify agreed retention and workload targets with longer mixed cash/credit/approval/closing tests, deep-page/search checks, replica connection budgets, the intended pooler and actual cloud-region latency. The current short independent-edit burst does not cover these gates.
+4. Verify agreed retention and workload targets with longer mixed cash/credit/approval/closing tests, deep-page/search checks, replica connection budgets, the intended pooler and actual cloud-region latency. The bounded local mixed-workload runs do not cover sustained or hosted acceptance gates.
 5. Complete hosted staff acceptance and approve a controlled venue rollout with a recovery owner.
