@@ -9,7 +9,9 @@ import {
   database,
   databaseFromPool,
 } from "../src/server/database";
-import type { Pool } from "pg";
+import { Client, type Pool } from "pg";
+import { createReadinessService } from "../src/server/readiness";
+import { testDatabase } from "./helpers/database";
 
 test("native PostgreSQL client timeouts receive safe actionable categories", () => {
   for (const [message, category] of [
@@ -208,9 +210,13 @@ test("throwing diagnostic accessors and revoked proxies cannot replace the origi
   }
 });
 
-function failurePool(failures: Record<string, Error> = {}) {
+function failurePool(
+  failures: Record<string, Error> = {},
+  verify?: () => void,
+) {
   const queries: string[] = [];
   const releases: (boolean | undefined)[] = [];
+  let connections = 0;
   const client = {
     async query(sql: string, values?: unknown[]) {
       queries.push(sql);
@@ -224,10 +230,17 @@ function failurePool(failures: Record<string, Error> = {}) {
   const pool = {
     query: client.query,
     async connect() {
+      connections++;
       return client;
     },
   };
-  return { db: databaseFromPool(pool), queries, releases };
+  return {
+    db: databaseFromPool(pool, verify),
+    queries,
+    releases,
+    pool,
+    connections: () => connections,
+  };
 }
 
 test("successful database work commits and returns query results before releasing", async () => {
@@ -292,6 +305,219 @@ test("BEGIN and COMMIT failures both receive rollback and deterministic cleanup"
         : ["BEGIN", "COMMIT", "ROLLBACK"],
     );
     assert.deepEqual(releases, [undefined]);
+  }
+});
+
+test("guarded reads and transactions retain successful values and deterministic releases", async () => {
+  const { db, queries, releases, connections } = failurePool({}, () => {});
+  assert.deepEqual(await db.query("SELECT $1", ["outside"]), {
+    rows: [{ value: "outside" }],
+  });
+  assert.equal(
+    await db.transaction(
+      async (connection) =>
+        (await connection.query<{ value: string }>("SELECT $1", ["inside"]))
+          .rows[0].value,
+    ),
+    "inside",
+  );
+  assert.equal(
+    connections(),
+    2,
+    "Guarded direct queries must check their own acquired client",
+  );
+  assert.deepEqual(queries, ["SELECT $1", "BEGIN", "SELECT $1", "COMMIT"]);
+  assert.deepEqual(releases, [undefined, undefined]);
+});
+
+test("a held guarded adapter rejects a changed identity before acquiring a client", async () => {
+  const changed = new Error("Restart the application before continuing.");
+  const { db, queries, releases, connections } = failurePool({}, () => {
+    throw changed;
+  });
+  await assert.rejects(db.query("WRITE"), (error) => error === changed);
+  await assert.rejects(
+    db.transaction(async () => "not run"),
+    (error) => error === changed,
+  );
+  assert.equal(connections(), 0);
+  assert.deepEqual(queries, []);
+  assert.deepEqual(releases, []);
+});
+
+test("an identity change while queued destroys checkout without beginning or executing SQL", async () => {
+  for (const transactional of [false, true]) {
+    let valid = true,
+      queued!: () => void,
+      releaseQueue!: () => void,
+      workRan = false;
+    const changed = new Error("Restart the application before continuing.");
+    const acquired = new Promise<void>((resolve) => {
+      queued = resolve;
+    });
+    const queue = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+    const fixture = failurePool({}, () => {
+      if (!valid) throw changed;
+    });
+    const connect = fixture.pool.connect;
+    fixture.pool.connect = async () => {
+      queued();
+      await queue;
+      return connect();
+    };
+    const request = transactional
+      ? fixture.db.transaction(async (connection) => {
+          workRan = true;
+          await connection.query("WRITE");
+        })
+      : fixture.db.query("WRITE");
+    await acquired;
+    valid = false;
+    releaseQueue();
+    await assert.rejects(request, (error) => error === changed);
+    assert.equal(workRan, false);
+    assert.equal(fixture.connections(), 1);
+    assert.deepEqual(fixture.queries, []);
+    assert.deepEqual(fixture.releases, [true]);
+  }
+});
+
+test("a changed transaction identity rolls back its original client and never commits", async () => {
+  for (const beforeNextQuery of [false, true]) {
+    let valid = true;
+    const changed = new Error("Restart the application before continuing.");
+    const { db, queries, releases } = failurePool({}, () => {
+      if (!valid) throw changed;
+    });
+    await assert.rejects(
+      db.transaction(async (connection) => {
+        await connection.query("FIRST WRITE");
+        valid = false;
+        if (beforeNextQuery) await connection.query("SECOND WRITE");
+        return "must not commit";
+      }),
+      (error) => error === changed,
+    );
+    assert.deepEqual(queries, ["BEGIN", "FIRST WRITE", "ROLLBACK"]);
+    assert.deepEqual(releases, [true]);
+  }
+});
+
+test("guarded failure cleanup preserves the original error and discards unusable clients", async () => {
+  const original = new Error("Original identity failure");
+  let valid = true;
+  const transaction = failurePool(
+    { ROLLBACK: new Error("Cleanup failed") },
+    () => {
+      if (!valid) throw original;
+    },
+  );
+  await assert.rejects(
+    transaction.db.transaction(async () => {
+      valid = false;
+    }),
+    (error) => error === original,
+  );
+  assert.deepEqual(transaction.queries, ["BEGIN", "ROLLBACK"]);
+  assert.deepEqual(transaction.releases, [true]);
+  const queryFailure = new Error("Statement failed");
+  const direct = failurePool({ WRITE: queryFailure }, () => {});
+  await assert.rejects(
+    direct.db.query("WRITE"),
+    (error) => error === queryFailure,
+  );
+  assert.deepEqual(direct.releases, [true]);
+  for (const stage of ["BEGIN", "COMMIT"]) {
+    const error = new Error(stage + " failed");
+    const fixture = failurePool({ [stage]: error }, () => {});
+    await assert.rejects(
+      fixture.db.transaction(async () => "not returned"),
+      (value) => value === error,
+    );
+    assert.deepEqual(
+      fixture.queries,
+      stage === "BEGIN"
+        ? ["BEGIN", "ROLLBACK"]
+        : ["BEGIN", "COMMIT", "ROLLBACK"],
+    );
+    assert.deepEqual(fixture.releases, [undefined]);
+  }
+});
+
+test("a saved application adapter cannot use changed PostgreSQL fallbacks or an untracked pool", async () => {
+  const savedEnv = { ...process.env };
+  const shared = globalThis as typeof globalThis & {
+    pokerPool?: Pool;
+    pokerPoolIdentity?: { pool: Pool; signature: string };
+  };
+  const constructedPorts: number[] = [];
+  let ownedPool: Pool | undefined;
+  class NoNetworkClient extends Client {
+    constructor(...args: ConstructorParameters<typeof Client>) {
+      super(...args);
+      constructedPorts.push(this.port);
+    }
+  }
+  Object.defineProperty(NoNetworkClient.prototype, "connect", {
+    value(callback: (error: Error) => void) {
+      queueMicrotask(() =>
+        callback(new Error("Deliberate no-network test rejection")),
+      );
+    },
+  });
+  try {
+    await closeDatabase();
+    Object.assign(process.env, {
+      NODE_ENV: "test",
+      DATABASE_URL: "postgresql://fixture:fictional@127.0.0.1/poker_test",
+      PGPORT: "55491",
+      POKER_PROTOTYPE_MODE: "0",
+      NEXT_PUBLIC_POKER_PROTOTYPE: "0",
+      PGOPTIONS: "",
+    });
+    const held = database();
+    const pool = shared.pokerPool!;
+    ownedPool = pool;
+    (pool as Pool & { Client: typeof Client }).Client = NoNetworkClient;
+    process.env.PGPORT = "55492";
+    await assert.rejects(held.query("WRITE"), /Restart the application/);
+    await assert.rejects(
+      held.transaction(async () => "not run"),
+      /Restart the application/,
+    );
+    assert.deepEqual(constructedPorts, []);
+    process.env.PGPORT = "55491";
+    for (const flag of [
+      "POKER_PROTOTYPE_MODE",
+      "NEXT_PUBLIC_POKER_PROTOTYPE",
+    ]) {
+      process.env[flag] = "1";
+      await assert.rejects(held.query("WRITE"), /disabled.*prototype/);
+      process.env[flag] = "0";
+    }
+    const tracked = shared.pokerPoolIdentity!;
+    delete shared.pokerPoolIdentity;
+    await assert.rejects(held.query("WRITE"), /Restart the application/);
+    shared.pokerPoolIdentity = { ...tracked, pool: {} as Pool };
+    await assert.rejects(held.query("WRITE"), /Restart the application/);
+    shared.pokerPoolIdentity = tracked;
+    shared.pokerPool = {} as Pool;
+    await assert.rejects(held.query("WRITE"), /Restart the application/);
+    shared.pokerPool = pool;
+    assert.deepEqual(constructedPorts, []);
+    await assert.rejects(held.query("READ"), /Deliberate no-network/);
+    assert.deepEqual(
+      constructedPorts,
+      [55491],
+      "Restored settings may construct only the original target; connect is stubbed",
+    );
+  } finally {
+    if (ownedPool) shared.pokerPool = ownedPool;
+    await closeDatabase();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
   }
 });
 
@@ -360,6 +586,126 @@ test("real pool idle-error events are handled without logging raw connection det
   } finally {
     console.error = savedError;
     await closeDatabase();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+  }
+});
+
+test("pool reuse rejects changed inputs and untracked or replaced pools without silently retargeting", async () => {
+  const savedEnv = { ...process.env };
+  const shared = globalThis as typeof globalThis & {
+    pokerPool?: Pool;
+    pokerPoolIdentity?: { pool: Pool; signature: string };
+  };
+  try {
+    await closeDatabase();
+    Object.assign(process.env, {
+      NODE_ENV: "test",
+      DATABASE_URL: "postgresql://fixture:fictional@127.0.0.1:1/poker_test",
+      POKER_PROTOTYPE_MODE: "0",
+      NEXT_PUBLIC_POKER_PROTOTYPE: "0",
+      PGOPTIONS: "",
+    });
+    database();
+    const pool = shared.pokerPool!;
+    assert.equal(shared.pokerPoolIdentity?.pool, pool);
+    assert.match(shared.pokerPoolIdentity!.signature, /^[a-f0-9]{64}$/);
+    for (const [key, value] of [
+      [
+        "DATABASE_URL",
+        "postgresql://other:private-password@127.0.0.1:2/poker_test_other",
+      ],
+      ["DATABASE_POOL_MAX", "7"],
+      ["PGPORT", "55492"],
+      ["PGPASSWORD", "private-new-password"],
+      ["PGSSLNEGOTIATION", "direct"],
+    ]) {
+      const previous = process.env[key];
+      process.env[key] = value;
+      assert.throws(
+        () => database(),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /Restart the application/);
+          assert.doesNotMatch(error.message, /private|postgresql|55492/);
+          return true;
+        },
+      );
+      assert.equal(shared.pokerPool, pool);
+      assert.equal(pool.totalCount, 0);
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+      assert.doesNotThrow(() => database());
+    }
+    const tracked = shared.pokerPoolIdentity!;
+    delete shared.pokerPoolIdentity;
+    assert.throws(
+      () => database(),
+      /existing pool cannot be verified.*Restart/,
+    );
+    shared.pokerPoolIdentity = { ...tracked, pool: {} as Pool };
+    assert.throws(
+      () => database(),
+      /existing pool cannot be verified.*Restart/,
+    );
+    shared.pokerPoolIdentity = tracked;
+    await closeDatabase();
+    assert.equal(shared.pokerPool, undefined);
+    assert.equal(shared.pokerPoolIdentity, undefined);
+    process.env.DATABASE_URL =
+      "postgresql://other:fictional@127.0.0.1:2/poker_test_other";
+    assert.doesNotThrow(() => database());
+    assert.notEqual(shared.pokerPool, pool);
+    assert.equal(shared.pokerPool!.totalCount, 0);
+  } finally {
+    await closeDatabase();
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+  }
+});
+
+test("first readiness cannot report a different runtime target healthy through an already initialized pool", async () => {
+  const fixture = await testDatabase();
+  const savedEnv = { ...process.env };
+  const shared = globalThis as typeof globalThis & { pokerPool?: Pool };
+  const originalError = console.error;
+  let queries = 0;
+  try {
+    await closeDatabase();
+    Object.assign(process.env, {
+      NODE_ENV: "test",
+      DATABASE_URL: "postgresql://fixtureA:fictional@127.0.0.1:1/poker_test_A",
+      POKER_PROTOTYPE_MODE: "0",
+      NEXT_PUBLIC_POKER_PROTOTYPE: "0",
+      PGOPTIONS: "",
+    });
+    database();
+    const pool = shared.pokerPool!;
+    // Represent an existing fully migrated target using a private memory fixture;
+    // the guard must refuse reuse before this pool can answer any SQL.
+    (pool as unknown as { query: typeof fixture.db.query }).query = async <T>(
+      sql: string,
+      values?: unknown[],
+    ) => {
+      queries++;
+      return fixture.db.query<T>(sql, values);
+    };
+    process.env.DATABASE_URL =
+      "postgresql://fixtureB:private-new-password@127.0.0.1:2/poker_test_B";
+    console.error = () => {};
+    const response = await createReadinessService()();
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      status: "unavailable",
+      mode: "operations",
+    });
+    assert.equal(queries, 0);
+    assert.equal(shared.pokerPool, pool);
+    assert.equal(pool.totalCount, 0);
+  } finally {
+    console.error = originalError;
+    await closeDatabase();
+    await fixture.engine.close();
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, savedEnv);
   }

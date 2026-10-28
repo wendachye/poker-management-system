@@ -258,6 +258,21 @@ after(async () => {
 });
 
 type JsonObject = Record<string, unknown>;
+async function waitForHealth(status: number, headers?: Record<string, string>) {
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const response = await fetch(origin + "/api/health", {
+      signal: AbortSignal.timeout(4000),
+      headers,
+    });
+    if (response.status === status) return response;
+    await response.arrayBuffer();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail(
+    "Readiness did not reach the expected state within its bounded cache window.",
+  );
+}
 class StaffBrowser {
   private cookie = "";
 
@@ -1407,10 +1422,7 @@ test(
           "ALTER TABLE poker_login_budget RENAME COLUMN attempts TO missing_attempts",
         );
         try {
-          unhealthy = await fetch(origin + "/api/health", {
-            signal: AbortSignal.timeout(30_000),
-            headers: { "X-Request-ID": forged },
-          });
+          unhealthy = await waitForHealth(503, { "X-Request-ID": forged });
           assert.equal(unhealthy.status, 503);
           assert.notEqual(unhealthy.headers.get("x-request-id"), forged);
           assert.deepEqual(await unhealthy.json(), {
@@ -1498,7 +1510,109 @@ test(
             false,
             "Operational events must omit private values",
           );
-        assert.equal((await fetch(origin + "/api/health")).status, 200);
+        assert.equal((await waitForHealth(200)).status, 200);
+      },
+    );
+
+    await t.test(
+      "health bursts time out one blocked schema probe while staff continue saving",
+      async () => {
+        const holder = await fixturePool.connect();
+        let holding = false;
+        try {
+          await holder.query("BEGIN");
+          holding = true;
+          await holder.query(
+            "LOCK TABLE poker_schema_migrations IN ACCESS EXCLUSIVE MODE",
+          );
+          // Expire the short cached success before exercising the blocked probe.
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+          const started = performance.now();
+          const burst = await Promise.all(
+            Array.from({ length: 30 }, () =>
+              fetch(origin + "/api/health", {
+                signal: AbortSignal.timeout(6000),
+              }),
+            ),
+          );
+          const elapsed = performance.now() - started;
+          assert.ok(
+            elapsed < 5000,
+            "HTTP readiness must return before the SQL lock timeout",
+          );
+          assert.equal(
+            new Set(
+              burst.map((response) => response.headers.get("x-request-id")),
+            ).size,
+            30,
+          );
+          for (const response of burst) {
+            assert.equal(response.status, 503);
+            assert.deepEqual(await response.json(), {
+              status: "unavailable",
+              mode: "operations",
+            });
+          }
+          const waiting = await administrator.query<{ total: number }>(
+            "SELECT count(*)::int AS total FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND query ILIKE '%poker_schema_migrations%' AND pid<>pg_backend_pid()",
+            [ownedName],
+          );
+          assert.equal(
+            waiting.rows[0].total,
+            1,
+            "Only one readiness query may keep waiting after the HTTP deadline",
+          );
+          // Even after the failed-result TTL expires, unfinished SQL keeps its slot.
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+          const fast = performance.now();
+          const repeated = await Promise.all(
+            Array.from({ length: 10 }, () =>
+              fetch(origin + "/api/health", {
+                signal: AbortSignal.timeout(2000),
+              }),
+            ),
+          );
+          assert.ok(
+            performance.now() - fast < 1500,
+            "Later callers must fail fast while the first probe drains",
+          );
+          for (const response of repeated) {
+            assert.equal(response.status, 503);
+            await response.arrayBuffer();
+          }
+          assert.equal(
+            (
+              await administrator.query<{ total: number }>(
+                "SELECT count(*)::int AS total FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND query ILIKE '%poker_schema_migrations%' AND pid<>pg_backend_pid()",
+                [ownedName],
+              )
+            ).rows[0].total,
+            1,
+          );
+          const saved = await admin.execute({
+            kind: "TABLE",
+            name: "Readiness concurrency fixture",
+            dealer: "",
+            status: "OPEN",
+          });
+          assert.equal(
+            saved.store.tables.filter(
+              (table) => table.name === "Readiness concurrency fixture",
+            ).length,
+            1,
+          );
+        } finally {
+          if (holding) await holder.query("ROLLBACK");
+          holder.release();
+        }
+        await (await waitForHealth(200)).arrayBuffer();
+        const state = await admin.snapshot();
+        assert.equal(
+          state.store.tables.filter(
+            (table) => table.name === "Readiness concurrency fixture",
+          ).length,
+          1,
+        );
       },
     );
 

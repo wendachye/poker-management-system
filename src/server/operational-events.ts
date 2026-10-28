@@ -14,7 +14,13 @@ export type OperationalEvent =
   | {
       event: "readiness_failed";
       requestId: string;
-      reason: "CONFIGURATION" | "DATABASE" | "SCHEMA" | "PROTOTYPE_FLAGS";
+      reason:
+        | "CONFIGURATION"
+        | "DATABASE"
+        | "SCHEMA"
+        | "PROTOTYPE_FLAGS"
+        | "PROBE_TIMEOUT"
+        | "PROBE_BUSY";
       code?: string;
     };
 
@@ -78,9 +84,14 @@ export function logOperationalEvent(input: OperationalEvent): boolean {
       case "readiness_failed": {
         const reason = input.reason;
         if (
-          !["CONFIGURATION", "DATABASE", "SCHEMA", "PROTOTYPE_FLAGS"].includes(
-            reason,
-          )
+          ![
+            "CONFIGURATION",
+            "DATABASE",
+            "SCHEMA",
+            "PROTOTYPE_FLAGS",
+            "PROBE_TIMEOUT",
+            "PROBE_BUSY",
+          ].includes(reason)
         )
           return false;
         record = {

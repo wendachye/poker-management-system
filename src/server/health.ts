@@ -6,7 +6,22 @@ import { logOperationalEvent } from "./operational-events";
 import { validateProductionConfig } from "./production-config";
 import { schemaMigrationStatus } from "./schema";
 
-type Environment = Readonly<Record<string, string | undefined>>;
+export type HealthEnvironment = Readonly<Record<string, string | undefined>>;
+export type HealthFailureReason =
+  | "CONFIGURATION"
+  | "DATABASE"
+  | "SCHEMA"
+  | "PROTOTYPE_FLAGS"
+  | "PROBE_TIMEOUT"
+  | "PROBE_BUSY";
+export type HealthOutcome =
+  | { readonly ready: true; readonly mode: "prototype" | "operations" }
+  | {
+      readonly ready: false;
+      readonly mode: "prototype" | "operations";
+      readonly reason: HealthFailureReason;
+      readonly code?: string;
+    };
 const requiredColumns: Record<string, string[]> = {
   poker_branches: ["id", "name", "timezone"],
   poker_users: ["id", "username", "password_hash", "active"],
@@ -132,15 +147,20 @@ const requiredColumns: Record<string, string[]> = {
   ],
 };
 
-function response(
-  ready: boolean,
-  mode: "prototype" | "operations",
-  requestId: string,
-) {
+/** Each caller gets a fresh receipt and correlation ID, including cached checks. */
+export function healthOutcomeResponse(outcome: HealthOutcome) {
+  const requestId = randomUUID();
+  if (!outcome.ready)
+    logOperationalEvent({
+      event: "readiness_failed",
+      requestId,
+      reason: outcome.reason,
+      ...(outcome.code === undefined ? {} : { code: outcome.code }),
+    });
   return Response.json(
-    { status: ready ? "ok" : "unavailable", mode },
+    { status: outcome.ready ? "ok" : "unavailable", mode: outcome.mode },
     {
-      status: ready ? 200 : 503,
+      status: outcome.ready ? 200 : 503,
       headers: {
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
@@ -150,43 +170,42 @@ function response(
   );
 }
 
-/** Checks only connectivity and schema metadata; never reads venue records. */
-export async function healthResponse(
-  connect: () => SqlConnection = database,
-  env: Environment = process.env,
-) {
-  const requestId = randomUUID();
-  function unavailable(
-    mode: "prototype" | "operations",
-    reason: "CONFIGURATION" | "DATABASE" | "SCHEMA" | "PROTOTYPE_FLAGS",
-    error?: unknown,
-  ) {
-    if (error === undefined)
-      logOperationalEvent({ event: "readiness_failed", requestId, reason });
-    else
-      logOperationalEvent({
-        event: "readiness_failed",
-        requestId,
-        reason,
-        code: databasePoolErrorCode(error),
-      });
-    return response(false, mode, requestId);
-  }
-  const publicDemo = env.NEXT_PUBLIC_POKER_PROTOTYPE === "1";
-  const serverDemo = env.POKER_PROTOTYPE_MODE === "1";
-  if (publicDemo || serverDemo)
-    return publicDemo && serverDemo
-      ? response(true, "prototype", requestId)
-      : unavailable("prototype", "PROTOTYPE_FLAGS");
-  let stage: "CONFIGURATION" | "DATABASE" | "SCHEMA" = "CONFIGURATION";
+/** Fast gates must run even when the database outcome is cached. */
+export function healthPreflight(
+  env: HealthEnvironment,
+): HealthOutcome | undefined {
   try {
+    const publicDemo = env.NEXT_PUBLIC_POKER_PROTOTYPE === "1";
+    const serverDemo = env.POKER_PROTOTYPE_MODE === "1";
+    if (publicDemo || serverDemo)
+      return publicDemo && serverDemo
+        ? { ready: true, mode: "prototype" }
+        : { ready: false, mode: "prototype", reason: "PROTOTYPE_FLAGS" };
     if (env.NODE_ENV === "production") validateProductionConfig(env);
-    stage = "DATABASE";
+  } catch (error) {
+    return {
+      ready: false,
+      mode: "operations",
+      reason: "CONFIGURATION",
+      code: databasePoolErrorCode(error),
+    };
+  }
+}
+
+/** Probe only connectivity/schema metadata; retain no venue records or receipt. */
+export async function probeHealth(
+  connect: () => SqlConnection = database,
+  env: HealthEnvironment = process.env,
+): Promise<HealthOutcome> {
+  const preflight = healthPreflight(env);
+  if (preflight) return preflight;
+  let stage: "DATABASE" | "SCHEMA" = "DATABASE";
+  try {
     const db = connect();
     await db.query("SELECT 1");
     stage = "SCHEMA";
     if (!(await schemaMigrationStatus(db)).ready)
-      return unavailable("operations", "SCHEMA");
+      return { ready: false, mode: "operations", reason: "SCHEMA" };
     const columns = await db.query<{
       table_name: string;
       column_name: string;
@@ -204,9 +223,22 @@ export async function healthResponse(
       fields.every((field) => present.has(`${table}.${field}`)),
     );
     return ready
-      ? response(true, "operations", requestId)
-      : unavailable("operations", "SCHEMA");
+      ? { ready: true, mode: "operations" }
+      : { ready: false, mode: "operations", reason: "SCHEMA" };
   } catch (error) {
-    return unavailable("operations", stage, error);
+    return {
+      ready: false,
+      mode: "operations",
+      reason: stage,
+      code: databasePoolErrorCode(error),
+    };
   }
+}
+
+/** Fresh uncached checks remain available for maintenance and isolated tests. */
+export async function healthResponse(
+  connect: () => SqlConnection = database,
+  env: HealthEnvironment = process.env,
+) {
+  return healthOutcomeResponse(await probeHealth(connect, env));
 }
