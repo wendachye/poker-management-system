@@ -11,6 +11,7 @@ import {
   financialRowKey,
   recoveryDigest,
   recoveryDrillTarget,
+  recoveryPostgresVersionGuard,
   recoveryRecordCounts,
   recoveryResourceName,
   type RecoveryFinancialRow,
@@ -360,6 +361,10 @@ async function main() {
     kind: "disposable-postgresql-recovery-drill",
     createdAt: new Date().toISOString(),
     target: { host: target.host, port: target.port, database: target.database },
+    versionGuard: recoveryPostgresVersionGuard(
+      target.expectedPostgresMajor,
+      null,
+    ),
     fixturesOnly: true,
     phases,
     limitations: [
@@ -425,11 +430,14 @@ async function main() {
           "SELECT current_database() AS database,version() AS version,current_setting('server_version_num') AS number",
         )
       ).rows[0];
+      const versionGuard = recoveryPostgresVersionGuard(
+        target.expectedPostgresMajor,
+        current.number,
+      );
+      report.versionGuard = versionGuard;
       check(
-        current.database === target.database &&
-          Number(current.number) >= 170000 &&
-          Number(current.number) < 180000,
-        "explicit disposable PostgreSQL 17 target",
+        current.database === target.database && versionGuard.matches,
+        `explicit disposable PostgreSQL ${target.expectedPostgresMajor} target`,
       );
       report.postgres = current.version;
       check(
@@ -905,7 +913,7 @@ async function main() {
 
 void main().catch(() => {
   console.error(
-    "Recovery drill could not start or save its report. Use an explicitly disposable PostgreSQL 17 target and inspect local permissions.",
+    "Recovery drill could not start or save its report. Use an explicitly disposable PostgreSQL target matching RECOVERY_POSTGRES_MAJOR (default 17; supported 17 or 18) and inspect local permissions.",
   );
   process.exitCode = 1;
 });

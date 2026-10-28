@@ -73,11 +73,12 @@ Unlike offline verification, this command loads environment configuration and us
 
 This is a full-history maintenance check, not a dashboard poll or lightweight health probe. Budget database work and application memory for retained history. A consistent snapshot does not verify external payment records, detect malicious edits by an unrestricted database administrator or provide offsite audit retention.
 
-## Disposable PostgreSQL 17 recovery drill
+## Disposable PostgreSQL 17/18 recovery drill
 
-Provision a separate disposable PostgreSQL 17 database and explicitly supply its URL in the current process. For example, after creating a suitable local test database and securely setting the test credential:
+Provision a separate disposable PostgreSQL 17 or 18 database and explicitly supply its URL in the current process. The expected major defaults to 17 for compatibility. Set `RECOVERY_POSTGRES_MAJOR=18` explicitly when rehearsing against PostgreSQL 18; the command never silently accepts a different server major. For example, after creating a suitable local test database and securely setting the test credential:
 
 ```powershell
+Remove-Item Env:RECOVERY_POSTGRES_MAJOR -ErrorAction SilentlyContinue
 $env:POSTGRES_TEST_DATABASE_URL = "postgresql://<test-owner>:<test-password>@127.0.0.1:55438/poker_test"
 npm run recovery:drill
 Remove-Item Env:POSTGRES_TEST_DATABASE_URL
@@ -85,7 +86,19 @@ Remove-Item Env:POSTGRES_TEST_DATABASE_URL
 
 The supplied test principal needs permission to create and drop the drill's generated roles and schemas. Use credentials dedicated to the disposable test instance; do not use production credentials. The drill neither provisions nor stops the PostgreSQL instance.
 
-[Target guards](../scripts/recovery-contract.ts) require an explicit `POSTGRES_TEST_DATABASE_URL`; there is no `.env` loading or `DATABASE_URL` fallback. Only `localhost`, `127.0.0.1` or `::1`, a valid port and a database named `poker_test` or `poker_test_*` are accepted. Connection query overrides, fragments and nonempty `PGOPTIONS` are rejected. The connected server must actually be PostgreSQL 17.
+[Target guards](../scripts/recovery-contract.ts) require an explicit `POSTGRES_TEST_DATABASE_URL`; there is no `.env` loading or `DATABASE_URL` fallback. Only `localhost`, `127.0.0.1` or `::1`, a valid port and a database named `poker_test` or `poker_test_*` are accepted. Connection query overrides, fragments and nonempty `PGOPTIONS` are rejected. `RECOVERY_POSTGRES_MAJOR` accepts only the exact strings `17` or `18`; malformed or unsupported selections fail before a database pool is created. The connected server must actually match the selected major before any fixture schemas, roles or grants are created.
+
+For a PostgreSQL 18 fixture in PowerShell:
+
+```powershell
+$env:POSTGRES_TEST_DATABASE_URL = "postgresql://<test-owner>:<test-password>@127.0.0.1:55438/poker_test"
+$env:RECOVERY_POSTGRES_MAJOR = "18"
+npm run recovery:drill
+Remove-Item Env:POSTGRES_TEST_DATABASE_URL
+Remove-Item Env:RECOVERY_POSTGRES_MAJOR
+```
+
+The JSON report records the expected and observed server major, a bounded version number and whether they match. An actual-major mismatch produces a failure report with `ownedResourcesCreated: false`; cleanup does not drop unowned objects. To restore the PostgreSQL 17 default in that terminal, remove the selector with `Remove-Item Env:RECOVERY_POSTGRES_MAJOR`.
 
 Each run creates two fresh owned schemas and separate owner/application SQL roles for each. The application roles can insert immutable ledger, audit and operation records but cannot update or delete them, change schema or write migration history. Mutable operational records receive the DML needed by application flows; transient session/throttle cleanup has separate deletion privileges. The drill exercises both allowed behavior and denied privileges using actual role connections. These fixture grants are evidence for this application path, not automatic provisioning of production identities.
 
@@ -111,6 +124,21 @@ The [native drill](../scripts/recovery-drill.ts) records 14 measured phases:
 Source and restored databases also run the read-only integrity check through the restricted application role. Restore and migration use the owner role. The run checks that restored operations do not change the source.
 
 An ignored `.local/recovery-drill-<id>/` directory retains fictional full backup files and a `report.json` with phase outcomes, timings, counts, parity evidence and cleanup status. The report excludes passwords, password hashes, tokens and full records; the backup files are still private. Inspect `status` **and** verified cleanup fields. The drill closes pools, checks ownership before dropping its generated schemas, drops its generated roles and queries for leftovers, including failure paths. Unverified cleanup is not reported as zero remaining resources. A failed run exits nonzero; inspect reported owned resource names before any manual cleanup. Do not delete or drop unrelated resources.
+
+## Local major-version verification on 29 October 2026
+
+The explicit-version recovery command was verified using separate disposable PostgreSQL 17.11 and 18.6 containers. The PostgreSQL 17 default, explicit 17 and explicit 18 each completed all fourteen upgrade/restore phases, including independent financial parity, restricted application permissions, failed-restore rollback, session revocation, fresh login and exact retry without duplicate posting.
+
+| Actual server    | Expected selection                   | Result                                       |
+| ---------------- | ------------------------------------ | -------------------------------------------- |
+| PostgreSQL 17.11 | Unset (default 17)                   | All fourteen phases passed                   |
+| PostgreSQL 17.11 | `17`                                 | All fourteen phases passed                   |
+| PostgreSQL 18.6  | `18`                                 | All fourteen phases passed                   |
+| PostgreSQL 18.6  | `17`                                 | Refused before fixture creation              |
+| PostgreSQL 17.11 | `18`                                 | Refused before fixture creation              |
+| PostgreSQL 18.6  | Unsupported `19` or malformed `18.0` | Configuration refused before creating a pool |
+
+All mismatch reports recorded zero created resources. Successful runs removed their generated schemas and roles. The full isolated suite passed 427 tests; TypeScript, lint and formatting also passed. Evidence, source hashes, reports and test-service cleanup are retained under the ignored `.local/recovery-majors-2026-10-29` directory. These are fictional local recovery checks; the persistent sample app, existing venue data and cloud staging were not recovery targets.
 
 ## Remaining production release checks
 

@@ -121,7 +121,9 @@ All budgets are per application process. Multiply `DATABASE_POOL_MAX` by the max
 | `DATABASE_LOCK_TIMEOUT_MS`             |    5000 | 100 to 60000, no greater than statement timeout |
 | `DATABASE_IDLE_TRANSACTION_TIMEOUT_MS` |   15000 | 1000 to 300000                                  |
 
-Client query timeout is statement timeout plus five seconds. Zero cannot disable these limits. URL startup/timeout overrides and `PGOPTIONS` are rejected. Test any transaction/session pooler with these settings before choosing it. Statement or lock failures before commit trigger rollback. A lost connection or timeout during commit has an uncertain outcome; staff must refresh and retry with the existing operation ID instead of creating another transaction.
+Client query timeout is statement timeout plus five seconds. Zero cannot disable these limits. URL startup/timeout overrides and `PGOPTIONS` are rejected. Test any transaction/session pooler with these settings before choosing it. Statement or lock failures before commit trigger rollback. A lost connection or timeout during commit has an uncertain outcome; staff must use the in-app refresh and exact retry controls with the existing operation ID while keeping the current page open, instead of creating another transaction.
+
+The current page retains the exact retry identifier and payload in memory; ordinary module navigation preserves that state, while a hard reload or browser crash loses it. Durable recovery remains a local hardening task. Do not persist the existing payload or fingerprint: staff commands can contain passwords. A safe metadata-only checkpoint also needs a server intent/cancellation contract; an absent operation record cannot prove a delayed original request will never arrive.
 
 ## Verify changes
 
@@ -133,7 +135,7 @@ npm run test:operations-http
 npm run recovery:drill
 ```
 
-All three require `POSTGRES_TEST_DATABASE_URL` pointing to an explicitly disposable loopback database named `poker_test` or beginning `poker_test_`. They use generated test schemas and fictional staff and records, and refuse missing or unsafe targets; never set these to a venue database. The HTTP suite creates its own temporary login role and Next server. The recovery drill creates separate source/destination owner and restricted application roles. Both clean up their owned resources. CI supplies a disposable PostgreSQL service. Embedded PGlite tests do not substitute for independent PostgreSQL checks.
+All three require `POSTGRES_TEST_DATABASE_URL` pointing to an explicitly disposable loopback database named `poker_test` or beginning `poker_test_`. They use generated test schemas and fictional staff and records, and refuse missing or unsafe targets; never set these to a venue database. The HTTP suite creates its own temporary login role and Next server. The recovery drill creates separate source/destination owner and restricted application roles; its expected PostgreSQL major defaults to 17 and may be explicitly set to 18 with `RECOVERY_POSTGRES_MAJOR`. A major mismatch is rejected before fixture creation. Both clean up their owned resources. CI supplies a disposable PostgreSQL service. Embedded PGlite tests do not substitute for independent PostgreSQL checks.
 
 Before a hosted pilot, run the integration suite against the intended PostgreSQL major version and repeat the staff journeys in staging. Do a separate restore drill, record elapsed recovery time and verify balances, approvals, audit history, operation IDs and fresh login after recovery.
 

@@ -7,6 +7,11 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 /** A recovery drill owns its fixtures; it never falls back to an operations URL. */
 export function recoveryDrillTarget(env: Environment = process.env) {
+  const selectedMajor = env.RECOVERY_POSTGRES_MAJOR ?? "17";
+  if (selectedMajor !== "17" && selectedMajor !== "18")
+    throw new Error(
+      "RECOVERY_POSTGRES_MAJOR must explicitly be 17 or 18 when set; its default is 17.",
+    );
   if (env.PGOPTIONS?.trim())
     throw new Error(
       "PGOPTIONS must be unset for the disposable recovery drill.",
@@ -16,7 +21,32 @@ export function recoveryDrillTarget(env: Environment = process.env) {
     throw new Error(
       "POSTGRES_TEST_DATABASE_URL must select a valid PostgreSQL port.",
     );
-  return target;
+  return {
+    ...target,
+    expectedPostgresMajor: Number(selectedMajor) as 17 | 18,
+  };
+}
+
+/** Report a bounded server identity before the drill may create any fixtures. */
+export function recoveryPostgresVersionGuard(
+  expectedMajor: 17 | 18,
+  serverVersionNumber: unknown,
+) {
+  const number =
+    typeof serverVersionNumber === "string" &&
+    /^[1-9]\d{5}$/.test(serverVersionNumber)
+      ? serverVersionNumber
+      : null;
+  const actualMajor =
+    number === null ? null : Math.floor(Number(number) / 10_000);
+  return {
+    expectedMajor,
+    actualMajor,
+    serverVersionNumber: number,
+    matches:
+      (expectedMajor === 17 || expectedMajor === 18) &&
+      actualMajor === expectedMajor,
+  };
 }
 
 export function recoveryResourceName(

@@ -8,6 +8,7 @@ import {
   expectedRecoveryFinancialRows,
   recoveryDigest,
   recoveryDrillTarget,
+  recoveryPostgresVersionGuard,
   recoveryRecordCounts,
   recoveryResourceName,
 } from "../scripts/recovery-contract";
@@ -48,7 +49,117 @@ test("the recovery drill only accepts an explicit disposable loopback target wit
     assert.equal(selected.database, "poker_test_recovery");
     assert.equal(selected.host, host);
     assert.equal(selected.port, 55438);
+    assert.equal(selected.expectedPostgresMajor, 17);
   }
+});
+
+test("recovery major selection defaults to 17 and only accepts explicit 17 or 18", () => {
+  const url =
+    "postgresql://fixture:fictional@127.0.0.1:55438/poker_test_recovery";
+  assert.equal(
+    recoveryDrillTarget({ POSTGRES_TEST_DATABASE_URL: url })
+      .expectedPostgresMajor,
+    17,
+  );
+  for (const major of ["17", "18"] as const) {
+    const target = recoveryDrillTarget({
+      POSTGRES_TEST_DATABASE_URL: url,
+      RECOVERY_POSTGRES_MAJOR: major,
+    });
+    assert.equal(target.expectedPostgresMajor, Number(major));
+    assert.equal(target.connectionString, url);
+    for (const unsafe of [
+      "postgresql://remote.example/poker_test",
+      "postgresql://127.0.0.1/operations",
+      "postgresql://127.0.0.1/poker_test?options=-csearch_path=public",
+    ])
+      assert.throws(
+        () =>
+          recoveryDrillTarget({
+            POSTGRES_TEST_DATABASE_URL: unsafe,
+            DATABASE_URL: url,
+            RECOVERY_POSTGRES_MAJOR: major,
+          }),
+        /POSTGRES_TEST_DATABASE_URL/,
+      );
+    assert.throws(
+      () =>
+        recoveryDrillTarget({
+          POSTGRES_TEST_DATABASE_URL: url,
+          RECOVERY_POSTGRES_MAJOR: major,
+          PGOPTIONS: "-c search_path=public",
+        }),
+      /PGOPTIONS/,
+    );
+  }
+  for (const invalid of [
+    "",
+    "16",
+    "19",
+    " 17",
+    "18 ",
+    "17.0",
+    "018",
+    "170000",
+    "auto",
+    "latest",
+    "Infinity",
+    "-18",
+  ])
+    assert.throws(
+      () =>
+        recoveryDrillTarget({
+          POSTGRES_TEST_DATABASE_URL: url,
+          RECOVERY_POSTGRES_MAJOR: invalid,
+        }),
+      /RECOVERY_POSTGRES_MAJOR/,
+    );
+});
+
+test("recovery version guard verifies exactly the selected actual server major", () => {
+  for (const [major, versions] of [
+    [17, ["170000", "170011", "179999"]],
+    [18, ["180000", "180006", "189999"]],
+  ] as const)
+    for (const version of versions) {
+      assert.deepEqual(recoveryPostgresVersionGuard(major, version), {
+        expectedMajor: major,
+        actualMajor: major,
+        serverVersionNumber: version,
+        matches: true,
+      });
+      const otherMajor = major === 17 ? 18 : 17;
+      assert.deepEqual(recoveryPostgresVersionGuard(otherMajor, version), {
+        expectedMajor: otherMajor,
+        actualMajor: major,
+        serverVersionNumber: version,
+        matches: false,
+      });
+    }
+  for (const unsupported of ["160009", "190000"])
+    for (const major of [17, 18] as const)
+      assert.equal(
+        recoveryPostgresVersionGuard(major, unsupported).matches,
+        false,
+      );
+  for (const malformed of [
+    undefined,
+    null,
+    180006,
+    "",
+    "18",
+    "1800000",
+    "180006.0",
+    " 180006",
+    "180006extra",
+    "private-version-marker",
+  ])
+    assert.deepEqual(recoveryPostgresVersionGuard(18, malformed), {
+      expectedMajor: 18,
+      actualMajor: null,
+      serverVersionNumber: null,
+      matches: false,
+    });
 });
 
 test("owned recovery identities reject injection and cannot collide through PostgreSQL truncation", () => {
