@@ -1195,5 +1195,126 @@ test(
         );
       },
     );
+
+    await t.test(
+      "login throttling hides unknown names, ignores forged source headers and creates no sessions",
+      async () => {
+        const visitor = new StaffBrowser();
+        const sessionsBefore = (
+          await fixturePool.query<{ total: string }>(
+            "SELECT count(*)::text AS total FROM poker_sessions",
+          )
+        ).rows[0].total;
+        await fixturePool.query(
+          "INSERT INTO poker_login_budget(id,attempts,window_start) VALUES(1,0,now()) ON CONFLICT(id) DO UPDATE SET attempts=0,window_start=now()",
+        );
+        await fixturePool.query(
+          "INSERT INTO poker_login_attempts(username,attempts,window_start) VALUES('http.cashier',9,now()) ON CONFLICT(username) DO UPDATE SET attempts=9,window_start=now()",
+        );
+        const incorrect = {
+          username: "http.cashier",
+          password: "fictional-incorrect-password",
+        };
+        assert.equal(
+          (await visitor.response("/api/auth", "POST", incorrect)).response
+            .status,
+          401,
+        );
+        const knownDenied = await visitor.response(
+          "/api/auth",
+          "POST",
+          incorrect,
+        );
+        assert.equal(knownDenied.response.status, 429);
+        const missing = "fictional-unknown-http-security-account";
+        for (let index = 0; index < 10; index++)
+          assert.equal(
+            (
+              await visitor.response("/api/auth", "POST", {
+                username: missing,
+                password: incorrect.password,
+              })
+            ).response.status,
+            401,
+          );
+        const unknownDenied = await visitor.response("/api/auth", "POST", {
+          username: missing,
+          password: incorrect.password,
+        });
+        assert.equal(unknownDenied.response.status, 429);
+        assert.deepEqual(unknownDenied.data, knownDenied.data);
+        for (const result of [knownDenied, unknownDenied]) {
+          assert.match(
+            result.response.headers.get("retry-after") ?? "",
+            /^[0-9]+$/,
+          );
+          const seconds = Number(result.response.headers.get("retry-after"));
+          assert.ok(seconds >= 1 && seconds <= 900);
+          assert.equal(result.response.headers.getSetCookie().length, 0);
+        }
+        assert.equal(
+          (
+            await fixturePool.query(
+              "SELECT username FROM poker_login_attempts WHERE username=$1",
+              [missing],
+            )
+          ).rows.length,
+          0,
+        );
+
+        await fixturePool.query(
+          "UPDATE poker_login_budget SET attempts=119,window_start=now() WHERE id=1",
+        );
+        const rotated = await Promise.all(
+          [0, 1].map((index) =>
+            visitor.response(
+              "/api/auth",
+              "POST",
+              {
+                username: `fictional-http-source-${index}`,
+                password: incorrect.password,
+              },
+              {
+                "X-Forwarded-For": `192.0.2.${index + 1}`,
+                Forwarded: `for=192.0.2.${index + 1}`,
+                "X-Real-IP": `198.51.100.${index + 1}`,
+              },
+            ),
+          ),
+        );
+        assert.deepEqual(
+          rotated.map((result) => result.response.status).sort(),
+          [401, 429],
+        );
+        const denied = rotated.find(
+          (result) => result.response.status === 429,
+        )!;
+        assert.ok(Number(denied.response.headers.get("retry-after")) >= 1);
+        assert.ok(Number(denied.response.headers.get("retry-after")) <= 60);
+        assert.equal(denied.response.headers.getSetCookie().length, 0);
+        assert.equal(
+          (
+            await fixturePool.query<{ attempts: number }>(
+              "SELECT attempts FROM poker_login_budget WHERE id=1",
+            )
+          ).rows[0].attempts,
+          121,
+        );
+        assert.equal(
+          (
+            await fixturePool.query<{ total: string }>(
+              "SELECT count(*)::text AS total FROM poker_sessions",
+            )
+          ).rows[0].total,
+          sessionsBefore,
+        );
+        // Login pressure must not sign out already authenticated staff.
+        assert.equal(
+          (await admin.json<{ user: Snapshot["user"] }>("/api/auth")).user
+            .username,
+          "http.admin",
+        );
+      },
+    );
   },
 );

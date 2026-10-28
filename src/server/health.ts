@@ -10,6 +10,7 @@ const requiredColumns: Record<string, string[]> = {
   poker_memberships: ["user_id", "branch_id", "role"],
   poker_sessions: ["token_hash", "user_id", "branch_id", "expires_at"],
   poker_login_attempts: ["username", "attempts", "window_start"],
+  poker_login_budget: ["id", "attempts", "window_start"],
   poker_branch_state: ["branch_id", "revision", "data", "current_day_id"],
   poker_operations: [
     "branch_id",

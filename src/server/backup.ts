@@ -453,12 +453,13 @@ export async function restoreBackup(
   await db.transaction(async (connection) => {
     // Maintenance operation: block all writers until replacement commits or rolls back.
     await connection.query(
-      "LOCK TABLE poker_users,poker_memberships,poker_branches,poker_branch_state,poker_operations,poker_sessions,poker_login_attempts,poker_profiles,poker_tables,poker_visits,poker_days,poker_approvals,poker_ledger,poker_audit,poker_change_versions,poker_financial_totals IN ACCESS EXCLUSIVE MODE",
+      "LOCK TABLE poker_users,poker_memberships,poker_branches,poker_branch_state,poker_operations,poker_sessions,poker_login_attempts,poker_login_budget,poker_profiles,poker_tables,poker_visits,poker_days,poker_approvals,poker_ledger,poker_audit,poker_change_versions,poker_financial_totals IN ACCESS EXCLUSIVE MODE",
     );
     await saveBeforeRestore(await capture(connection));
     for (const table of [
       "poker_sessions",
       "poker_login_attempts",
+      "poker_login_budget",
       "poker_operations",
       "poker_financial_totals",
       "poker_ledger",

@@ -213,6 +213,8 @@
     "sign_in_failed": "Sign-in failed.",
     "invalid_username_or_password": "Invalid username or password.",
     "too_many_sign_in_attempts_try_again_in_15_minutes": "Too many sign-in attempts. Try again in 15 minutes.",
+    "too_many_sign_in_attempts_try_again_shortly": "Too many sign-in attempts. Try again shortly.",
+    "the_service_is_busy_try_again_shortly": "The service is busy. Try again shortly.",
     "this_account_has_no_branch_access": "This account has no branch access.",
     "your_session_has_expired_sign_in_again": "Your session has expired. Sign in again.",
     "you_do_not_have_permission_for_this_action": "You do not have permission for this action.",

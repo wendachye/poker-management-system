@@ -24,6 +24,9 @@ test("full backup round trip preserves sample records, credentials and retry mar
       "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES('local-admin','local','ADMIN')",
     );
     const token = await login(db, "local.admin", "local-test-password");
+    await db.query(
+      "INSERT INTO poker_login_attempts(username,attempts,window_start) VALUES('!unknown:7',11,now())",
+    );
     const backup = await createBackup(db);
     const fromFile = parseBackup(JSON.parse(JSON.stringify(backup, null, 2)));
     assert.equal(
@@ -47,6 +50,14 @@ test("full backup round trip preserves sample records, credentials and retry mar
       { ...backup.payload, createdAt: "" },
     );
     assert.equal(await sessionUser(db, token), null);
+    assert.equal(
+      (await db.query("SELECT * FROM poker_login_budget")).rows.length,
+      0,
+    );
+    assert.equal(
+      (await db.query("SELECT * FROM poker_login_attempts")).rows.length,
+      0,
+    );
     assert.ok(await login(db, "local.admin", "local-test-password"));
     assert.equal((await seedLocalSamples(db)).added, false);
   } finally {

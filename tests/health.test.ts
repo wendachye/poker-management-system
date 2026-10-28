@@ -157,6 +157,14 @@ test("readiness requires the actual schema, not only an answering database", asy
     };
     await db.query("ALTER TABLE poker_operations ADD COLUMN fingerprint text");
     assert.equal((await healthResponse(() => db, local)).status, 200);
+    await db.query(
+      "ALTER TABLE poker_login_budget RENAME COLUMN attempts TO missing_attempts",
+    );
+    assert.equal((await healthResponse(() => db, local)).status, 503);
+    await db.query(
+      "ALTER TABLE poker_login_budget RENAME COLUMN missing_attempts TO attempts",
+    );
+    assert.equal((await healthResponse(() => db, local)).status, 200);
     await db.query("DROP TABLE poker_change_versions");
     assert.equal((await healthResponse(() => db, local)).status, 503);
   } finally {

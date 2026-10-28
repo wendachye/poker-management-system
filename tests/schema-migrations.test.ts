@@ -85,7 +85,7 @@ test("a fresh install records its baseline version checksum and application time
     assert.deepEqual(await schemaMigrationStatus(db), {
       ready: false,
       appliedVersion: 0,
-      expectedVersion: 3,
+      expectedVersion: 4,
     });
     await migrate(db);
     const history = await db.query<{
@@ -94,9 +94,18 @@ test("a fresh install records its baseline version checksum and application time
       checksum: string;
       applied_at: Date;
     }>("SELECT * FROM poker_schema_migrations ORDER BY version");
-    assert.equal(history.rows.length, 3);
+    assert.equal(history.rows.length, 4);
     assert.equal(history.rows[0].version, 1);
     assert.equal(history.rows[0].name, "initial_schema");
+    assert.deepEqual(
+      history.rows.slice(0, 3).map((row) => row.checksum),
+      [
+        "b0e60da76b6ac5e2ee16eeb4e79e800f03a97dfea4d3ea62926b5e0778dd2a6d",
+        "845d08bbb67983f3a72516a002392a93c619abcb377d2cb172db4387db601134",
+        "04edbd9c06ced69f8aefd0b737e8a9598ba4d75c3e20475c473275dcef8c6a10",
+      ],
+      "Published v1-v3 migration fingerprints must not change",
+    );
     assert.equal(
       history.rows[0].checksum,
       createHash("sha256").update(schema).digest("hex"),
@@ -104,8 +113,8 @@ test("a fresh install records its baseline version checksum and application time
     assert.ok(Number.isFinite(new Date(history.rows[0].applied_at).getTime()));
     assert.deepEqual(await schemaMigrationStatus(db), {
       ready: true,
-      appliedVersion: 3,
-      expectedVersion: 3,
+      appliedVersion: 4,
+      expectedVersion: 4,
     });
     await legacyRecords(db);
   } finally {
@@ -132,6 +141,84 @@ test("repeated migrations preserve business records and the original ledger time
   }
 });
 
+test("the authentication upgrade preserves released history and rolls quota changes back on incompatible legacy usernames", async () => {
+  const { db, engine } = await isolatedDatabase();
+  try {
+    await migrate(db);
+    await legacyRecords(db);
+    // Construct the exact published v3 seam without changing its recorded SQL.
+    await db.query("DROP TABLE poker_login_budget");
+    await db.query("DROP INDEX poker_login_attempts_expiry");
+    await db.query("DROP INDEX poker_sessions_user");
+    await db.query(
+      "ALTER TABLE poker_login_attempts DROP CONSTRAINT poker_login_attempts_count",
+    );
+    await db.query(
+      "ALTER TABLE poker_users DROP CONSTRAINT poker_users_login_namespace",
+    );
+    await db.query("DELETE FROM poker_schema_migrations WHERE version=4");
+    const released = (
+      await db.query("SELECT * FROM poker_schema_migrations ORDER BY version")
+    ).rows;
+    await db.query(
+      "INSERT INTO poker_login_attempts(username,attempts,window_start) VALUES('existing.owner',2147483647,now())",
+    );
+    await db.query(
+      "INSERT INTO poker_users(id,username,password_hash) VALUES('legacy-reserved','!unknown:3','test-no-login')",
+    );
+    const original = await records(db);
+    await assert.rejects(migrate(db), /poker_users_login_namespace/);
+    assert.deepEqual(await records(db), original);
+    assert.deepEqual(
+      (await db.query("SELECT * FROM poker_schema_migrations ORDER BY version"))
+        .rows,
+      released,
+    );
+    assert.equal(
+      (
+        await db.query<{ attempts: number }>(
+          "SELECT attempts FROM poker_login_attempts WHERE username='existing.owner'",
+        )
+      ).rows[0].attempts,
+      2147483647,
+    );
+    assert.equal(
+      (await db.query("SELECT to_regclass('poker_login_budget') AS relation"))
+        .rows[0].relation,
+      null,
+    );
+
+    // Remediation affects only this deliberately invalid disposable fixture.
+    await db.query("DELETE FROM poker_users WHERE id='legacy-reserved'");
+    const remediated = await records(db);
+    await migrate(db);
+    assert.deepEqual(await records(db), remediated);
+    assert.deepEqual(
+      (
+        await db.query(
+          "SELECT * FROM poker_schema_migrations WHERE version<=3 ORDER BY version",
+        )
+      ).rows,
+      released,
+    );
+    assert.equal(
+      (
+        await db.query<{ attempts: number }>(
+          "SELECT attempts FROM poker_login_attempts WHERE username='existing.owner'",
+        )
+      ).rows[0].attempts,
+      11,
+    );
+    assert.deepEqual(await schemaMigrationStatus(db), {
+      ready: true,
+      appliedVersion: 4,
+      expectedVersion: 4,
+    });
+  } finally {
+    await engine.close();
+  }
+});
+
 test("existing unversioned tables adopt the baseline without resetting any records", async () => {
   const { db, engine } = await isolatedDatabase();
   try {
@@ -145,7 +232,7 @@ test("existing unversioned tables adopt the baseline without resetting any recor
     assert.equal(
       (await db.query("SELECT version FROM poker_schema_migrations")).rows
         .length,
-      3,
+      4,
     );
   } finally {
     await engine.close();
@@ -219,7 +306,7 @@ test("unknown future migration versions are rejected without changing business d
     assert.equal(
       (await db.query("SELECT version FROM poker_schema_migrations")).rows
         .length,
-      4,
+      5,
     );
   } finally {
     await engine.close();
@@ -294,7 +381,7 @@ test("the migration advisory lock precedes ledger bootstrap and repeated callers
       calls.filter((sql) =>
         sql.startsWith("INSERT INTO poker_schema_migrations"),
       ).length,
-      3,
+      4,
     );
     assert.equal((await schemaMigrationStatus(db)).ready, true);
   } finally {

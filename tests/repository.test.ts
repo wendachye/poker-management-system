@@ -261,6 +261,22 @@ test("login throttling survives requests and expired/revoked sessions fail", asy
   for (let i = 0; i < 10; i++)
     await assert.rejects(login(db, "unknown", "bad"));
   await assert.rejects(login(db, "unknown", "bad"), /Too many/);
+  assert.equal(
+    (
+      await db.query(
+        "SELECT username FROM poker_login_attempts WHERE username='unknown'",
+      )
+    ).rows.length,
+    0,
+  );
+  assert.equal(
+    (
+      await db.query(
+        "SELECT username FROM poker_login_attempts WHERE username LIKE '!unknown:%'",
+      )
+    ).rows.length,
+    1,
+  );
   const temporary = await login(db, "admin", "test-password-only");
   await logout(db, temporary);
   assert.equal(await sessionUser(db, temporary), null);

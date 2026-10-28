@@ -4,11 +4,13 @@ This implementation is prepared and verified locally on 28 October 2026. It conn
 
 ## Storage and migration
 
-The migration runner applies three checksum-verified versions in order:
+The indexed-storage release introduced the first three checksum-verified migrations in order:
 
 1. `initial_schema` retains the original migration fingerprint.
 2. `indexed_operational_records` moves profiles, tables, visits, days, approval requests, ledger entries and audit events into venue-scoped record tables. Generated query columns and indexes support venue, day, player, active seat, status, actor and chronological lookups. Venue state holds settings, the current day, revision and import floor rather than a duplicate history blob.
 3. `transactional_financial_totals` backfills financial summaries for the venue, player, day, player/day and table/day scopes. New ledger postings and their summaries commit in the same transaction. Summaries can be rebuilt from the immutable ledger during a complete import or restore.
+
+The later [authentication migration v4](staff-access-security.md) follows these storage migrations and leaves their published checksums unchanged.
 
 Legacy migration checks record counts and venue-scoped relationships before removing the original arrays. The migration and its backfill roll back together on failure. Deferred constraints permit a confirmed occupied-seat swap while preventing two active visits from ending in the same seat or belonging to the same player. Posting a request or reversing an original entry twice is also blocked by database uniqueness constraints.
 

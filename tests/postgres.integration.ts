@@ -20,6 +20,14 @@ import { manageStaff } from "../src/server/staff";
 import { createLocation } from "../src/server/locations";
 import { configuredStore } from "./helpers/store";
 import { replaceStore } from "../src/server/storage";
+import {
+  claimLoginAttempt,
+  clearSuccessfulLoginAttempt,
+} from "../src/server/login-admission";
+import {
+  manageOperatorAccount,
+  type OperatorAccountCommand,
+} from "../src/server/operator-accounts";
 
 function testDatabaseUrl(value: string | undefined) {
   const message =
@@ -295,13 +303,13 @@ async function sessionChangeWhileBlocked<T>(
 test("independent migration runners serialize fresh bootstrap and record the baseline once", async () => {
   assert.deepEqual(await schemaMigrationStatus(firstDb), {
     ready: true,
-    appliedVersion: 3,
-    expectedVersion: 3,
+    appliedVersion: 4,
+    expectedVersion: 4,
   });
   const recorded = await firstDb.query<{ total: string }>(
     "SELECT count(*)::text AS total FROM poker_schema_migrations",
   );
-  assert.equal(recorded.rows[0].total, "3");
+  assert.equal(recorded.rows[0].total, "4");
 });
 
 test("PostgreSQL integration target guard rejects operational and overridden destinations", () => {
@@ -846,5 +854,383 @@ test("a full backup restores into a second isolated schema without changing its 
   assert.equal(
     (await readSnapshot(firstDb, source.tokens.admin)).store.tables.length,
     1,
+  );
+});
+
+function operatorInput(command: OperatorAccountCommand) {
+  return {
+    operationId: randomUUID(),
+    operator: "Native security test operator",
+    reason: "Fictional account safeguard verification",
+    command,
+  };
+}
+
+test("login quotas are atomic across independent connections and preserve newer failures", async () => {
+  const run = await fixture();
+  try {
+    await firstDb.query(
+      `INSERT INTO poker_login_budget(id,attempts,window_start) VALUES(1,119,now())
+      ON CONFLICT(id) DO UPDATE SET attempts=119,window_start=now()`,
+    );
+    const globalClaims = await Promise.allSettled([
+      claimLoginAttempt(firstDb, "fictional-missing-a"),
+      claimLoginAttempt(secondDb, "fictional-missing-b"),
+    ]);
+    assert.equal(
+      globalClaims.filter((result) => result.status === "fulfilled").length,
+      1,
+    );
+    for (const result of globalClaims)
+      if (result.status === "rejected") status(result.reason, 429);
+    assert.equal(
+      (
+        await firstDb.query<{ attempts: number }>(
+          "SELECT attempts FROM poker_login_budget WHERE id=1",
+        )
+      ).rows[0].attempts,
+      121,
+    );
+    await firstDb.query(
+      "UPDATE poker_login_budget SET window_start=now()-interval '61 seconds' WHERE id=1",
+    );
+    await claimLoginAttempt(firstDb, "fictional-after-window");
+    assert.equal(
+      (
+        await firstDb.query<{ attempts: number }>(
+          "SELECT attempts FROM poker_login_budget WHERE id=1",
+        )
+      ).rows[0].attempts,
+      1,
+    );
+
+    await firstDb.query(
+      `INSERT INTO poker_login_attempts(username,attempts,window_start) VALUES($1,9,now())
+      ON CONFLICT(username) DO UPDATE SET attempts=9,window_start=now()`,
+      [run.users.cashier],
+    );
+    const accountClaims = await Promise.allSettled([
+      claimLoginAttempt(firstDb, run.users.cashier),
+      claimLoginAttempt(secondDb, run.users.cashier),
+    ]);
+    const accepted = accountClaims.filter(
+      (result) => result.status === "fulfilled",
+    );
+    assert.equal(accepted.length, 1);
+    assert.ok(accepted[0].status === "fulfilled" && accepted[0].value);
+    for (const result of accountClaims)
+      if (result.status === "rejected") status(result.reason, 429);
+    await clearSuccessfulLoginAttempt(firstDb, accepted[0].value);
+    assert.equal(
+      (
+        await firstDb.query<{ attempts: number }>(
+          "SELECT attempts FROM poker_login_attempts WHERE username=$1",
+          [run.users.cashier],
+        )
+      ).rows[0].attempts,
+      11,
+      "An earlier success cannot erase a newer concurrent failed attempt",
+    );
+    const before = (
+      await firstDb.query<{ attempts: number }>(
+        "SELECT attempts FROM poker_login_budget WHERE id=1",
+      )
+    ).rows[0].attempts;
+    await login(secondDb, run.users.manager, password);
+    assert.equal(
+      (
+        await firstDb.query<{ attempts: number }>(
+          "SELECT attempts FROM poker_login_budget WHERE id=1",
+        )
+      ).rows[0].attempts,
+      before + 1,
+      "A valid password must not reset the shared global budget",
+    );
+  } finally {
+    await firstDb.query(
+      "UPDATE poker_login_budget SET attempts=0,window_start=now() WHERE id=1",
+    );
+  }
+});
+
+test("competing operator disables cannot remove both remaining venue admins", async () => {
+  const run = await fixture();
+  await firstDb.query(
+    "UPDATE poker_memberships SET role='ADMIN' WHERE user_id=$1 AND branch_id=$2",
+    [run.users.manager, run.branchId],
+  );
+  const outcomes = await simultaneous(run.branchId, [
+    () =>
+      manageOperatorAccount(
+        firstDb,
+        operatorInput({ kind: "DISABLE", username: run.users.admin }),
+      ),
+    () =>
+      manageOperatorAccount(
+        secondDb,
+        operatorInput({ kind: "DISABLE", username: run.users.manager }),
+      ),
+  ]);
+  assert.equal(
+    outcomes.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  for (const result of outcomes)
+    if (result.status === "rejected") status(result.reason, 409);
+  const accounts = (
+    await firstDb.query<{ username: string; active: boolean }>(
+      `SELECT u.username,u.active FROM poker_users u JOIN poker_memberships m ON m.user_id=u.id
+    WHERE m.branch_id=$1 AND m.role='ADMIN' ORDER BY u.username`,
+      [run.branchId],
+    )
+  ).rows;
+  assert.equal(accounts.filter((account) => account.active).length, 1);
+  const tokens = new Map([
+    [run.users.admin, run.tokens.admin],
+    [run.users.manager, run.tokens.manager],
+  ]);
+  for (const account of accounts)
+    assert.equal(
+      Boolean(await sessionUser(firstDb, tokens.get(account.username))),
+      account.active,
+    );
+  assert.equal(
+    (
+      await firstDb.query<{ revision: number }>(
+        "SELECT revision FROM poker_branch_state WHERE branch_id=$1",
+        [run.branchId],
+      )
+    ).rows[0].revision,
+    1,
+  );
+  assert.equal(
+    (
+      await firstDb.query<{ total: string }>(
+        "SELECT count(*)::text AS total FROM poker_audit WHERE branch_id=$1",
+        [run.branchId],
+      )
+    ).rows[0].total,
+    "1",
+  );
+});
+
+test("UI and operator account changes share the same last-admin serialization", async () => {
+  const run = await fixture();
+  await firstDb.query(
+    "UPDATE poker_memberships SET role='ADMIN' WHERE user_id=$1 AND branch_id=$2",
+    [run.users.manager, run.branchId],
+  );
+  const outcomes = await simultaneous<unknown>(run.branchId, [
+    () =>
+      manageStaff(firstDb, run.tokens.admin, {
+        branchId: run.branchId,
+        actorId: run.users.admin,
+        revision: 0,
+        operationId: randomUUID(),
+        command: {
+          kind: "STAFF_DISABLE",
+          userId: run.users.manager,
+          reason: "Fictional competing UI disable",
+        },
+      }),
+    () =>
+      manageOperatorAccount(
+        secondDb,
+        operatorInput({ kind: "DISABLE", username: run.users.admin }),
+      ),
+  ]);
+  assert.equal(
+    outcomes.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  for (const result of outcomes)
+    if (result.status === "rejected") {
+      assert.ok(result.reason instanceof DomainError);
+      assert.ok([401, 409].includes(result.reason.status));
+    }
+  assert.equal(
+    (
+      await firstDb.query<{ total: string }>(
+        `SELECT count(*)::text AS total FROM poker_users u JOIN poker_memberships m ON m.user_id=u.id
+    WHERE m.branch_id=$1 AND m.role='ADMIN' AND u.active=true`,
+        [run.branchId],
+      )
+    ).rows[0].total,
+    "1",
+  );
+  assert.equal(
+    (
+      await firstDb.query<{ total: string }>(
+        "SELECT count(*)::text AS total FROM poker_audit WHERE branch_id=$1",
+        [run.branchId],
+      )
+    ).rows[0].total,
+    "1",
+  );
+});
+
+test("global disable and local demotion protect a shared admin's other venue", async () => {
+  const first = await fixture();
+  const other = await fixture();
+  await firstDb.query(
+    "UPDATE poker_memberships SET role='ADMIN' WHERE user_id=$1 AND branch_id=$2",
+    [first.users.manager, first.branchId],
+  );
+  await firstDb.query(
+    "UPDATE poker_memberships SET role='CASHIER' WHERE user_id=$1 AND branch_id=$2",
+    [other.users.admin, other.branchId],
+  );
+  await firstDb.query(
+    "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,'ADMIN')",
+    [first.users.admin, other.branchId],
+  );
+  for (const command of [
+    { kind: "DISABLE", username: first.users.admin },
+    {
+      kind: "GRANT",
+      username: first.users.admin,
+      branchId: other.branchId,
+      role: "MANAGER",
+    },
+  ] as OperatorAccountCommand[]) {
+    await assert.rejects(
+      manageOperatorAccount(secondDb, operatorInput(command)),
+      (error: unknown) => {
+        status(error, 409);
+        return true;
+      },
+    );
+  }
+  assert.ok(await sessionUser(firstDb, first.tokens.admin));
+  const states = (
+    await firstDb.query<{ revision: number }>(
+      "SELECT revision FROM poker_branch_state WHERE branch_id=ANY($1::text[])",
+      [[first.branchId, other.branchId]],
+    )
+  ).rows;
+  assert.deepEqual(
+    states.map((row) => row.revision),
+    [0, 0],
+  );
+  assert.equal(
+    (
+      await firstDb.query<{ total: string }>(
+        "SELECT count(*)::text AS total FROM poker_audit WHERE branch_id=ANY($1::text[])",
+        [[first.branchId, other.branchId]],
+      )
+    ).rows[0].total,
+    "0",
+  );
+});
+
+test("shared credential changes revoke every venue session and replay safely after restore", async () => {
+  const first = await fixture();
+  const other = await fixture();
+  await firstDb.query(
+    "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,'MANAGER')",
+    [first.users.cashier, other.branchId],
+  );
+  const otherToken = await login(secondDb, first.users.cashier, password);
+  await changeBranch(secondDb, otherToken, other.branchId);
+  await firstDb.query(
+    "INSERT INTO poker_login_attempts(username,attempts,window_start) VALUES($1,10,now()) ON CONFLICT(username) DO UPDATE SET attempts=10,window_start=now()",
+    [first.users.cashier],
+  );
+  const resetPassword = "native-reset-credential-2026";
+  const finalPassword = "native-enabled-credential-2026";
+  const reset = operatorInput({
+    kind: "PASSWORD",
+    username: first.users.cashier,
+    password: resetPassword,
+    enable: false,
+  });
+  const result = await manageOperatorAccount(secondDb, reset);
+  assert.deepEqual(result.branchIds, [first.branchId, other.branchId].sort());
+  assert.equal(await sessionUser(firstDb, first.tokens.cashier), null);
+  assert.equal(await sessionUser(firstDb, otherToken), null);
+  assert.equal(
+    (
+      await firstDb.query(
+        "SELECT username FROM poker_login_attempts WHERE username=$1",
+        [first.users.cashier],
+      )
+    ).rows.length,
+    0,
+  );
+  const fresh = await login(firstDb, first.users.cashier, resetPassword);
+  const retry = await manageOperatorAccount(secondDb, reset);
+  assert.equal(retry.replayed, true);
+  assert.ok(
+    await sessionUser(firstDb, fresh),
+    "Replaying a completed reset must not revoke a newer session",
+  );
+  await manageOperatorAccount(
+    firstDb,
+    operatorInput({ kind: "DISABLE", username: first.users.cashier }),
+  );
+  assert.equal(await sessionUser(secondDb, fresh), null);
+  await manageOperatorAccount(
+    secondDb,
+    operatorInput({
+      kind: "PASSWORD",
+      username: first.users.cashier,
+      password: finalPassword,
+      enable: true,
+    }),
+  );
+  const active = await login(firstDb, first.users.cashier, finalPassword);
+  assert.ok(await sessionUser(firstDb, active));
+  const events = (
+    await firstDb.query<{ data: { actorId: string; actor: string } }>(
+      "SELECT data FROM poker_audit WHERE entity=$1 ORDER BY branch_id,order_no",
+      [first.users.cashier],
+    )
+  ).rows;
+  assert.equal(events.length, 6);
+  assert.ok(
+    events.every((row) =>
+      row.data.actor.startsWith("Operator: Native security test operator ("),
+    ),
+  );
+  assert.equal(JSON.stringify(events).includes(resetPassword), false);
+  assert.equal(JSON.stringify(events).includes(finalPassword), false);
+  assert.equal(JSON.stringify(events).includes("password_hash"), false);
+  const actorId = events[0].data.actorId;
+  assert.equal(
+    (
+      await firstDb.query<{ active: boolean }>(
+        "SELECT active FROM poker_users WHERE id=$1",
+        [actorId],
+      )
+    ).rows[0].active,
+    false,
+  );
+  assert.equal(
+    (
+      await firstDb.query(
+        "SELECT user_id FROM poker_memberships WHERE user_id=$1",
+        [actorId],
+      )
+    ).rows.length,
+    0,
+  );
+
+  const backup = await createBackup(firstDb);
+  await restoreBackup(restoredDb, backup, async () => {});
+  assert.equal((await manageOperatorAccount(restoredDb, reset)).replayed, true);
+  const restoredToken = await login(
+    restoredDb,
+    first.users.cashier,
+    finalPassword,
+  );
+  assert.ok(await sessionUser(restoredDb, restoredToken));
+  assert.equal(
+    (
+      await restoredDb.query<{ total: string }>(
+        "SELECT count(*)::text AS total FROM poker_audit WHERE entity=$1",
+        [first.users.cashier],
+      )
+    ).rows[0].total,
+    "6",
   );
 });

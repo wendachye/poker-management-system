@@ -4,10 +4,14 @@ import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import { database, closeDatabase } from "../src/server/database";
 import { migrate } from "../src/server/schema";
-import { hashPassword } from "../src/server/auth";
 import { emptyStore } from "../src/domain/selectors";
 import type { Role } from "../src/domain/model";
 import { replaceStore } from "../src/server/storage";
+import {
+  manageOperatorAccount,
+  type OperatorAccountCommand,
+} from "../src/server/operator-accounts";
+import { randomUUID } from "node:crypto";
 loadEnvConfig(process.cwd());
 async function password() {
   if (process.env.POKER_STAFF_PASSWORD) return process.env.POKER_STAFF_PASSWORD;
@@ -42,6 +46,10 @@ async function main() {
       branch: { type: "string" },
       role: { type: "string" },
       "grant-existing": { type: "boolean" },
+      enable: { type: "boolean" },
+      operator: { type: "string" },
+      reason: { type: "string" },
+      "operation-id": { type: "string" },
     },
   });
   const db = database();
@@ -65,71 +73,60 @@ async function main() {
     console.log("Branch created.");
     return;
   }
+  const action = positionals[0];
+  if (!["staff", "password", "disable"].includes(action))
+    throw new Error("Use migrate, branch, staff, password, or disable.");
   const username = values.username?.trim().toLowerCase();
   if (!username || !/^[-a-z0-9_.@]{3,100}$/.test(username))
     throw new Error("Provide --username (3–100 letters, digits, or -_.@).");
-  if (positionals[0] === "disable") {
-    await db.transaction(async (connection) => {
-      await connection.query(
-        "UPDATE poker_users SET active=false WHERE username=$1",
-        [username],
-      );
-      await connection.query(
-        "DELETE FROM poker_sessions WHERE user_id IN (SELECT id FROM poker_users WHERE username=$1)",
-        [username],
-      );
-    });
-    console.log("Account disabled and sessions revoked.");
-    return;
-  }
-  if (positionals[0] === "password") {
-    const hash = await hashPassword(await password());
-    await db.transaction(async (connection) => {
-      const result = await connection.query(
-        "UPDATE poker_users SET password_hash=$1 WHERE username=$2 RETURNING id",
-        [hash, username],
-      );
-      if (!result.rows.length) throw new Error("Account not found.");
-      await connection.query(
-        "DELETE FROM poker_sessions WHERE user_id IN (SELECT id FROM poker_users WHERE username=$1)",
-        [username],
-      );
-    });
-    console.log("Password updated and sessions revoked.");
-    return;
-  }
-  if (positionals[0] !== "staff")
-    throw new Error("Use migrate, branch, staff, password, or disable.");
-  const role = values.role as Role;
-  if (
-    !values.branch ||
-    !["DEALER", "CASHIER", "MANAGER", "ADMIN"].includes(role)
-  )
-    throw new Error("Provide --branch and --role.");
-  const existing = (
-    await db.query<{ id: string }>(
-      "SELECT id FROM poker_users WHERE username=$1",
-      [username],
-    )
-  ).rows[0];
-  if (existing && !values["grant-existing"])
+  if (!values.operator?.trim() || !values.reason?.trim())
+    throw new Error("Account changes require --operator and --reason.");
+  if (values.enable && action !== "password")
     throw new Error(
-      "Account exists. Use --grant-existing to explicitly grant or update branch access.",
+      "Use --enable only with the password command and a new password.",
     );
-  const hash = existing ? null : await hashPassword(await password());
-  await db.transaction(async (connection) => {
-    const id = existing?.id ?? crypto.randomUUID();
-    if (!existing)
-      await connection.query(
-        "INSERT INTO poker_users(id,username,password_hash) VALUES($1,$2,$3)",
-        [id, username, hash],
-      );
-    await connection.query(
-      "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,$3) ON CONFLICT(user_id,branch_id) DO UPDATE SET role=EXCLUDED.role",
-      [id, values.branch, role],
-    );
+  if (values["grant-existing"] && action !== "staff")
+    throw new Error("Use --grant-existing only with the staff command.");
+  const operationId = values["operation-id"] ?? randomUUID();
+  // Print before prompting or mutating, so an interrupted operator can retry
+  // exactly this command with the same identifier instead of changing it twice.
+  console.log("Operator operation ID: " + operationId);
+  let command: OperatorAccountCommand;
+  if (action === "staff") {
+    const role = values.role as Role;
+    if (
+      !values.branch ||
+      !["DEALER", "CASHIER", "MANAGER", "ADMIN"].includes(role)
+    )
+      throw new Error("Provide --branch and --role.");
+    command = values["grant-existing"]
+      ? { kind: "GRANT", username, branchId: values.branch, role }
+      : {
+          kind: "CREATE",
+          username,
+          branchId: values.branch,
+          role,
+          password: await password(),
+        };
+  } else if (action === "password") {
+    command = {
+      kind: "PASSWORD",
+      username,
+      password: await password(),
+      enable: values.enable ?? false,
+    };
+  } else command = { kind: "DISABLE", username };
+  const result = await manageOperatorAccount(db, {
+    operationId,
+    operator: values.operator,
+    reason: values.reason,
+    command,
   });
-  console.log("Staff branch access saved.");
+  console.log(
+    result.replayed
+      ? "This operation was already saved; no account changes were repeated."
+      : "Staff account change saved and sessions revoked across affected venues.",
+  );
 }
 main()
   .catch((error) => {

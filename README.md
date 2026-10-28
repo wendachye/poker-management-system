@@ -109,13 +109,13 @@ For this alternative, stop the embedded launcher and use the PostgreSQL connecti
 ```sh
 yarn db:migrate
 yarn db:branch --id kl --name "Kuala Lumpur" --timezone Asia/Kuala_Lumpur
-yarn staff:create --username cashier --branch kl --role CASHIER
-yarn staff:create --username manager --branch kl --role MANAGER
-yarn staff:create --username admin --branch kl --role ADMIN
+yarn staff:create --username cashier --branch kl --role CASHIER --operator "Venue owner" --reason "Initial cashier provisioning"
+yarn staff:create --username manager --branch kl --role MANAGER --operator "Venue owner" --reason "Initial manager provisioning"
+yarn staff:create --username admin --branch kl --role ADMIN --operator "Venue owner" --reason "Initial admin provisioning"
 yarn dev
 ```
 
-Staff commands prompt for a hidden password (12–128 characters). Provision distinct people for requester and reviewer roles. There are no default production accounts or seeded business records. Visit [localhost:3000](http://localhost:3000), sign in as a manager/admin, add tables under Tables, and open the first business day under Reports.
+Staff account changes require `--operator` and `--reason`. Creation and password commands prompt for a hidden password (12–128 characters). Provision distinct people for requester and reviewer roles. There are no default production accounts or seeded business records. Visit [localhost:3000](http://localhost:3000), sign in as a manager/admin, add tables under Tables, and open the first business day under Reports.
 
 For noninteractive provisioning, pass `POKER_STAFF_PASSWORD` through a secret manager/environment; never commit it or put it in command arguments. Finish venue setup under Settings before opening the first business day.
 
@@ -123,14 +123,21 @@ For noninteractive provisioning, pass `POKER_STAFF_PASSWORD` through a secret ma
 
 ```sh
 yarn db:branch --id penang --name "Penang"
-yarn staff:create --username admin --branch penang --role ADMIN --grant-existing
-yarn staff:password --username cashier
-yarn staff:disable --username cashier
+yarn staff:create --username admin --branch penang --role ADMIN --grant-existing --operator "Venue owner" --reason "Grant Penang administration"
+yarn staff:password --username cashier --operator "Venue owner" --reason "Reset forgotten password"
+yarn staff:disable --username cashier --operator "Venue owner" --reason "Staff member departed"
+yarn staff:password --username cashier --enable --operator "Venue owner" --reason "Re-enable returning staff with new password"
 ```
 
 Admins can use **Administration → Staff accounts** to create staff, change their role, reset a password, disable an account, or enable a disabled account with a new password. The form explains each role, requires a reason, and records changes in the branch audit history without storing passwords there. Role changes, password resets, and disabling revoke the affected staff member's sessions. Admins cannot change their own account through this screen; another admin must do that. The active account list hides disabled sample actors by default.
 
 The screen only shows the current branch's staff. For accounts shared by multiple locations, it allows changing the current branch role; password resets and global enable/disable require the operator CLI. An existing account requires `--grant-existing` in the CLI to add or change branch access. Role membership is checked on every API request; branch roles may differ for the same person.
+
+The operator CLI uses the privileged database connection, not a staff login. Its audit entry records the actual database principal together with the explicit human operator label. A disabled, membership-free technical identity anchors those events; its reserved `!operator:` username cannot be created, granted access or re-enabled through staff commands. Each affected venue receives a secret-free event containing only its local role, and its revision advances atomically with the account change. Global disable is rejected if it would leave any venue without an active admin; a local role change also preserves that venue's final admin. Missing accounts fail explicitly.
+
+Password, role, disable and enable changes revoke the target's sessions across every venue and clear that account's login counter. Password reset alone preserves disabled status; use `password --enable` with a new password to restore access. A role grant changes only the chosen venue's role, even though existing sessions are revoked globally.
+
+Before changing an account, the CLI prints an operation UUID. If the result is interrupted or uncertain, use the same database principal and repeat the identical command, operator label, reason and password with `--operation-id <printed-uuid>`. A committed operation returns its prior result without resetting the password or appending audit events again. Changed details overlapping an original affected venue fail. Identifiers use the existing venue-scoped records, so generate a new UUID for each genuinely new operation. Do not generate a fresh UUID merely to retry an uncertain save. This retry record is preserved by logical backup and restore.
 
 ### Date-range reports
 
@@ -162,6 +169,8 @@ The production track and outstanding release gates are documented in [the produc
 The [backend/frontend integration guide](docs/backend-frontend-integration.md) maps each screen to its authenticated HTTP routes and persistence, explains connection/save recovery, and documents the guarded `yarn test:operations-http` workflow suite. It exercises actual Next routes and PostgreSQL, separately from the browser-memory prototype.
 
 The [indexed operations guide](docs/indexed-operations.md) describes the storage upgrade, read/export limits, exact financial summaries and simultaneous-edit behavior. It also explains the staging migration and backup rehearsal required before applying the upgrade to real venue records.
+
+The [staff access guide](docs/staff-access-security.md) records shared login budgets, bounded password work, migration v4 and operator account recovery/retry rules. Application safeguards are implemented; verified host/WAF source limits and controlled operator access still need deployment acceptance.
 
 The [capacity plan](docs/capacity-plan.md) records the target of 2–5 venues and up to fifty concurrent staff, along with synthetic local measurements. `yarn capacity:baseline` is an explicitly guarded, disposable PostgreSQL benchmark; turnover amounts do not determine its entry-count scenarios. Initial, timer and focus refreshes share an outstanding background request. An open list refreshes its bounded server page; an open player/request/receipt refreshes its focused context. Explicit refreshes remain independent. Run the versioned, checksummed migrations with `yarn db:migrate` before starting an operations release; health checks reject missing or incompatible migration metadata. Earlier full-aggregate capacity results remain historical evidence and must not be presented as measurements of the indexed implementation.
 

@@ -9,6 +9,12 @@ import type { Database, SqlConnection } from "./database";
 import { readSnapshot, touchChangeVersions } from "./repository";
 import { writeStoreDelta, type StorageMetadata } from "./storage";
 import { readOperationalSnapshot } from "./queries";
+import {
+  assertStaffAccountMutable,
+  keepActiveAdmins,
+  lockStaffAccounts,
+  revokeStaffSessions,
+} from "./staff-safety";
 
 async function admin(connection: SqlConnection, token: string | undefined) {
   const user = await requireUser(connection, token);
@@ -42,9 +48,7 @@ export async function manageStaff(
   await admin(db, token);
   return db.transaction(async (connection) => {
     // Serialize account changes across venues before checking access and admin coverage.
-    await connection.query(
-      "LOCK TABLE poker_users, poker_memberships IN SHARE ROW EXCLUSIVE MODE",
-    );
+    await lockStaffAccounts(connection);
     const actor = await admin(connection, token);
     if (actorId !== undefined && actorId !== actor.id)
       throw new DomainError(
@@ -155,6 +159,7 @@ export async function manageStaff(
           404,
         );
       target = found;
+      assertStaffAccountMutable(target);
       if (target.id === actor.id)
         throw new DomainError(
           "Ask another admin to change your own account.",
@@ -180,18 +185,7 @@ export async function manageStaff(
         (command.kind === "STAFF_DISABLE" ||
           (command.kind === "STAFF_ROLE" && command.role !== "ADMIN"))
       ) {
-        const others = (
-          await connection.query(
-            `SELECT u.id FROM poker_users u JOIN poker_memberships m ON m.user_id=u.id
-          WHERE m.branch_id=$1 AND m.role='ADMIN' AND u.active=true AND u.id<>$2`,
-            [branchId, target.id],
-          )
-        ).rows;
-        if (!others.length)
-          throw new DomainError(
-            "Keep at least one active admin in this branch.",
-            409,
-          );
+        await keepActiveAdmins(connection, target.id, [branchId]);
       }
       if (command.kind === "STAFF_ROLE") {
         await connection.query(
@@ -221,13 +215,7 @@ export async function manageStaff(
         target.active = false;
         action = "Disabled staff account";
       }
-      await connection.query("DELETE FROM poker_sessions WHERE user_id=$1", [
-        target.id,
-      ]);
-      await connection.query(
-        "DELETE FROM poker_login_attempts WHERE username=$1",
-        [target.username],
-      );
+      await revokeStaffSessions(connection, target.id, target.username);
     }
     const original = {
       ...emptyStore(),

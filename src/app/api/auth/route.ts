@@ -17,6 +17,7 @@ import {
   sessionToken,
 } from "@/server/http";
 import { DomainError } from "@/domain/operations";
+import { authAdmissionRetryAfter } from "@/server/password-work";
 
 export const runtime = "nodejs";
 export async function GET() {
@@ -59,6 +60,15 @@ export async function POST(request: Request) {
     });
     return json({ user: await requireUser(db, token) });
   } catch (error) {
+    const retryAfter = authAdmissionRetryAfter(error);
+    if (retryAfter !== null) {
+      const response = json(
+        { error: (error as Error).message },
+        (error as DomainError).status,
+      );
+      response.headers.set("Retry-After", String(retryAfter));
+      return response;
+    }
     return failure(error);
   }
 }

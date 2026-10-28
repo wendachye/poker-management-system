@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Database, SqlConnection } from "./database";
 import { indexedStorageStatements } from "./storage-schema";
 import { financialRollupStatements } from "./rollup-schema";
+import { authenticationAdmissionStatements } from "./auth-schema";
 
 // Schema changes are applied explicitly by db:migrate, never during a request.
 export const schema = `
@@ -61,6 +62,11 @@ const migrations = [
   ),
   migration(2, "indexed_operational_records", indexedStorageStatements),
   migration(3, "transactional_financial_totals", financialRollupStatements),
+  migration(
+    4,
+    "bounded_authentication_admission",
+    authenticationAdmissionStatements,
+  ),
 ];
 
 const migrationLedger = `CREATE TABLE IF NOT EXISTS poker_schema_migrations (
