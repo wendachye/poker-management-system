@@ -20,6 +20,8 @@ export function playerMoveBlockedReason(store: Store, playerId: string) {
   if (day.status !== "OPEN") return "The business day is closed.";
   const session = activeSession(store, playerId);
   if (!session) return "Player has no active session.";
+  if (store.readModel?.pendingPlayers[playerId])
+    return "Resolve pending request first";
   if (
     store.approvals.some(
       (request) =>

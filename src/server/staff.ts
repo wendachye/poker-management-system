@@ -1,11 +1,14 @@
 import "server-only";
 import { createHmac, randomUUID } from "node:crypto";
 import { staffMutationSchema, type StaffAccount } from "../domain/staff";
-import type { Store } from "../domain/model";
+import { emptyStore } from "../domain/selectors";
+import type { Snapshot } from "../domain/model";
 import { DomainError } from "../domain/operations";
 import { hashPassword, requireUser } from "./auth";
 import type { Database, SqlConnection } from "./database";
-import { readSnapshot } from "./repository";
+import { readSnapshot, touchChangeVersions } from "./repository";
+import { writeStoreDelta, type StorageMetadata } from "./storage";
+import { readOperationalSnapshot } from "./queries";
 
 async function admin(connection: SqlConnection, token: string | undefined) {
   const user = await requireUser(connection, token);
@@ -30,11 +33,12 @@ export async function manageStaff(
   db: Database,
   token: string | undefined,
   input: unknown,
-) {
+  options: { compact?: boolean } = {},
+): Promise<Snapshot> {
   const parsed = staffMutationSchema.safeParse(input);
   if (!parsed.success)
     throw new DomainError("Check the username, password, role, and reason.");
-  const { branchId, operationId, revision, command } = parsed.data;
+  const { branchId, actorId, operationId, revision, command } = parsed.data;
   await admin(db, token);
   return db.transaction(async (connection) => {
     // Serialize account changes across venues before checking access and admin coverage.
@@ -42,18 +46,34 @@ export async function manageStaff(
       "LOCK TABLE poker_users, poker_memberships IN SHARE ROW EXCLUSIVE MODE",
     );
     const actor = await admin(connection, token);
+    if (actorId !== undefined && actorId !== actor.id)
+      throw new DomainError(
+        "Your signed-in account changed. Reload this page before continuing.",
+        409,
+      );
     if (actor.branchId !== branchId)
       throw new DomainError(
         "Your active branch changed. Reload this page before continuing.",
         409,
       );
     const row = (
-      await connection.query<{ data: Store; revision: number }>(
+      await connection.query<{ data: StorageMetadata; revision: number }>(
         "SELECT data,revision FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
         [branchId],
       )
     ).rows[0];
     if (!row) throw new DomainError("Branch has not been initialized.", 503);
+    // A logout or venue switch can commit while this request waits for the row.
+    const authorized = await admin(connection, token);
+    if (
+      authorized.id !== actor.id ||
+      authorized.branchId !== actor.branchId ||
+      authorized.role !== actor.role
+    )
+      throw new DomainError(
+        "Your access changed. Reload this page before continuing.",
+        409,
+      );
     // Key the retry fingerprint so it does not expose a plain password digest.
     const key = (
       await connection.query<{ password_hash: string }>(
@@ -76,7 +96,9 @@ export async function manageStaff(
         previous.fingerprint !== fingerprint
       )
         throw new DomainError("Operation identifier was already used.", 409);
-      return readSnapshot(connection, token);
+      return options.compact
+        ? readOperationalSnapshot(connection, token)
+        : readSnapshot(connection, token);
     }
     if (revision !== row.revision)
       throw new DomainError(
@@ -207,7 +229,13 @@ export async function manageStaff(
         [target.username],
       );
     }
-    row.data.auditLogs.unshift({
+    const original = {
+      ...emptyStore(),
+      settings: row.data.settings,
+      currentDayId: row.data.currentDayId,
+    };
+    const next = structuredClone(original);
+    next.auditLogs.unshift({
       id: randomUUID(),
       time: new Date().toISOString(),
       actor: actor.username,
@@ -218,14 +246,25 @@ export async function manageStaff(
       before,
       after: JSON.stringify(target),
     });
-    await connection.query(
-      "UPDATE poker_branch_state SET data=$1,revision=revision+1 WHERE branch_id=$2",
-      [JSON.stringify(row.data), branchId],
+    await writeStoreDelta(
+      connection,
+      branchId,
+      original,
+      next,
+      row.revision + 1,
+    );
+    await touchChangeVersions(
+      connection,
+      branchId,
+      ["venue:all"],
+      row.revision + 1,
     );
     await connection.query(
       "INSERT INTO poker_operations(branch_id,operation_id,actor_id,fingerprint,revision) VALUES($1,$2,$3,$4,$5)",
-      [branchId, operationId, actor.id, fingerprint, revision + 1],
+      [branchId, operationId, actor.id, fingerprint, row.revision + 1],
     );
-    return readSnapshot(connection, token);
+    return options.compact
+      ? readOperationalSnapshot(connection, token)
+      : readSnapshot(connection, token);
   });
 }

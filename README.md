@@ -2,7 +2,7 @@
 
 A staff operations app for poker venues: player check-in, table seating, buy-ins, cash-outs, credit, table income, approvals, receipts, and daily cash reconciliation. This is not a poker game engine.
 
-Built with Next.js 16, React 19, TypeScript, PostgreSQL, and English/Chinese interfaces. Each location has separate records and staff permissions. Staff with multiple memberships can switch locations.
+Built with Next.js 16, React 19, TypeScript, PostgreSQL, and English/Chinese interfaces. Each location has separate records and staff permissions. Staff with multiple memberships can switch locations. Yarn 1.22.22 and `yarn.lock` are the canonical package-manager setup; use `yarn install --frozen-lockfile` for repeatable installs.
 
 ## Stakeholder frontend prototype
 
@@ -22,15 +22,15 @@ Use **Demo tools** for free exploration with **Busy shift** or **Ready to close*
 
 The guide shows the current step and required staff role. Continue opens the relevant screen or unsaved form; staff still review and submit every action. Switch between Cashier, Manager, Admin and Dealer to demonstrate responsibilities. A separate manager approves buy-ins and repayments; cash-outs and reversals require admin review. All amounts are fictional and follow the same workflow rules used by the app.
 
-**Reset demo** returns to the selected sample scenario. Refreshing the browser returns to the initial busy shift. Demo changes are not saved and never reach the working local database; the prototype launcher explicitly disables live database access. Prototype work lives on `codex/stakeholder-prototype` while the tested local release remains on `main`.
+**Reset demo** returns to the selected sample scenario. Refreshing the browser returns to the initial busy shift. Demo changes are not saved and never reach the working local database; the prototype launcher explicitly disables live database access.
 
 ### Stakeholder demo on Vercel
 
-Deploy the **`codex/stakeholder-prototype`** branch. Its `vercel.json` enables sample-data mode for both the build and the deployed server. Stakeholders can open `/en/login`, click **Open prototype**, and try the workflows without a staff username, password or database. Each browser tab has its own sample records; refreshing or resetting starts a fresh example.
+The current public prototype follows **`main`** through its connected Vercel project. The default `vercel.json` enables sample-data mode for both the build and deployed server. Stakeholders can open `/en/login`, click **Open prototype**, and try workflows without a staff username, password or database. Each browser tab has its own sample records; refreshing or resetting starts a fresh example.
 
 Both `NEXT_PUBLIC_POKER_PROTOTYPE=1` and `POKER_PROTOTYPE_MODE=1` must be enabled together. Public variables are built into the browser bundle, so redeploy after changing them. The prototype blocks direct staff APIs and database access when either marker is present. Do not attach an operations database or import local accounts into this demo project. Normal application builds without these markers retain staff authentication.
 
-If the deployed address still shows the staff sign-in form, check that Vercel's deployment source is this prototype branch and includes the latest commit, then redeploy. A production address pointing at `main` must be switched or promoted to the prototype deployment before it will show the sample demo.
+If a demo deployment shows staff sign-in instead, verify its source commit and that both prototype markers were enabled at build and runtime. Real operations use a separate deployment, database and configuration; do not change the stakeholder project's mode to onboard real staff.
 
 ## Local first (no Docker or cloud account)
 
@@ -147,13 +147,23 @@ The header approval bell is available throughout the management pages. Its badge
 ## Cloud deployment for multiple locations
 
 1. Provision managed PostgreSQL with TLS and automated backups/point-in-time recovery. Test a restore into an isolated database before launch. Use a dedicated application database account.
-2. Configure `DATABASE_URL` using the provider's connection string and certificate verification settings, and `APP_ORIGIN=https://your-exact-app-host` on the Node hosting service. Do not disable certificate verification. Use the same PostgreSQL database for all app instances and locations.
-3. Install dependencies, run `yarn db:migrate` as a release step, provision branches/staff through a secure operator terminal, then run `yarn build` and `yarn start`. The app requires a Node runtime; static export/edge-only hosting is unsuitable.
+2. Configure `DATABASE_URL` with dedicated credentials and explicit `sslmode=verify-full`, and `APP_ORIGIN=https://your-exact-app-host` on the Node hosting service. Disable both prototype markers. Hosted runtime rejects local/default credentials, local hosts, unsafe TLS settings, and ambiguous connection overrides. This first hosted profile uses the system certificate trust store; provider-specific custom CA support must be added and verified separately. Use the same PostgreSQL database for all app instances and locations.
+3. Install locked dependencies and run `yarn production:check` in the target environment. It validates settings without connecting or modifying records; builds remain possible without credentials. Run `yarn db:migrate` as a controlled release step, provision branches/staff through a secure operator terminal, then run `yarn build` and `yarn start`. The app requires a Node runtime; static export/edge-only hosting is unsuitable.
 4. Use HTTPS and configure the reverse proxy to preserve the public origin. Production session cookies are Secure, HttpOnly, SameSite=Strict and expire after eight hours. Avoid shared caching of authenticated responses.
-5. Configure host-level request throttling, logging/alerts and connection limits. The application pool allows five connections per instance; use provider-supported pooling for serverless deployment. The app uses local system fonts, so builds do not download fonts.
+5. Configure host-level request throttling, logging/alerts and connection limits. The application pool defaults to five connections per instance, with bounded statement, lock and idle-transaction timeouts. Set the `DATABASE_*` budgets in `.env.example` to match the deployment. Size the total pool across replicas and verify any provider pooler preserves these session settings; never disable the budgets through URL overrides or `PGOPTIONS`. Idle-connection errors are handled without logging connection secrets. The app uses local system fonts, so builds do not download fonts.
 6. Verify a cashier request, a separate reviewer approval, branch isolation, a zero cash-out, a closing count, and logout on the hosted environment before entering real records.
 
-Deployments are not automatic. This repository does not provision a hosting account, production database, domain, or secrets. `compose.yaml` is for local development only.
+The connected stakeholder Vercel project deploys automatically from `main`. This repository does not provision an operations hosting project, production database, domain, backups or secrets. `vercel.operations.json` is an explicit operations profile for a separately selected Vercel project; it runs the configuration preflight before building and disables both demo markers. Use Vercel CLI `--local-config vercel.operations.json` only with the intended operations project. Git deployments still use the default demo config until an operations release pipeline explicitly selects its own profile. `compose.yaml` is for local development only.
+
+`GET /api/health` returns no-store readiness with no staff or venue details. Paired demo mode reports prototype health without connecting to a database. Operations checks configuration, database connectivity and required schema columns, returning generic HTTP 503 when unavailable. API failures include an `X-Request-ID` that matches redacted server events; send these events to the chosen monitoring platform and configure alerts before launch.
+
+The production track and outstanding release gates are documented in [the production readiness plan](docs/production-readiness.md). The app is not yet approved for real operational data merely because configuration or health checks pass.
+
+The [backend/frontend integration guide](docs/backend-frontend-integration.md) maps each screen to its authenticated HTTP routes and persistence, explains connection/save recovery, and documents the guarded `yarn test:operations-http` workflow suite. It exercises actual Next routes and PostgreSQL, separately from the browser-memory prototype.
+
+The [indexed operations guide](docs/indexed-operations.md) describes the storage upgrade, read/export limits, exact financial summaries and simultaneous-edit behavior. It also explains the staging migration and backup rehearsal required before applying the upgrade to real venue records.
+
+The [capacity plan](docs/capacity-plan.md) records the target of 2–5 venues and up to fifty concurrent staff, along with synthetic local measurements. `yarn capacity:baseline` is an explicitly guarded, disposable PostgreSQL benchmark; turnover amounts do not determine its entry-count scenarios. Initial, timer and focus refreshes share an outstanding background request. An open list refreshes its bounded server page; an open player/request/receipt refreshes its focused context. Explicit refreshes remain independent. Run the versioned, checksummed migrations with `yarn db:migrate` before starting an operations release; health checks reject missing or incompatible migration metadata. Earlier full-aggregate capacity results remain historical evidence and must not be presented as measurements of the indexed implementation.
 
 ## Operating rules
 
@@ -174,15 +184,21 @@ Deployments are not automatic. This repository does not provision a hosting acco
 
 `src/domain` contains validated commands, business rules and selectors. `src/server` owns password hashing, session validation, SQL transactions and branch authorization. Route handlers authenticate every request, reject cross-origin mutations, and never trust a client-supplied role or username.
 
-PostgreSQL stores users, hashed session tokens, memberships, request identifiers, and one JSONB business aggregate per branch. A row lock and revision check prevent lost updates; an operation identifier prevents duplicate posting when a request is retried. A successful response follows a committed transaction. Browser records refresh every 15 seconds and on focus. Conflicting edits ask the user to review fresh data before retrying.
+PostgreSQL stores users, hashed session tokens, memberships and durable request identifiers alongside separate venue-scoped profile, table, visit, business-day, approval, ledger and audit records. Each operational record retains its domain JSON, with generated typed columns, indexes and foreign keys for queryable references. Constraints enforce unique player phones, active visits/seats, one posting per approval and one reversal per original. The branch row holds settings, the current-day pointer, migration concurrency floor and revision; it no longer contains the venue's lifetime history.
+
+Migration v1 records the original schema. Migration v2 moves valid legacy aggregate records into the indexed tables without resetting their identities, references or retry history. Migration v3 creates and backfills derived financial totals for the venue, player, day, player/day and table/day scopes. Ledger changes and their summary updates commit in the same transaction. Routine reads and command validation use these exact totals, with checked integer-sen conversion, instead of reconstructing balances from a truncated ledger page. Full logical backup/import and recovery paths reconstruct or rebuild the complete records and derived totals explicitly.
+
+`GET /api/state` returns compact operational context: rules, physical tables, active seats, limited recent/reference records and exact summary values. `GET /api/read` performs authenticated server-side search/filtering and numbered pagination for players, requests, transactions, audit history, sessions and report rows. Pages default to 20 records and are capped at 50. Player/request/receipt details fetch their required context before opening. Old reports can be selected by calendar date; report totals and CSV exports cover the complete selected scope rather than the visible page. The stakeholder prototype keeps its separate complete browser-memory selectors and never calls these staff read endpoints.
+
+The financial writer loads and persists the records its command needs, keeping ledger, seats, approvals, audit and summary changes atomic. A venue row lock still serializes commits. Operational command conflicts now check the relevant player, seat, table, request, balance, rules and business-day dependencies against the revision actually reviewed in the form. Unrelated operational edits can save without a blanket venue-revision rejection; changes affecting the reviewed operation still require fresh review. Staff/account and location administration retain stricter locks and venue-revision checks. Operation identifiers continue to prevent duplicate posting after an uncertain response. This is safer conflict handling within serialized transactions, not unrestricted parallel financial posting.
 
 The UI keeps unsent drafts in memory across module navigation. Reloading, signing out, changing language or switching branches clears those drafts. Business data is never stored in browser localStorage. Old prototype localStorage is neither trusted nor imported.
 
 ### Boundaries before larger rollouts
 
-The branch aggregate deliberately keeps ledger, seats, approvals and audit updates atomic, but reads/writes the full branch history. UI pagination currently limits rendered rows, not database transfer. Before high-volume operation, split the aggregate into indexed ledger/session/approval tables, add server pagination and load-test against the intended staff concurrency. PGlite tests do not replace production PostgreSQL load/restore tests.
+Indexed storage and scoped reads remove lifetime-history transfer from ordinary screens and writes. Physical venue configuration, active seating and a selected report's bounded date range remain part of the appropriate context. Before high-volume operation, repeat mixed-workload and longer-running tests against the selected cloud PostgreSQL version, pooler, region and replica count. A small local fixture, passing correctness checks or an embedded PGlite run does not establish cloud capacity or recovery readiness.
 
-The application prevents editing original entries through its API, but database administrators can change stored JSONB. External immutable audit retention, MFA/SSO, granular read permissions, organization-level reporting, currency configuration and disconnected multi-device synchronization are not implemented. Local mode runs without cloud services on a single computer. Authorized branch staff currently see the branch's complete operational records. Do not treat the audit log as tamper-proof.
+The application prevents editing original entries through its API, but privileged database administrators can alter stored records. External immutable audit retention, MFA/SSO, finer read permissions, organization-level reporting, currency configuration and disconnected multi-device synchronization are not implemented. Local mode runs without cloud services on a single computer. Existing venue membership and route-role permissions remain in force; pagination limits transfer rather than creating a new permission model. Do not treat the audit log as tamper-proof.
 
 ## Verification
 
@@ -240,6 +256,10 @@ node --conditions=react-server --import tsx tests/ui-server.ts
 
 This starts a separate app at `http://127.0.0.1:3001` with an in-memory database on port 55434 and build output in `.local/ui-next`. Test accounts are `qa.admin`, `qa.manager`, `qa.cashier`, and `qa.dealer`, all with the test-only password `ui-test-password`. Both test venues start with the sample rules and tables above and setup complete, with no business day, players, or transactions. All test records disappear when this helper stops; it does not use `.local/postgres`. Use the separate hostname as shown so test sign-ins do not replace the normal localhost session.
 
+This helper applies the normal versioned migrations and explicitly disables both prototype flags, so the screens exercise the real staff APIs and database adapter rather than browser-memory prototype responses. `/api/health` reports operations readiness after setup. To run beside another preview, set `UI_TEST_PORT`, `UI_TEST_DATABASE_PORT` and a dedicated `UI_TEST_DIST_DIR` such as `.local/ui-integration-next`; the default ports and folder above remain unchanged. This embedded test database verifies application integration, while the separate PostgreSQL integration suite verifies independent connections and locking on PostgreSQL itself.
+
+Add `--pagination` alongside `--finance-layout` for 45 extra fictional directory profiles, making the populated fixture span multiple server pages. The sample database remains temporary and separate from persistent local venues.
+
 ### Create and edit forms
 
 Management forms share labelled sections, a single-column phone layout and paired desktop fields. Required fields have a visible marker; optional fields and inherited table defaults are explicit. Dialog headers and 44px action buttons remain outside the scrolling form body. The save button targets its form by ID, so both click and Enter preserve validation and the existing approval flow. Invalid fields receive focus, submit errors are focusable, and canceling an edited form offers continue/discard with focus returned to the opener. Staff password fields have separate accessible show/hide controls.
@@ -248,11 +268,11 @@ The local 2026-10-21 form pass reviewed all 13 management form sites, including 
 
 ### Tables and list views
 
-Players, transactions, approvals, tables, locations, staff, audit history, player results, closing history, daily breakdowns and session history share named searches, live result counts and 20-row pagination. Filters apply immediately in a bounded popover, with removable criteria chips, a search-only clear button, and a Clear all action. Changing list criteria resets the page; the page also clamps when refreshed data reduces the result count. Empty records and searches with no matches use different guidance. Fixed summary comparisons and small reference lists keep their simpler presentation.
+Players, transactions, approvals, tables, locations, staff, audit history, player results, closing history, daily breakdowns and session history share named searches, live result counts and 20-row pagination. Large operational/history lists obtain filtered rows and exact counts from `/api/read`; small configuration/reference lists and a single day's closing snapshots keep local presentation over their loaded scope. Filters apply immediately in a bounded popover, with removable criteria chips, a search-only clear button, and a Clear all action. Changing list criteria resets the page; the page also clamps when refreshed data reduces the result count. Empty records and searches with no matches use different guidance.
 
 Frequent actions remain visible; secondary actions use a contextual shadcn menu. Existing role restrictions, approval requirements, disabled reasons and confirmation forms remain in effect. Tables switch to labelled cards below 1024px, with separate action areas and 44px phone controls. Report list filters only change visible rows: totals, comparisons and CSV exports use the complete selected report. Searching a read-only player history does not trigger a discard-draft warning.
 
-The 2026-10-21 list browser pass used practice data to check combined filters, individual removal, trimmed searches, no-match recovery, page boundaries/reset, contextual actions and responsive layouts at 1440px desktop, 900px tablet and 360px phone widths. Screenshots and detailed scope are in the ignored `.local/lists-review-2026-10-21` directory. No operational records or account access were changed in this pass. Pagination remains client-side over the branch aggregate; it does not reduce database transfer.
+The 2026-10-21 list browser pass used practice data to check combined filters, individual removal, trimmed searches, no-match recovery, page boundaries/reset, contextual actions and responsive layouts at 1440px desktop, 900px tablet and 360px phone widths. Screenshots and detailed scope are in the ignored `.local/lists-review-2026-10-21` directory. No operational records or account access were changed in that pass. It predates indexed server reads and used client-side aggregate pagination; current operations pagination is described above and requires its own verification evidence.
 
 ### Final local workflow verification
 

@@ -1,0 +1,850 @@
+import assert from "node:assert/strict";
+import { randomBytes, randomUUID } from "node:crypto";
+import { after, before, test } from "node:test";
+import { Pool } from "pg";
+import { DomainError } from "../src/domain/operations";
+import type { Command } from "../src/domain/commands";
+import {
+  changeBranch,
+  hashPassword,
+  login,
+  logout,
+  sessionUser,
+} from "../src/server/auth";
+import { createBackup, restoreBackup, type Backup } from "../src/server/backup";
+import { databaseFromPool, type Database } from "../src/server/database";
+import { databasePoolOptions } from "../src/server/database-options";
+import { mutate, readSnapshot } from "../src/server/repository";
+import { migrate, schemaMigrationStatus } from "../src/server/schema";
+import { manageStaff } from "../src/server/staff";
+import { createLocation } from "../src/server/locations";
+import { configuredStore } from "./helpers/store";
+import { replaceStore } from "../src/server/storage";
+
+function testDatabaseUrl(value: string | undefined) {
+  const message =
+    "POSTGRES_TEST_DATABASE_URL must explicitly name a loopback PostgreSQL database poker_test or poker_test_* without connection query overrides.";
+  if (!value) throw new Error(message);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(message);
+  }
+  if (
+    !["postgres:", "postgresql:"].includes(url.protocol) ||
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+    !/^\/poker_test(?:_[a-z0-9_]+)?$/.test(url.pathname) ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(message);
+  return { connectionString: value, database: url.pathname.slice(1) };
+}
+
+// Validate before constructing any pool. Never fall back to DATABASE_URL or .env.
+const target = testDatabaseUrl(process.env.POSTGRES_TEST_DATABASE_URL);
+const sourceSchema = `poker_test_${randomBytes(8).toString("hex")}`;
+const restoredSchema = `poker_test_${randomBytes(8).toString("hex")}`;
+const ownedSchemas = new Set([sourceSchema, restoredSchema]);
+const createdSchemas = new Set<string>();
+const pools: Pool[] = [];
+const password = "postgres-integration-test-password";
+let passwordHash = "";
+
+function quotedSchema(schema: string) {
+  assert.ok(
+    ownedSchemas.has(schema) && /^poker_test_[a-f0-9]{16}$/.test(schema),
+  );
+  return `"${schema}"`;
+}
+
+function poolFor(schema: string, budgets: Record<string, string> = {}) {
+  assert.ok(schema === "pg_catalog" || ownedSchemas.has(schema));
+  const pool = new Pool({
+    connectionString: target.connectionString,
+    ...databasePoolOptions({
+      DATABASE_URL: target.connectionString,
+      DATABASE_POOL_MAX: "1",
+      DATABASE_STATEMENT_TIMEOUT_MS: "15000",
+      DATABASE_LOCK_TIMEOUT_MS: "10000",
+      DATABASE_IDLE_TRANSACTION_TIMEOUT_MS: "30000",
+      ...budgets,
+    }),
+    options: `-c search_path=${schema}`,
+    application_name: `poker-integration-${schema}`,
+  });
+  // Unexpected idle-connection errors fail the test rather than terminating Node.
+  pool.on("error", (error) => {
+    const code =
+      "code" in error && typeof error.code === "string"
+        ? error.code
+        : "UNKNOWN";
+    assert.fail(`PostgreSQL test pool error: ${code}`);
+  });
+  pools.push(pool);
+  return pool;
+}
+
+const administrator = poolFor("pg_catalog");
+const firstPool = poolFor(sourceSchema);
+const secondPool = poolFor(sourceSchema);
+const lockPool = poolFor(sourceSchema);
+const restoredPool = poolFor(restoredSchema);
+const firstDb = databaseFromPool(firstPool);
+const secondDb = databaseFromPool(secondPool);
+const restoredDb = databaseFromPool(restoredPool);
+
+before(async () => {
+  assert.equal(
+    (
+      await administrator.query<{ name: string }>(
+        "SELECT current_database() AS name",
+      )
+    ).rows[0].name,
+    target.database,
+  );
+  for (const schema of ownedSchemas) {
+    await administrator.query(`CREATE SCHEMA ${quotedSchema(schema)}`);
+    createdSchemas.add(schema);
+  }
+  assert.equal(
+    (await firstPool.query<{ name: string }>("SELECT current_schema() AS name"))
+      .rows[0].name,
+    sourceSchema,
+  );
+  await Promise.all([migrate(firstDb), migrate(secondDb), migrate(restoredDb)]);
+  passwordHash = await hashPassword(password);
+});
+
+after(async () => {
+  try {
+    await Promise.all(
+      pools.filter((pool) => pool !== administrator).map((pool) => pool.end()),
+    );
+    for (const schema of createdSchemas)
+      await administrator.query(`DROP SCHEMA ${quotedSchema(schema)} CASCADE`);
+  } finally {
+    await administrator.end();
+  }
+});
+
+async function fixture(db: Database = firstDb) {
+  const branchId = `case_${randomBytes(6).toString("hex")}`;
+  const users = {
+    admin: `${branchId}_admin`,
+    manager: `${branchId}_manager`,
+    cashier: `${branchId}_cashier`,
+  };
+  await db.transaction(async (connection) => {
+    await connection.query(
+      "INSERT INTO poker_branches(id,name) VALUES($1,$1)",
+      [branchId],
+    );
+    await replaceStore(connection, branchId, configuredStore());
+    for (const [name, role] of [
+      [users.admin, "ADMIN"],
+      [users.manager, "MANAGER"],
+      [users.cashier, "CASHIER"],
+    ] as const) {
+      await connection.query(
+        "INSERT INTO poker_users(id,username,password_hash) VALUES($1,$1,$2)",
+        [name, passwordHash],
+      );
+      await connection.query(
+        "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,$3)",
+        [name, branchId, role],
+      );
+    }
+  });
+  const tokens = {
+    admin: await login(db, users.admin, password),
+    manager: await login(db, users.manager, password),
+    cashier: await login(db, users.cashier, password),
+  };
+  return { branchId, users, tokens };
+}
+
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+function payload(branchId: string, revision: number, command: Command) {
+  return { branchId, revision, operationId: randomUUID(), command };
+}
+async function execute(
+  run: Fixture,
+  command: Command,
+  actor: keyof Fixture["tokens"] = "admin",
+) {
+  const before = await readSnapshot(firstDb, run.tokens[actor]);
+  return mutate(
+    firstDb,
+    run.tokens[actor],
+    payload(run.branchId, before.revision, command),
+  );
+}
+const tableCommand = (name: string): Extract<Command, { kind: "TABLE" }> => ({
+  kind: "TABLE",
+  name,
+  dealer: "",
+  status: "OPEN",
+});
+function status(error: unknown, expected: number) {
+  assert.ok(error instanceof DomainError);
+  assert.equal(error.status, expected);
+}
+function sqlState(expected: string) {
+  return (error: unknown) => {
+    assert.ok(error && typeof error === "object" && "code" in error);
+    assert.equal(error.code, expected);
+    return true;
+  };
+}
+async function backendPid(pool: Pool) {
+  return (await pool.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+    .rows[0].pid;
+}
+
+async function waitForBlocked(waiter: number, holder: number) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const { rows } = await administrator.query<{ blocked: boolean }>(
+      `WITH RECURSIVE blockers(pid) AS (
+         SELECT unnest(pg_blocking_pids($2::int))
+         UNION
+         SELECT unnest(pg_blocking_pids(blockers.pid)) FROM blockers
+       )
+       SELECT EXISTS(SELECT 1 FROM blockers WHERE pid=$1::int)
+       AND EXISTS(SELECT 1 FROM pg_locks WHERE pid=$2 AND NOT granted) AS blocked`,
+      [holder, waiter],
+    );
+    if (rows[0].blocked) return;
+  }
+  assert.fail(
+    "Expected the independent PostgreSQL connection to wait for the held row lock.",
+  );
+}
+
+/** Queue both requests behind a real lock, then release them together. */
+async function simultaneous<T>(
+  branchId: string,
+  actions: [() => Promise<T>, () => Promise<T>],
+) {
+  const holder = await lockPool.connect();
+  let pending: Promise<PromiseSettledResult<T>[]> | undefined;
+  let committed = false;
+  try {
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT branch_id FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
+      [branchId],
+    );
+    const holderPid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0].pid;
+    const [firstPid, secondPid] = await Promise.all([
+      backendPid(firstPool),
+      backendPid(secondPool),
+    ]);
+    assert.notEqual(firstPid, secondPid);
+    pending = Promise.allSettled(actions.map((action) => action()));
+    await Promise.all([
+      waitForBlocked(firstPid, holderPid),
+      waitForBlocked(secondPid, holderPid),
+    ]);
+    await holder.query("COMMIT");
+    committed = true;
+    return await pending;
+  } finally {
+    if (!committed) await holder.query("ROLLBACK");
+    holder.release();
+    if (pending) await pending;
+  }
+}
+
+/** Change the session only after an independent writer is waiting on the row. */
+async function sessionChangeWhileBlocked<T>(
+  branchId: string,
+  action: () => Promise<T>,
+  changeSession: () => Promise<void>,
+) {
+  const holder = await lockPool.connect();
+  let pending: Promise<PromiseSettledResult<T>[]> | undefined;
+  let committed = false;
+  try {
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT branch_id FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
+      [branchId],
+    );
+    const holderPid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0].pid;
+    const waiterPid = await backendPid(secondPool);
+    pending = Promise.allSettled([action()]);
+    await waitForBlocked(waiterPid, holderPid);
+    await changeSession();
+    await holder.query("COMMIT");
+    committed = true;
+    return (await pending)[0];
+  } finally {
+    if (!committed) await holder.query("ROLLBACK");
+    holder.release();
+    if (pending) await pending;
+  }
+}
+
+test("independent migration runners serialize fresh bootstrap and record the baseline once", async () => {
+  assert.deepEqual(await schemaMigrationStatus(firstDb), {
+    ready: true,
+    appliedVersion: 3,
+    expectedVersion: 3,
+  });
+  const recorded = await firstDb.query<{ total: string }>(
+    "SELECT count(*)::text AS total FROM poker_schema_migrations",
+  );
+  assert.equal(recorded.rows[0].total, "3");
+});
+
+test("PostgreSQL integration target guard rejects operational and overridden destinations", () => {
+  for (const value of [
+    undefined,
+    "",
+    "not a URL",
+    "postgresql://example.com/poker_test",
+    "postgresql://127.0.0.1/poker",
+    "postgresql://127.0.0.1/postgres",
+    "postgresql://127.0.0.1/poker_test?host=example.com",
+    "postgresql://127.0.0.1/poker_test?dbname=poker",
+    "postgresql://127.0.0.1/poker_test?options=-csearch_path=public",
+    "postgresql://127.0.0.1/poker_test#anything",
+  ])
+    assert.throws(() => testDatabaseUrl(value), /POSTGRES_TEST_DATABASE_URL/);
+  for (const value of [
+    "postgresql://127.0.0.1/poker_test",
+    "postgresql://localhost/poker_test_local",
+    "postgresql://[::1]/poker_test_ci",
+  ])
+    assert.equal(testDatabaseUrl(value).connectionString, value);
+});
+
+test("two independent requests with the same operation identifier commit one mutation", async () => {
+  const run = await fixture();
+  const input = payload(run.branchId, 0, tableCommand("Idempotent table"));
+  const results = await simultaneous(run.branchId, [
+    () => mutate(firstDb, run.tokens.admin, input),
+    () => mutate(secondDb, run.tokens.admin, input),
+  ]);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    2,
+  );
+  const snapshot = await readSnapshot(firstDb, run.tokens.admin);
+  assert.equal(snapshot.revision, 1);
+  assert.equal(snapshot.store.tables.length, 1);
+  assert.equal(snapshot.store.auditLogs.length, 1);
+  assert.equal(
+    (
+      await firstPool.query(
+        "SELECT 1 FROM poker_operations WHERE branch_id=$1",
+        [run.branchId],
+      )
+    ).rowCount,
+    1,
+  );
+});
+
+test("simultaneous stale edits commit one change and return one 409 conflict", async () => {
+  const run = await fixture();
+  const created = await execute(run, tableCommand("Shared table"));
+  const tableId = created.store.tables[0].id;
+  const results = await simultaneous(run.branchId, [
+    () =>
+      mutate(
+        firstDb,
+        run.tokens.admin,
+        payload(run.branchId, created.revision, {
+          ...tableCommand("First candidate"),
+          tableId,
+        }),
+      ),
+    () =>
+      mutate(
+        secondDb,
+        run.tokens.admin,
+        payload(run.branchId, created.revision, {
+          ...tableCommand("Second candidate"),
+          tableId,
+        }),
+      ),
+  ]);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  const rejected = results.find((result) => result.status === "rejected");
+  assert.ok(rejected?.status === "rejected");
+  status(rejected.reason, 409);
+  const snapshot = await readSnapshot(firstDb, run.tokens.admin);
+  assert.equal(snapshot.revision, created.revision + 1);
+  assert.equal(snapshot.store.tables.length, 1);
+});
+
+test("independent PostgreSQL writers save different tables from one reviewed revision", async () => {
+  const run = await fixture();
+  await execute(run, tableCommand("First table"));
+  const before = await execute(run, tableCommand("Second table"));
+  const results = await simultaneous(run.branchId, [
+    () =>
+      mutate(
+        firstDb,
+        run.tokens.admin,
+        payload(run.branchId, before.revision, {
+          ...tableCommand("First updated"),
+          tableId: before.store.tables[0].id,
+        }),
+      ),
+    () =>
+      mutate(
+        secondDb,
+        run.tokens.manager,
+        payload(run.branchId, before.revision, {
+          ...tableCommand("Second updated"),
+          tableId: before.store.tables[1].id,
+        }),
+      ),
+  ]);
+  assert.equal(
+    results.filter((value) => value.status === "fulfilled").length,
+    2,
+  );
+  const after = await readSnapshot(firstDb, run.tokens.admin);
+  assert.equal(after.revision, before.revision + 2);
+  assert.deepEqual(
+    after.store.tables.map((value) => value.name),
+    ["First updated", "Second updated"],
+  );
+});
+
+test("concurrent independent approvals cannot post the same request twice", async () => {
+  const run = await fixture();
+  const table = await execute(run, tableCommand("Approval table"));
+  await execute(run, { kind: "OPEN_DAY", date: "2026-10-28", openingCash: 0 });
+  const requested = await execute(
+    run,
+    {
+      kind: "REQUEST",
+      type: "Rake",
+      amount: 5000,
+      tableId: table.store.tables[0].id,
+      note: "Concurrent approval test",
+    },
+    "cashier",
+  );
+  const approvalId = requested.store.approvals[0].id;
+  const command: Command = { kind: "DECIDE", approvalId, decision: "APPROVED" };
+  const results = await simultaneous(run.branchId, [
+    () =>
+      mutate(
+        firstDb,
+        run.tokens.manager,
+        payload(run.branchId, requested.revision, command),
+      ),
+    () =>
+      mutate(
+        secondDb,
+        run.tokens.admin,
+        payload(run.branchId, requested.revision, command),
+      ),
+  ]);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  const rejected = results.find((result) => result.status === "rejected");
+  assert.ok(rejected?.status === "rejected");
+  status(rejected.reason, 409);
+  const snapshot = await readSnapshot(firstDb, run.tokens.admin);
+  assert.equal(snapshot.revision, requested.revision + 1);
+  assert.equal(snapshot.store.approvals[0].status, "APPROVED");
+  assert.equal(snapshot.store.approvals[0].votes.length, 1);
+  assert.equal(snapshot.store.transactions.length, 1);
+  assert.equal(snapshot.store.transactions[0].approvalId, approvalId);
+  assert.equal(snapshot.store.transactions[0].cashReceived, 5000);
+});
+
+test("independent PostgreSQL credit reservations from one reviewed balance cannot overcommit it", async () => {
+  const run = await fixture();
+  const table = await execute(run, tableCommand("Credit reservation table"));
+  const tableId = table.store.tables[0].id;
+  await execute(run, { kind: "OPEN_DAY", date: "2026-10-28", openingCash: 0 });
+  const checked = await execute(run, {
+    kind: "CHECK_IN",
+    name: "Concurrent credit",
+    phone: "+12025550901",
+    type: "CREDIT",
+    creditLimit: 100_000,
+    tags: [],
+    tableId,
+    seat: 1,
+  });
+  const playerId = checked.store.profiles[0].id;
+  const command: Command = {
+    kind: "REQUEST",
+    type: "Buy-in",
+    playerId,
+    amount: 60_000,
+    note: "Competing credit reservation",
+  };
+  const result = await simultaneous(run.branchId, [
+    () =>
+      mutate(
+        firstDb,
+        run.tokens.cashier,
+        payload(run.branchId, checked.revision, command),
+      ),
+    () =>
+      mutate(
+        secondDb,
+        run.tokens.manager,
+        payload(run.branchId, checked.revision, command),
+      ),
+  ]);
+  assert.equal(
+    result.filter((value) => value.status === "fulfilled").length,
+    1,
+  );
+  const rejected = result.find((value) => value.status === "rejected");
+  assert.ok(rejected?.status === "rejected");
+  status(rejected.reason, 409);
+  const after = await readSnapshot(firstDb, run.tokens.admin);
+  assert.equal(
+    after.store.approvals
+      .filter((value) => value.status === "PENDING")
+      .reduce((sum, value) => sum + value.amount, 0),
+    60_000,
+  );
+  assert.equal(after.store.transactions.length, 0);
+});
+
+test("independent PostgreSQL approvals for different players both post from one reviewed revision", async () => {
+  const run = await fixture();
+  const table = await execute(run, tableCommand("Independent approvals"));
+  const tableId = table.store.tables[0].id;
+  await execute(run, { kind: "OPEN_DAY", date: "2026-10-28", openingCash: 0 });
+  const approvalIds: string[] = [];
+  for (let seat = 1; seat <= 2; seat++) {
+    const checked = await execute(run, {
+      kind: "CHECK_IN",
+      name: `Cash player ${seat}`,
+      phone: `+1202555080${seat}`,
+      type: "CASH",
+      creditLimit: 0,
+      tags: [],
+      tableId,
+      seat,
+    });
+    const playerId = checked.store.profiles.at(-1)!.id;
+    const request = await execute(
+      run,
+      {
+        kind: "REQUEST",
+        type: "Buy-in",
+        playerId,
+        amount: 50_000,
+        note: "Independent cash request",
+      },
+      "cashier",
+    );
+    approvalIds.push(request.store.approvals[0].id);
+  }
+  const before = await readSnapshot(firstDb, run.tokens.admin);
+  const results = await simultaneous(run.branchId, [
+    () =>
+      mutate(
+        firstDb,
+        run.tokens.manager,
+        payload(run.branchId, before.revision, {
+          kind: "DECIDE",
+          approvalId: approvalIds[0],
+          decision: "APPROVED",
+        }),
+      ),
+    () =>
+      mutate(
+        secondDb,
+        run.tokens.admin,
+        payload(run.branchId, before.revision, {
+          kind: "DECIDE",
+          approvalId: approvalIds[1],
+          decision: "APPROVED",
+        }),
+      ),
+  ]);
+  assert.equal(
+    results.filter((value) => value.status === "fulfilled").length,
+    2,
+  );
+  const after = await readSnapshot(firstDb, run.tokens.admin);
+  assert.equal(after.revision, before.revision + 2);
+  assert.equal(after.store.transactions.length, 2);
+  assert.equal(
+    after.store.transactions.reduce(
+      (sum, value) => sum + value.cashReceived,
+      0,
+    ),
+    100_000,
+  );
+  assert.equal(
+    after.store.approvals.every((value) => value.status === "APPROVED"),
+    true,
+  );
+});
+
+test("a request waiting for a row lock rechecks revoked authentication before writing", async () => {
+  const run = await fixture();
+  const holder = await lockPool.connect();
+  let pending: Promise<PromiseSettledResult<unknown>[]> | undefined;
+  let committed = false;
+  try {
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT branch_id FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
+      [run.branchId],
+    );
+    const holderPid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0].pid;
+    const waiterPid = await backendPid(secondPool);
+    pending = Promise.allSettled([
+      mutate(
+        secondDb,
+        run.tokens.manager,
+        payload(run.branchId, 0, tableCommand("Must not be saved")),
+      ),
+    ]);
+    await waitForBlocked(waiterPid, holderPid);
+    await holder.query("UPDATE poker_users SET active=false WHERE id=$1", [
+      run.users.manager,
+    ]);
+    await holder.query("DELETE FROM poker_sessions WHERE user_id=$1", [
+      run.users.manager,
+    ]);
+    await holder.query("COMMIT");
+    committed = true;
+    const [result] = await pending;
+    assert.equal(result.status, "rejected");
+    if (result.status === "rejected") status(result.reason, 401);
+    const snapshot = await readSnapshot(firstDb, run.tokens.admin);
+    assert.equal(snapshot.revision, 0);
+    assert.equal(snapshot.store.tables.length, 0);
+    assert.equal(snapshot.store.auditLogs.length, 0);
+  } finally {
+    if (!committed) await holder.query("ROLLBACK");
+    holder.release();
+    if (pending) await pending;
+  }
+});
+
+for (const operationType of ["staff", "location"] as const)
+  for (const sessionChange of ["logout", "venue switch"] as const)
+    test(`${operationType} creation waiting for a venue lock rejects a committed ${sessionChange}`, async () => {
+      const run = await fixture();
+      const destination = await fixture();
+      await firstDb.query(
+        "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,'ADMIN')",
+        [run.users.admin, destination.branchId],
+      );
+      const targetId = `queued-${randomBytes(6).toString("hex")}`;
+      const operationId = randomUUID();
+      const input = {
+        branchId: run.branchId,
+        revision: 0,
+        operationId,
+        command:
+          operationType === "staff"
+            ? {
+                kind: "STAFF_CREATE",
+                username: targetId,
+                password,
+                role: "CASHIER",
+                reason: "Must not survive a session change while waiting",
+              }
+            : {
+                kind: "CREATE_LOCATION",
+                id: targetId,
+                name: "Must not be created after a session change",
+                timezone: "Asia/Kuala_Lumpur",
+              },
+      };
+      const result = await sessionChangeWhileBlocked(
+        run.branchId,
+        () =>
+          operationType === "staff"
+            ? manageStaff(secondDb, run.tokens.admin, input)
+            : createLocation(secondDb, run.tokens.admin, input),
+        () =>
+          sessionChange === "logout"
+            ? logout(firstDb, run.tokens.admin)
+            : changeBranch(firstDb, run.tokens.admin, destination.branchId),
+      );
+      assert.equal(result.status, "rejected");
+      if (result.status === "rejected")
+        status(result.reason, sessionChange === "logout" ? 401 : 409);
+      assert.equal(
+        (
+          await firstDb.query("SELECT id FROM poker_users WHERE username=$1", [
+            targetId,
+          ])
+        ).rows.length,
+        0,
+      );
+      assert.equal(
+        (
+          await firstDb.query("SELECT id FROM poker_branches WHERE id=$1", [
+            targetId,
+          ])
+        ).rows.length,
+        0,
+      );
+      const source = await readSnapshot(firstDb, run.tokens.manager);
+      assert.equal(source.revision, 0);
+      assert.equal(source.store.auditLogs.length, 0);
+      assert.equal(
+        (
+          await firstDb.query(
+            "SELECT operation_id FROM poker_operations WHERE branch_id=$1 AND operation_id=$2",
+            [run.branchId, operationId],
+          )
+        ).rows.length,
+        0,
+      );
+      const actor = await sessionUser(firstDb, run.tokens.admin);
+      if (sessionChange === "logout") assert.equal(actor, null);
+      else assert.equal(actor?.branchId, destination.branchId);
+    });
+
+test("server lock timeouts roll back the request and the connection remains usable", async () => {
+  const run = await fixture();
+  const timedPool = poolFor(sourceSchema, {
+    DATABASE_LOCK_TIMEOUT_MS: "100",
+    DATABASE_STATEMENT_TIMEOUT_MS: "1000",
+  });
+  const timedDb = databaseFromPool(timedPool);
+  const holder = await lockPool.connect();
+  try {
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT branch_id FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
+      [run.branchId],
+    );
+    await assert.rejects(
+      mutate(
+        timedDb,
+        run.tokens.admin,
+        payload(run.branchId, 0, tableCommand("Timed out")),
+      ),
+      sqlState("55P03"),
+    );
+  } finally {
+    await holder.query("ROLLBACK");
+    holder.release();
+  }
+  assert.equal(
+    (await timedDb.query<{ value: number }>("SELECT 42 AS value")).rows[0]
+      .value,
+    42,
+  );
+  assert.equal((await readSnapshot(firstDb, run.tokens.admin)).revision, 0);
+  assert.equal(
+    (await readSnapshot(firstDb, run.tokens.admin)).store.tables.length,
+    0,
+  );
+});
+
+test("server statement timeouts cancel work and allow a subsequent transaction", async () => {
+  const timedPool = poolFor(sourceSchema, {
+    DATABASE_LOCK_TIMEOUT_MS: "100",
+    DATABASE_STATEMENT_TIMEOUT_MS: "200",
+  });
+  const db = databaseFromPool(timedPool);
+  assert.equal(
+    (await db.query<{ statement_timeout: string }>("SHOW statement_timeout"))
+      .rows[0].statement_timeout,
+    "200ms",
+  );
+  await assert.rejects(
+    db.transaction((connection) => connection.query("SELECT pg_sleep(1)")),
+    sqlState("57014"),
+  );
+  const next = await db.transaction((connection) =>
+    connection.query<{ value: number }>("SELECT 42 AS value"),
+  );
+  assert.equal(next.rows[0].value, 42);
+});
+
+test("a transaction failure rolls every preceding write back", async () => {
+  const branchId = `rollback_${randomBytes(6).toString("hex")}`;
+  await assert.rejects(
+    firstDb.transaction(async (connection) => {
+      await connection.query(
+        "INSERT INTO poker_branches(id,name) VALUES($1,$1)",
+        [branchId],
+      );
+      await connection.query("SELECT 1/0");
+    }),
+    sqlState("22012"),
+  );
+  assert.equal(
+    (
+      await firstDb.query("SELECT id FROM poker_branches WHERE id=$1", [
+        branchId,
+      ])
+    ).rows.length,
+    0,
+  );
+  assert.equal(
+    (await firstDb.query<{ value: number }>("SELECT 42 AS value")).rows[0]
+      .value,
+    42,
+  );
+});
+
+test("a full backup restores into a second isolated schema without changing its source", async () => {
+  const source = await fixture();
+  const originalInput = payload(
+    source.branchId,
+    0,
+    tableCommand("Backup source table"),
+  );
+  await mutate(firstDb, source.tokens.admin, originalInput);
+  const backup = await createBackup(firstDb);
+  const destination = await fixture(restoredDb);
+  let safetyBackup: Backup | undefined;
+  await restoreBackup(restoredDb, backup, async (beforeRestore) => {
+    safetyBackup = beforeRestore;
+  });
+  assert.ok(
+    safetyBackup?.payload.branches.some(
+      (branch) => branch.id === destination.branchId,
+    ),
+  );
+  const restored = await createBackup(restoredDb);
+  assert.deepEqual(
+    { ...restored.payload, createdAt: "" },
+    { ...backup.payload, createdAt: "" },
+  );
+  const sourceAfter = await createBackup(firstDb);
+  assert.deepEqual(
+    { ...sourceAfter.payload, createdAt: "" },
+    { ...backup.payload, createdAt: "" },
+  );
+  assert.ok(await sessionUser(firstDb, source.tokens.admin));
+  assert.equal(await sessionUser(restoredDb, destination.tokens.admin), null);
+  const restoredToken = await login(restoredDb, source.users.admin, password);
+  const retried = await mutate(restoredDb, restoredToken, originalInput);
+  assert.equal(retried.revision, 1);
+  assert.equal(retried.store.tables.length, 1);
+  assert.equal(
+    (await readSnapshot(firstDb, source.tokens.admin)).store.tables.length,
+    1,
+  );
+});

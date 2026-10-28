@@ -7,6 +7,7 @@ import { migrate } from "../src/server/schema";
 import { hashPassword } from "../src/server/auth";
 import { emptyStore } from "../src/domain/selectors";
 import type { Role } from "../src/domain/model";
+import { replaceStore } from "../src/server/storage";
 loadEnvConfig(process.cwd());
 async function password() {
   if (process.env.POKER_STAFF_PASSWORD) return process.env.POKER_STAFF_PASSWORD;
@@ -59,10 +60,7 @@ async function main() {
         "INSERT INTO poker_branches(id,name,timezone) VALUES($1,$2,$3)",
         [values.id, values.name, timezone],
       );
-      await connection.query(
-        "INSERT INTO poker_branch_state(branch_id,data) VALUES($1,$2)",
-        [values.id, JSON.stringify(emptyStore())],
-      );
+      await replaceStore(connection, values.id!, emptyStore());
     });
     console.log("Branch created.");
     return;

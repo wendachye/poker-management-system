@@ -46,6 +46,7 @@ export const staffCommandSchema = z.discriminatedUnion("kind", [
 export const staffMutationSchema = z
   .object({
     branchId: z.string().min(1),
+    actorId: z.string().min(1).max(100).optional(),
     operationId: z.uuid(),
     revision: z.number().int().nonnegative(),
     command: staffCommandSchema,

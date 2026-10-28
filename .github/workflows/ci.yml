@@ -13,8 +13,52 @@ jobs:
         with:
           node-version: 22
           cache: yarn
+      - run: corepack enable
+      - run: test "$(yarn --version)" = "1.22.22"
       - run: yarn install --frozen-lockfile
+      - run: yarn audit:runtime
       - run: yarn test
       - run: yarn typecheck
       - run: yarn lint
-      - run: yarn build
+      - name: Build operations artifact without database secrets
+        run: yarn build
+        env:
+          NEXT_PUBLIC_POKER_PROTOTYPE: "0"
+          POKER_PROTOTYPE_MODE: "0"
+      - name: Build stakeholder prototype artifact
+        run: yarn build
+        env:
+          NEXT_PUBLIC_POKER_PROTOTYPE: "1"
+          POKER_PROTOTYPE_MODE: "1"
+          NEXT_DIST_DIR: .next-prototype
+  postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: poker_test
+          POSTGRES_USER: poker_test
+          POSTGRES_PASSWORD: test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U poker_test -d poker_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_TEST_DATABASE_URL: postgresql://poker_test:test_only@127.0.0.1:5432/poker_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: corepack enable
+      - run: test "$(yarn --version)" = "1.22.22"
+      - run: yarn install --frozen-lockfile
+      - run: yarn test:postgres
+      - name: Verify staff workflows through Next HTTP routes and PostgreSQL
+        run: yarn test:operations-http

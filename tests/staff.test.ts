@@ -5,6 +5,7 @@ import { hashPassword, login, sessionUser } from "../src/server/auth";
 import { listStaff, manageStaff } from "../src/server/staff";
 import { readSnapshot } from "../src/server/repository";
 import type { StaffCommand } from "../src/domain/staff";
+import { DomainError } from "../src/domain/operations";
 
 let fixture: Awaited<ReturnType<typeof testDatabase>>;
 let token: string, cashierToken: string, accountId: string;
@@ -75,14 +76,39 @@ test("staff access is admin-only, branch scoped, and does not expose password ha
     /Only an admin/,
   );
 });
-test("create staff persists once across retries, audits no secrets, and rejects stale/invalid writes", async () => {
-  const request = await payload({
-    kind: "STAFF_CREATE",
-    username: "new.staff",
-    password,
-    role: "CASHIER",
-    reason: "New counter staff",
-  });
+test("create staff enforces the draft actor, persists once across retries, and audits no secrets", async () => {
+  const request = {
+    ...(await payload({
+      kind: "STAFF_CREATE",
+      username: "new.staff",
+      password,
+      role: "CASHIER",
+      reason: "New counter staff",
+    })),
+    actorId: "admin",
+  };
+  const before = await readSnapshot(fixture.db, token);
+  const accountsBefore = await listStaff(fixture.db, token);
+  await assert.rejects(
+    manageStaff(fixture.db, token, { ...request, actorId: "previous-admin" }),
+    (error) => {
+      assert.ok(error instanceof DomainError);
+      assert.equal(error.status, 409);
+      assert.match(error.message, /account changed/);
+      return true;
+    },
+  );
+  assert.deepEqual(await readSnapshot(fixture.db, token), before);
+  assert.deepEqual(await listStaff(fixture.db, token), accountsBefore);
+  assert.equal(
+    (
+      await fixture.db.query(
+        "SELECT operation_id FROM poker_operations WHERE operation_id=$1",
+        [request.operationId],
+      )
+    ).rows.length,
+    0,
+  );
   const saved = await manageStaff(fixture.db, token, request);
   assert.deepEqual(await manageStaff(fixture.db, token, request), saved);
   accountId = (await listStaff(fixture.db, token)).accounts.find(

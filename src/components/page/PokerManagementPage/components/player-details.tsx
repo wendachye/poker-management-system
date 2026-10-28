@@ -27,15 +27,19 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Field as UiField, FieldLabel } from "@/components/ui/field";
 import type { PlayerTag } from "@/domain/model";
 import { money, parseMoney } from "../utils";
+import type { Session } from "@/domain/model";
+import { ReadStatus, useReadPage } from "./use-read-page";
 export function PlayerDetails({ playerId }: { playerId: string }) {
   const s = usePokerManagementContext(),
     t = useText();
   const history = s.players.find((p) => p.id === playerId);
-  const pendingCredit = s.pendingApprovals
-    .filter(
-      (request) => request.playerId === playerId && request.type === "Buy-in",
-    )
-    .reduce((total, request) => total + request.amount, 0);
+  const pendingCredit =
+    s.store.readModel?.reservedCredit[playerId] ??
+    s.pendingApprovals
+      .filter(
+        (request) => request.playerId === playerId && request.type === "Buy-in",
+      )
+      .reduce((total, request) => total + request.amount, 0);
   return (
     <Modal
       open={!!history}
@@ -127,10 +131,10 @@ function SessionHistory({ playerId }: { playerId: string }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [requestedPage, setPage] = useState(0);
-  const sessions = s.store.sessions
+  const localSessions = s.store.sessions
     .filter((session) => session.playerId === playerId)
     .toReversed();
-  const filtered = sessions.filter((session) => {
+  const localFiltered = localSessions.filter((session) => {
     const date =
       s.store.days.find((day) => day.id === session.dayId)?.date ?? "";
     const table = displayName(
@@ -143,10 +147,20 @@ function SessionHistory({ playerId }: { playerId: string }) {
       )
     );
   });
-  const page = Math.min(
-    requestedPage,
-    Math.max(0, Math.ceil(filtered.length / 20) - 1),
-  );
+  const remote = useReadPage<Session>({
+    resource: "sessions",
+    playerId,
+    query: search,
+    status,
+    page: requestedPage,
+  });
+  const sessionContext = remote.data?.context.store ?? s.store;
+  const sessions = remote.live ? (remote.data?.items ?? []) : localSessions;
+  const filtered = remote.live ? sessions : localFiltered;
+  const total = remote.live ? (remote.data?.total ?? 0) : filtered.length;
+  const page = remote.live
+    ? (remote.data?.page ?? requestedPage)
+    : Math.min(requestedPage, Math.max(0, Math.ceil(filtered.length / 20) - 1));
   function clearFilters() {
     setSearch("");
     setStatus("");
@@ -178,7 +192,7 @@ function SessionHistory({ playerId }: { playerId: string }) {
                 ]
               : []
           }
-          resultCount={filtered.length}
+          resultCount={total}
           onClear={clearFilters}
         >
           <Field label="Status">
@@ -197,7 +211,12 @@ function SessionHistory({ playerId }: { playerId: string }) {
           </Field>
         </ListToolbar>
       )}
-      {!sessions.length ? (
+      <ReadStatus state={remote} />
+      {!sessions.length &&
+      !remote.loading &&
+      !remote.error &&
+      !search &&
+      !status ? (
         <EmptyState title="No session history yet" />
       ) : !filtered.length ? (
         <EmptyState title="No matching sessions">
@@ -208,15 +227,17 @@ function SessionHistory({ playerId }: { playerId: string }) {
       ) : (
         <RecordList
           label="Session history"
-          rows={filtered.slice(page * 20, page * 20 + 20)}
+          rows={
+            remote.live ? filtered : filtered.slice(page * 20, page * 20 + 20)
+          }
           rowKey={(session) => session.id}
           columns={[
             {
               label: "Business day",
               render: (session) => (
                 <>
-                  {s.store.days.find((day) => day.id === session.dayId)?.date ??
-                    "—"}
+                  {sessionContext.days.find((day) => day.id === session.dayId)
+                    ?.date ?? "—"}
                   <p className="text-xs text-muted-foreground">
                     {timestamp(
                       session.sessionStart,
@@ -250,7 +271,7 @@ function SessionHistory({ playerId }: { playerId: string }) {
       <Pager
         label="Session history"
         page={page}
-        total={filtered.length}
+        total={total}
         setPage={setPage}
       />
     </section>

@@ -1,4 +1,5 @@
 import test from "node:test";
+import { importStore } from "../src/server/storage";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { applyCommand, DomainError } from "../src/domain/operations";
@@ -189,10 +190,7 @@ test("parallel credit reservations and cash-out decisions preserve limits and po
         [createHash("sha256").update(token).digest("hex"), actor.id],
       );
     }
-    await db.query(
-      "UPDATE poker_branch_state SET data=$1 WHERE branch_id='local'",
-      [JSON.stringify(fixture(true))],
-    );
+    await importStore(db, "local", fixture(true));
     const snapshot = () => readSnapshot(db, tokens.cashier);
     const first = await snapshot();
     const payload = (command: Command, revision: number) => ({

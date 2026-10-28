@@ -13,6 +13,7 @@ import { displayName } from "@/lib/display-name";
 import { matchesListSearch } from "@/lib/list-search";
 import { shiftDate } from "@/domain/reporting";
 import type { AuditLog } from "@/domain/model";
+import { ReadStatus, useReadPage } from "../components/use-read-page";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 
 import {
@@ -56,7 +57,7 @@ export function AdminView({
           ? "week"
           : "";
   const query = val("search"),
-    logs = s.store.auditLogs.filter((log) => {
+    localLogs = s.store.auditLogs.filter((log) => {
       const date = new Intl.DateTimeFormat("en-CA", {
         timeZone: s.snapshot!.branch.timezone,
         year: "numeric",
@@ -79,10 +80,28 @@ export function AdminView({
         (!val("to") || date <= val("to"))
       );
     });
-  const page = Math.min(
-    Number(s.draft("audit.page", "0")),
-    Math.max(0, Math.ceil(logs.length / 20) - 1),
+  const requestedPage = Math.max(0, Number(s.draft("audit.page", "0")) || 0);
+  const remote = useReadPage<AuditLog>(
+    {
+      resource: "audit",
+      query,
+      staff: val("staff"),
+      action: val("action"),
+      from: val("from"),
+      to: val("to"),
+      page: requestedPage,
+    },
+    section === "audit",
   );
+  const logs = remote.live ? (remote.data?.items ?? []) : localLogs;
+  const auditStore = remote.data?.context.store ?? s.store;
+  const total = remote.live ? (remote.data?.total ?? 0) : logs.length;
+  const page = remote.live
+    ? (remote.data?.page ?? requestedPage)
+    : Math.min(
+        Number(s.draft("audit.page", "0")),
+        Math.max(0, Math.ceil(logs.length / 20) - 1),
+      );
   if (section === "recovery" && s.user?.role !== "ADMIN") {
     return <EmptyState title="Admin access required." />;
   }
@@ -167,7 +186,7 @@ export function AdminView({
                 hideChip: (key === "from" || key === "to") && !!datePreset,
               }))}
             onClear={clearCriteria}
-            resultCount={logs.length}
+            resultCount={total}
           >
             <Field label="Staff">
               <Select
@@ -175,7 +194,10 @@ export function AdminView({
                 onValueChange={(v) => set("staff", v)}
                 options={[
                   { value: "", label: "All staff" },
-                  ...[...new Set(s.store.auditLogs.map((log) => log.actor))]
+                  ...(remote.live
+                    ? (remote.data?.options?.staff ?? [])
+                    : [...new Set(s.store.auditLogs.map((log) => log.actor))]
+                  )
                     .sort()
                     .map((value) => ({ value, label: displayName(value) })),
                 ]}
@@ -187,7 +209,10 @@ export function AdminView({
                 onValueChange={(v) => set("action", v)}
                 options={[
                   { value: "", label: "All actions" },
-                  ...[...new Set(s.store.auditLogs.map((log) => log.action))]
+                  ...(remote.live
+                    ? (remote.data?.options?.actions ?? [])
+                    : [...new Set(s.store.auditLogs.map((log) => log.action))]
+                  )
                     .sort()
                     .map((value) => ({ value, label: value })),
                 ]}
@@ -210,7 +235,8 @@ export function AdminView({
               />
             </Field>
           </ListToolbar>
-          {!logs.length ? (
+          <ReadStatus state={remote} />
+          {!logs.length && !remote.loading && !remote.error ? (
             <EmptyState
               title={
                 s.store.auditLogs.length
@@ -233,7 +259,7 @@ export function AdminView({
             <RecordList
               compact
               label="Audit history"
-              rows={logs.slice(page * 20, page * 20 + 20)}
+              rows={remote.live ? logs : logs.slice(page * 20, page * 20 + 20)}
               rowKey={(log) => log.id}
               columns={[
                 {
@@ -275,7 +301,7 @@ export function AdminView({
                   mobileSpan: "full",
                   render: (log) => (
                     <p className="line-clamp-2 max-w-md font-normal [overflow-wrap:anywhere]">
-                      {t(auditReason(log, s.store)) || "—"}
+                      {t(auditReason(log, auditStore)) || "—"}
                     </p>
                   ),
                 },
@@ -309,7 +335,7 @@ export function AdminView({
           <Pager
             label="Audit history pages"
             page={page}
-            total={logs.length}
+            total={total}
             setPage={(p) => s.setDraft("audit.page", String(p))}
           />
         </Panel>
@@ -367,14 +393,14 @@ export function AdminView({
             <div className="min-w-0 space-y-4 text-sm">
               <p>{timestamp(detail.time, s.snapshot!.branch.timezone)}</p>
               <p className="[overflow-wrap:anywhere]">
-                {t(auditReason(detail, s.store))}
+                {t(auditReason(detail, auditStore))}
               </p>
               <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {t("Reference")}: {detail.entity}
               </p>
               {(detail.before || detail.after) && (
                 <div className="space-y-3">
-                  {auditChanges(detail, s.store).map((change) => (
+                  {auditChanges(detail, auditStore).map((change) => (
                     <div
                       key={change.label}
                       className="min-w-0 rounded-lg border p-3"

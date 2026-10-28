@@ -53,7 +53,9 @@ export function TablesView() {
     setSettings(true);
   }
   const occupied = s.activePlayers.some((p) => p.tableId === val("id"));
-  const pending = s.pendingApprovals.some((p) => p.tableId === val("id"));
+  const pending = s.store.readModel?.pendingTables
+    ? !!s.store.readModel.pendingTables[val("id")]
+    : s.pendingApprovals.some((p) => p.tableId === val("id"));
   const visibleTables = s.tables.filter((table) => {
     const full =
       s.activePlayers.filter((p) => p.tableId === table.id).length >= 9;

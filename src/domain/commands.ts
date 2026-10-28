@@ -122,6 +122,7 @@ export type Command = z.infer<typeof commandSchema>;
 export const mutationSchema = z
   .object({
     branchId: id,
+    actorId: id.optional(),
     operationId: z.uuid(),
     revision: z.number().int().nonnegative(),
     command: commandSchema,

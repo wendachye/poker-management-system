@@ -10,6 +10,7 @@ import {
   type Backup,
 } from "../src/server/backup";
 import { hashPassword, login, sessionUser } from "../src/server/auth";
+import { readStore } from "../src/server/storage";
 
 test("full backup round trip preserves sample records, credentials and retry markers, but revokes sessions", async () => {
   const { db, engine } = await testDatabase();
@@ -52,6 +53,51 @@ test("full backup round trip preserves sample records, credentials and retry mar
     await engine.close();
   }
 });
+test("bounded retry contexts survive restore and older backups without them remain compatible", async () => {
+  const { db, engine } = await testDatabase();
+  try {
+    await seedLocalSamples(db, new Date("2026-10-02T15:00:00Z"));
+    const store = await readStore(db, "local");
+    const context = {
+      playerIds: [store.profiles[0].id],
+      approvalIds: [store.approvals[0].id],
+      transactionIds: [store.transactions[0].id],
+    };
+    await db.query(
+      "UPDATE poker_operations SET result_context=$1 WHERE branch_id='local'",
+      [JSON.stringify(context)],
+    );
+    const backup = await createBackup(db);
+    assert.deepEqual(backup.payload.operations[0].result_context, context);
+    await restoreBackup(db, backup, async () => {});
+    assert.deepEqual(
+      (
+        await db.query<{ result_context: unknown }>(
+          "SELECT result_context FROM poker_operations WHERE branch_id='local'",
+        )
+      ).rows[0].result_context,
+      context,
+    );
+    const broken = structuredClone(backup.payload);
+    broken.operations[0].result_context!.playerIds = ["missing-player"];
+    assert.throws(() => parseBackup(sealBackup(broken)), /missing record/i);
+    const legacy = structuredClone(backup.payload);
+    delete legacy.operations[0].result_context;
+    await restoreBackup(db, sealBackup(legacy), async () => {});
+    assert.deepEqual(
+      (
+        await db.query<{ result_context: unknown }>(
+          "SELECT result_context FROM poker_operations WHERE branch_id='local'",
+        )
+      ).rows[0].result_context,
+      {},
+    );
+    assert.deepEqual(await readStore(db, "local"), store);
+  } finally {
+    await engine.close();
+  }
+});
+
 test("damaged or incomplete backups and failed safety backups leave the database intact", async () => {
   const { db, engine } = await testDatabase();
   try {

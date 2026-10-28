@@ -29,6 +29,7 @@ import { PlayerActions } from "../components/player-actions";
 import { ListToolbar } from "../components/list-toolbar";
 import { RecordTable } from "../components/record-list";
 import { QuickFilters } from "../components/quick-filters";
+import { ReadStatus, useReadPage } from "../components/use-read-page";
 
 export function PlayersView() {
   const s = usePokerManagementContext(),
@@ -60,26 +61,52 @@ export function PlayersView() {
       (!value("type") || p.type === value("type")) &&
       (!value("tag") || p.tags.some((tag) => tag === value("tag"))),
   );
-  const filtered = matchingPlayers.filter(
+  const localFiltered = matchingPlayers.filter(
     (p) => !value("status") || p.status === value("status"),
   );
+  const requestedPage = Math.max(0, Number(value("page", "0")) || 0);
+  const remote = useReadPage<Player>({
+    resource: "players",
+    query: value("search"),
+    status: value("status"),
+    type: value("type"),
+    tag: value("tag"),
+    page: requestedPage,
+  });
+  const filtered = remote.live ? (remote.data?.items ?? []) : localFiltered;
+  const total = remote.live ? (remote.data?.total ?? 0) : filtered.length;
   const statusOptions = [
-    { value: "", label: "All players", count: matchingPlayers.length },
+    {
+      value: "",
+      label: "All players",
+      count: remote.live
+        ? (remote.data?.counts.ALL ?? 0)
+        : matchingPlayers.length,
+    },
     {
       value: "ACTIVE",
       label: "ACTIVE",
-      count: matchingPlayers.filter((p) => p.status === "ACTIVE").length,
+      count: remote.live
+        ? (remote.data?.counts.ACTIVE ?? 0)
+        : matchingPlayers.filter((p) => p.status === "ACTIVE").length,
     },
     {
       value: "OUT",
       label: "OUT",
-      count: matchingPlayers.filter((p) => p.status === "OUT").length,
+      count: remote.live
+        ? (remote.data?.counts.OUT ?? 0)
+        : matchingPlayers.filter((p) => p.status === "OUT").length,
     },
   ];
-  const page = Math.min(
-    Number(value("page", "0")),
-    Math.max(0, Math.ceil(filtered.length / 20) - 1),
-  );
+  const page = remote.live
+    ? (remote.data?.page ?? requestedPage)
+    : Math.min(
+        Number(value("page", "0")),
+        Math.max(0, Math.ceil(filtered.length / 20) - 1),
+      );
+  const visible = remote.live
+    ? filtered
+    : filtered.slice(page * 20, page * 20 + 20);
   function startCheckIn() {
     s.startOperation({ kind: "check-in" });
   }
@@ -87,7 +114,9 @@ export function PlayersView() {
     return <PlayerActions player={p} compact />;
   }
   function playerIdentity(p: Player) {
-    const pending = s.pendingApprovals.some((r) => r.playerId === p.id);
+    const pending = s.store.readModel
+      ? !!s.store.readModel.pendingPlayers[p.id]
+      : s.pendingApprovals.some((r) => r.playerId === p.id);
     return (
       <Button
         variant="link"
@@ -239,7 +268,7 @@ export function PlayersView() {
                 hideChip: key === "status" || key === "type",
               }))}
             onClear={clearCriteria}
-            resultCount={filtered.length}
+            resultCount={total}
           >
             <Field label="Tag">
               <Select
@@ -256,9 +285,18 @@ export function PlayersView() {
             </Field>
           </ListToolbar>
         </div>
-        {!filtered.length ? (
+        <ReadStatus state={remote} />
+        {!filtered.length && !remote.loading && !remote.error ? (
           <EmptyState
-            title={s.players.length ? "No matching players." : "No players yet"}
+            title={
+              s.players.length ||
+              value("search") ||
+              value("type") ||
+              value("status") ||
+              value("tag")
+                ? "No matching players."
+                : "No players yet"
+            }
             description={
               s.players.length
                 ? "Try another search or clear the filters."
@@ -277,7 +315,7 @@ export function PlayersView() {
               aria-label={t("Players")}
               className="divide-y border-t @min-[800px]/players:hidden"
             >
-              {filtered.slice(page * 20, page * 20 + 20).map((p) => (
+              {visible.map((p) => (
                 <li
                   key={p.id}
                   className="min-w-0 space-y-2 px-3 py-3 sm:px-4"
@@ -330,7 +368,7 @@ export function PlayersView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filtered.slice(page * 20, page * 20 + 20).map((p) => (
+                  {visible.map((p) => (
                     <TableRow key={p.id} data-player-row>
                       <TableCell className="w-[38%] max-w-80 whitespace-normal py-2">
                         {playerIdentity(p)}
@@ -358,7 +396,7 @@ export function PlayersView() {
           <Pager
             label="Player pages"
             page={page}
-            total={filtered.length}
+            total={total}
             setPage={(p) => set("page", String(p))}
           />
         </div>

@@ -1,4 +1,5 @@
 "use client";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -32,6 +33,16 @@ export function Receipt({
   const s = usePokerManagementContext(),
     t = useText(),
     timestamp = useTimestamp();
+  const { focusRead, setError } = s;
+  useEffect(() => {
+    void Promise.resolve()
+      .then(() => focusRead({ resource: "receipt", id: tx.id }))
+      .catch((error: unknown) =>
+        setError(
+          error instanceof Error ? error.message : "Cannot load receipt.",
+        ),
+      );
+  }, [tx.id, focusRead, setError]);
   const original = tx.reversesId
     ? s.store.transactions.find((entry) => entry.id === tx.reversesId)
     : tx;
@@ -45,11 +56,14 @@ export function Receipt({
   const cashOut = tx.type === "Cash-out" || original?.type === "Cash-out";
   const relatedPending =
     !!original &&
-    s.pendingApprovals.some(
-      (request) =>
-        (original.playerId && request.playerId === original.playerId) ||
-        (original.sessionId && request.sessionId === original.sessionId),
-    );
+    (!!(
+      original.playerId && s.store.readModel?.pendingPlayers[original.playerId]
+    ) ||
+      s.pendingApprovals.some(
+        (request) =>
+          (original.playerId && request.playerId === original.playerId) ||
+          (original.sessionId && request.sessionId === original.sessionId),
+      ));
   const sessionRequired =
     original?.type === "Buy-in" || original?.type === "Cash-out";
   const activeOriginalSession =
@@ -76,7 +90,10 @@ export function Receipt({
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) close();
+        if (!open) {
+          s.clearReadFocus();
+          close();
+        }
       }}
     >
       <DialogContent

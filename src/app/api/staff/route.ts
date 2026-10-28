@@ -22,7 +22,9 @@ export async function POST(request: Request) {
   if (disabled) return disabled;
   try {
     return json(
-      await manageStaff(database(), await sessionToken(), await body(request)),
+      await manageStaff(database(), await sessionToken(), await body(request), {
+        compact: true,
+      }),
     );
   } catch (error) {
     return failure(error);

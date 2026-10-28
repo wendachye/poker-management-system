@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -25,6 +25,7 @@ import {
 } from "@/components/page/PokerManagementPage/components/shared";
 import { LanguageSwitcher } from "./language-switcher";
 import { ApprovalNotifications } from "./approval-notifications";
+import { usePokerManagementContext } from "@/components/page/PokerManagementPage/PokerManagementProvider";
 
 function navigationTrail(items: NavItem[], pathname: string): NavItem[] {
   let best: NavItem[] = [];
@@ -49,6 +50,8 @@ function navigationTrail(items: NavItem[], pathname: string): NavItem[] {
 
 export function DashboardHeader() {
   const branchDialog = useRef<HTMLDivElement>(null);
+  const navigationHelpId = useId();
+  const management = usePokerManagementContext();
   const { user, branches, switchBranch } = useAuth(),
     t = useText();
   const pathname = usePathname();
@@ -60,7 +63,16 @@ export function DashboardHeader() {
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [pendingBranch, setPendingBranch] = useState("");
+  const navigationBlock = management.retryRequired
+    ? "Retry the unconfirmed request before switching venues or signing out."
+    : management.busy
+      ? "Wait for the current request to finish before switching venues or signing out."
+      : "";
   async function run(action: () => Promise<void>) {
+    if (busy || navigationBlock) {
+      if (navigationBlock) setError(navigationBlock);
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -73,114 +85,132 @@ export function DashboardHeader() {
     }
   }
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1.5 border-b bg-background px-3 sm:gap-2 sm:px-4">
-      <SidebarTrigger
-        className="size-11 shrink-0 sm:size-10"
-        aria-label={t("Toggle sidebar")}
-      />
-      <Separator
-        orientation="vertical"
-        className="mx-1 hidden !h-4 data-vertical:self-center sm:block"
-      />
-      <nav aria-label={t("Breadcrumb")} className="hidden min-w-0 sm:block">
-        <ol className="flex min-w-0 items-center gap-2 text-sm">
-          {pathname !== "/dashboard" && (
-            <>
-              <li className="hidden xl:block">
-                <Link
-                  href="/dashboard"
-                  className="text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  {t("Dashboard")}
-                </Link>
-              </li>
-              <li className="hidden xl:block" aria-hidden="true">
-                <ChevronRight className="size-3.5 text-muted-foreground" />
-              </li>
-            </>
-          )}
-          {trail.slice(0, -1).map((item) => (
-            <li
-              key={item.url}
-              className="hidden min-w-0 items-center gap-2 lg:flex"
-            >
-              <Link
-                href={item.url}
-                className="max-w-40 truncate text-muted-foreground transition-colors hover:text-foreground"
+    <>
+      <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1.5 border-b bg-background px-3 sm:gap-2 sm:px-4">
+        <SidebarTrigger
+          className="size-11 shrink-0 sm:size-10"
+          aria-label={t("Toggle sidebar")}
+        />
+        <Separator
+          orientation="vertical"
+          className="mx-1 hidden !h-4 data-vertical:self-center sm:block"
+        />
+        <nav aria-label={t("Breadcrumb")} className="hidden min-w-0 sm:block">
+          <ol className="flex min-w-0 items-center gap-2 text-sm">
+            {pathname !== "/dashboard" && (
+              <>
+                <li className="hidden xl:block">
+                  <Link
+                    href="/dashboard"
+                    className="text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {t("Dashboard")}
+                  </Link>
+                </li>
+                <li className="hidden xl:block" aria-hidden="true">
+                  <ChevronRight className="size-3.5 text-muted-foreground" />
+                </li>
+              </>
+            )}
+            {trail.slice(0, -1).map((item) => (
+              <li
+                key={item.url}
+                className="hidden min-w-0 items-center gap-2 lg:flex"
               >
-                {t(item.title)}
-              </Link>
-              <ChevronRight
-                className="size-3.5 shrink-0 text-muted-foreground"
-                aria-hidden="true"
-              />
+                <Link
+                  href={item.url}
+                  className="max-w-40 truncate text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {t(item.title)}
+                </Link>
+                <ChevronRight
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                  aria-hidden="true"
+                />
+              </li>
+            ))}
+            <li className="truncate font-medium" aria-current="page">
+              {t(currentPage?.title ?? "Dashboard")}
             </li>
-          ))}
-          <li className="truncate font-medium" aria-current="page">
-            {t(currentPage?.title ?? "Dashboard")}
-          </li>
-        </ol>
-      </nav>
-      <div className="ml-auto min-w-0 flex-1 sm:w-40 sm:flex-none">
-        {branches.length > 0 && (
-          <Select
-            aria-label={t("Branch")}
-            className="h-11 gap-1 px-2 text-sm sm:h-10 sm:gap-2 sm:px-3"
-            value={user?.branchId ?? ""}
-            onValueChange={(v) => {
-              if (v !== user?.branchId) {
-                setError("");
-                setPendingBranch(v);
-              }
-            }}
-            disabled={busy}
-            options={branches.map((b) => ({
-              value: b.id,
-              label: displayName(b.name),
-            }))}
-          />
-        )}
-      </div>
-      <LanguageSwitcher compactMobile />
-      <ApprovalNotifications />
-      <AlertDialog
-        open={!!pendingBranch}
-        onOpenChange={(open) => {
-          if (!busy && !open) setPendingBranch("");
-        }}
-      >
-        <AlertDialogContent
-          ref={branchDialog}
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            branchDialog.current?.focus();
+          </ol>
+        </nav>
+        <div className="ml-auto min-w-0 flex-1 sm:w-40 sm:flex-none">
+          {branches.length > 0 && (
+            <Select
+              aria-label={t("Branch")}
+              className="h-11 gap-1 px-2 text-sm sm:h-10 sm:gap-2 sm:px-3"
+              value={user?.branchId ?? ""}
+              onValueChange={(v) => {
+                if (busy || navigationBlock) return;
+                if (v !== user?.branchId) {
+                  setError("");
+                  setPendingBranch(v);
+                }
+              }}
+              disabled={busy || !!navigationBlock}
+              aria-describedby={navigationBlock ? navigationHelpId : undefined}
+              options={branches.map((b) => ({
+                value: b.id,
+                label: displayName(b.name),
+              }))}
+            />
+          )}
+        </div>
+        <LanguageSwitcher compactMobile />
+        <ApprovalNotifications />
+        <AlertDialog
+          open={!!pendingBranch}
+          onOpenChange={(open) => {
+            if (!busy && !open) setPendingBranch("");
           }}
         >
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("Switch branch")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("Switch branches? Unsubmitted drafts will be cleared.")}{" "}
-              {displayName(
-                branches.find((b) => b.id === pendingBranch)?.name ?? "",
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{t(error)}</AlertDescription>
-            </Alert>
-          )}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>{t("Cancel")}</AlertDialogCancel>
-            <Button
-              disabled={busy}
-              onClick={() => void run(() => switchBranch(pendingBranch))}
-            >
-              {t(busy ? "Saving…" : "Switch branch")}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </header>
+          <AlertDialogContent
+            ref={branchDialog}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              branchDialog.current?.focus();
+            }}
+          >
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("Switch branch")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("Switch branches? Unsubmitted drafts will be cleared.")}{" "}
+                {displayName(
+                  branches.find((b) => b.id === pendingBranch)?.name ?? "",
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{t(error)}</AlertDescription>
+              </Alert>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={busy}>
+                {t("Cancel")}
+              </AlertDialogCancel>
+              <Button
+                disabled={busy || !!navigationBlock}
+                aria-describedby={
+                  navigationBlock ? navigationHelpId : undefined
+                }
+                onClick={() => void run(() => switchBranch(pendingBranch))}
+              >
+                {t(busy ? "Saving…" : "Switch branch")}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </header>
+      {navigationBlock && (
+        <p
+          id={navigationHelpId}
+          role="status"
+          className="border-b bg-muted/40 px-4 py-2 text-xs text-muted-foreground"
+        >
+          {t(navigationBlock)}
+        </p>
+      )}
+    </>
   );
 }

@@ -1079,6 +1079,18 @@
     "after_approval_create_a_corrected_entry_only_if_a_replacement_is_needed_it_requires_separate_approval": "After approval, create a corrected entry only if a replacement is needed. It requires separate approval.",
     "explain_why_this_entry_needs_to_be_reversed_in_at_least_3_characters": "Explain why this entry needs to be reversed in at least 3 characters.",
     "the_reversal_is_awaiting_approval_the_original_entry_has_not_changed": "The reversal is awaiting approval. The original entry has not changed.",
-    "create_a_corrected_entry_only_if_a_replacement_is_needed_the_new_amount_starts_blank_and_requires_separate_approval": "Create a corrected entry only if a replacement is needed. The new amount starts blank and requires separate approval."
+    "create_a_corrected_entry_only_if_a_replacement_is_needed_the_new_amount_starts_blank_and_requires_separate_approval": "Create a corrected entry only if a replacement is needed. The new amount starts blank and requires separate approval.",
+    "retry_the_unconfirmed_request_before_switching_venues_or_signing_out": "Retry the unconfirmed request before switching venues or signing out.",
+    "wait_for_the_current_request_to_finish_before_switching_venues_or_signing_out": "Wait for the current request to finish before switching venues or signing out.",
+    "you_do_not_have_permission_to_perform_this_action": "You do not have permission to perform this action.",
+    "records_changed_refresh_records_review_them_and_try_again": "Records changed. Refresh records, review them and try again.",
+    "the_service_is_unavailable_please_try_again": "The service is unavailable. Please try again.",
+    "the_server_response_could_not_be_confirmed_refresh_records_and_retry_the_last_request": "The server response could not be confirmed. Refresh records and retry the last request.",
+    "the_request_timed_out_retry_the_last_request_to_confirm_its_result": "The request timed out. Retry the last request to confirm its result.",
+    "cannot_connect_to_the_service_check_your_connection_and_try_again": "Cannot connect to the service. Check your connection and try again.",
+    "cannot_load_staff_access": "Cannot load staff access",
+    "loading_records": "Loading records…",
+    "cannot_load_records": "Cannot load records.",
+    "cannot_download_report_please_try_again": "Cannot download report. Please try again."
   }
 }

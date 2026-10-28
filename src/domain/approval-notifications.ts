@@ -52,10 +52,11 @@ export function approvalNotifications(store: Store, user?: Staff) {
     businessDate: days.get(request.dayId),
   }));
   return {
-    total: entries.length,
-    reviewable: entries.filter(
-      (entry) => entry.status === "Ready for your review",
-    ).length,
+    total: store.readModel?.pendingTotal ?? entries.length,
+    reviewable:
+      store.readModel?.reviewable ??
+      entries.filter((entry) => entry.status === "Ready for your review")
+        .length,
     entries: entries.slice(0, 5),
   };
 }

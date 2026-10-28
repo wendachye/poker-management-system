@@ -8,7 +8,8 @@ import {
   buyInQuickAmounts,
   validBuyInDraftAmount,
 } from "@/lib/operation-form-options";
-import type { EntryType, PlayerType, PlayerTag } from "@/domain/model";
+import type { EntryType, Player, PlayerType, PlayerTag } from "@/domain/model";
+import { ReadStatus, useReadPage } from "./use-read-page";
 import { effectiveTableRules, venueSettings } from "@/domain/settings";
 import { MAX_MONEY } from "@/domain/money";
 import type { Operation } from "../usePokerManagementState";
@@ -130,10 +131,25 @@ function CheckInDialog({
   });
   const supervisor = ["MANAGER", "ADMIN"].includes(s.user!.role),
     operator = s.user?.role !== "DEALER";
+  const [playerSearch, setPlayerSearch] = useState("");
+  const returningLookup = useReadPage<Player>(
+    { resource: "players", status: "OUT", query: playerSearch },
+    value("mode") === "returning",
+  );
+  const phoneLookup = useReadPage<Player>(
+    { resource: "players", query: value("phone"), pageSize: 5 },
+    value("mode") !== "returning" &&
+      value("phone").replace(/\D/g, "").length >= 7,
+  );
+  const returningPlayers = returningLookup.live
+    ? (returningLookup.data?.items ?? [])
+    : s.players;
   const returning = value("mode") === "returning",
-    selected = s.players.find((p) => p.id === value("existing"));
+    selected =
+      s.players.find((p) => p.id === value("existing")) ??
+      returningPlayers.find((p) => p.id === value("existing"));
   const duplicate = !returning
-    ? s.players.find(
+    ? (phoneLookup.live ? (phoneLookup.data?.items ?? []) : s.players).find(
         (player) => player.phone === value("phone").replace(/[\s()-]/g, ""),
       )
     : undefined;
@@ -248,10 +264,36 @@ function CheckInDialog({
                     <SearchSelect
                       required
                       value={value("existing")}
-                      onValueChange={(v) => set("existing", v)}
+                      onValueChange={(v) => {
+                        if (!v) {
+                          set("existing", v);
+                          return;
+                        }
+                        void s
+                          .focusRead({ resource: "player", playerId: v })
+                          .then(() => set("existing", v))
+                          .catch((error: unknown) =>
+                            s.setError(
+                              error instanceof Error
+                                ? error.message
+                                : "Cannot load player records.",
+                            ),
+                          );
+                      }}
+                      onSearchChange={
+                        returningLookup.live ? setPlayerSearch : undefined
+                      }
+                      searching={returningLookup.loading}
                       options={[
                         { value: "", label: "Select player" },
-                        ...s.players
+                        ...[
+                          ...new Map(
+                            [
+                              ...returningPlayers,
+                              ...(selected ? [selected] : []),
+                            ].map((player) => [player.id, player]),
+                          ).values(),
+                        ]
                           .filter(
                             (p) =>
                               p.status !== "ACTIVE" &&
@@ -268,6 +310,7 @@ function CheckInDialog({
                       ]}
                     />
                   </Field>
+                  <ReadStatus state={returningLookup} />
                   {selected && (
                     <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted p-3 text-sm">
                       <Badge>{selected.type}</Badge>
@@ -353,8 +396,22 @@ function CheckInDialog({
                                 });
                                 return;
                               }
-                              set("existing", duplicate.id);
-                              set("mode", "returning");
+                              void s
+                                .focusRead({
+                                  resource: "player",
+                                  playerId: duplicate.id,
+                                })
+                                .then(() => {
+                                  set("existing", duplicate.id);
+                                  set("mode", "returning");
+                                })
+                                .catch((error: unknown) =>
+                                  s.setError(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Cannot load player records.",
+                                  ),
+                                );
                             }}
                           >
                             {t(
@@ -620,11 +677,24 @@ function TransactionDialog({
   const sessionEntry = type === "Buy-in" || type === "Cash-out",
     repayment = type === "Credit Repayment",
     cashMovement = type === "Cash Received" || type === "Cash Payout";
+  const [playerSearch, setPlayerSearch] = useState("");
+  const playerLookup = useReadPage<Player>(
+    {
+      resource: "players",
+      query: playerSearch,
+      type: repayment ? "CREDIT" : "",
+      status: repayment ? "OWING" : "",
+    },
+    !sessionEntry,
+  );
+  const remotePlayers = playerLookup.live
+    ? (playerLookup.data?.items ?? [])
+    : s.players;
   const options = sessionEntry
     ? s.activePlayers
     : repayment
-      ? s.players.filter((p) => p.type === "CREDIT" && p.creditUsed > 0)
-      : s.players;
+      ? remotePlayers.filter((p) => p.type === "CREDIT" && p.creditUsed > 0)
+      : remotePlayers;
   const selectedPlayer = s.players.find(
     (player) => player.id === val("player"),
   );
@@ -634,12 +704,13 @@ function TransactionDialog({
   const rules = effectiveTableRules(s.store, selectedTable);
   const creditPlayer = selectedPlayer?.type === "CREDIT";
   const pendingCredit = selectedPlayer
-    ? s.pendingApprovals
+    ? (s.store.readModel?.reservedCredit[selectedPlayer.id] ??
+      s.pendingApprovals
         .filter(
           (request) =>
             request.playerId === selectedPlayer.id && request.type === "Buy-in",
         )
-        .reduce((total, request) => total + request.amount, 0)
+        .reduce((total, request) => total + request.amount, 0))
     : 0;
   const availableCredit = selectedPlayer
     ? Math.max(
@@ -879,10 +950,32 @@ function TransactionDialog({
                 value={val("player")}
                 required={sessionEntry || repayment}
                 onValueChange={(v) => {
-                  set("player", v);
-                  set("amount", "");
-                  if (v) setChangingPlayer(false);
+                  if (!v) {
+                    set("player", v);
+                    set("amount", "");
+                    return;
+                  }
+                  void s
+                    .focusRead({ resource: "player", playerId: v })
+                    .then(() => {
+                      set("player", v);
+                      set("amount", "");
+                      setChangingPlayer(false);
+                    })
+                    .catch((error: unknown) =>
+                      s.setError(
+                        error instanceof Error
+                          ? error.message
+                          : "Cannot load player records.",
+                      ),
+                    );
                 }}
+                onSearchChange={
+                  playerLookup.live && !sessionEntry
+                    ? setPlayerSearch
+                    : undefined
+                }
+                searching={playerLookup.loading}
                 options={[
                   {
                     value: "",
@@ -891,7 +984,21 @@ function TransactionDialog({
                         ? "Select player"
                         : "House / no player",
                   },
-                  ...options.map((p) => ({
+                  ...[
+                    ...new Map(
+                      [
+                        ...options,
+                        ...(selectedPlayer &&
+                        (sessionEntry
+                          ? selectedPlayer.status === "ACTIVE"
+                          : repayment
+                            ? selectedPlayer.creditUsed > 0
+                            : true)
+                          ? [selectedPlayer]
+                          : []),
+                      ].map((player) => [player.id, player]),
+                    ).values(),
+                  ].map((p) => ({
                     value: p.id,
                     label: displayName(p.name) + " · " + p.phone,
                     searchTerms: [p.name],
@@ -905,6 +1012,7 @@ function TransactionDialog({
               />
             </Field>
           )}
+          {!sessionEntry && <ReadStatus state={playerLookup} />}
           {(sessionEntry || repayment) && creditPlayer && selectedPlayer && (
             <div className="min-w-0 space-y-2 text-xs">
               <dl
@@ -944,15 +1052,18 @@ function TransactionDialog({
               )}
             </div>
           )}
-          {(sessionEntry || repayment) && !options.length && (
-            <p className="text-sm text-muted-foreground">
-              {t(
-                sessionEntry
-                  ? "Check in a player before recording a buy-in or cash-out."
-                  : "No players have outstanding credit.",
-              )}
-            </p>
-          )}
+          {(sessionEntry || repayment) &&
+            !options.length &&
+            (sessionEntry ||
+              (!playerLookup.loading && !playerLookup.error)) && (
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  sessionEntry
+                    ? "Check in a player before recording a buy-in or cash-out."
+                    : "No players have outstanding credit.",
+                )}
+              </p>
+            )}
           {!sessionEntry && !repayment && (
             <Field
               label="Table"

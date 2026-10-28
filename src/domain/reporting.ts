@@ -81,9 +81,14 @@ export function rangeReport(store: Store, from: string, to: string) {
     variance: counted.length
       ? counted.reduce((sum, d) => sum + d.totals.variance!, 0)
       : null,
-    pendingRequests: store.approvals.filter(
-      (r) => dayIds.has(r.dayId) && r.status === "PENDING",
-    ).length,
+    pendingRequests: store.readModel
+      ? days.reduce(
+          (sum, day) => sum + (store.readModel?.pendingDays?.[day.id] ?? 0),
+          0,
+        )
+      : store.approvals.filter(
+          (r) => dayIds.has(r.dayId) && r.status === "PENDING",
+        ).length,
   };
 }
 export function compareReports(store: Store, from: string, to: string) {
@@ -95,3 +100,4 @@ export function compareReports(store: Store, from: string, to: string) {
   );
   return { current, previous };
 }
+export type ReportComparison = ReturnType<typeof compareReports>;

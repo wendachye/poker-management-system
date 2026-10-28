@@ -1,6 +1,7 @@
 "use client";
 import { displayName } from "@/lib/display-name";
-import { managementRequest } from "@/lib/management-request";
+import { managementJson } from "@/lib/management-request";
+import { staffReceipt } from "@/lib/management-contracts";
 import { useEffect, useState } from "react";
 import {
   CheckCircle2,
@@ -59,13 +60,13 @@ export function SettingsView({
   useEffect(() => {
     if (!admin || section !== "setup") return;
     const controller = new AbortController();
-    void managementRequest("/api/staff", {
+    void managementJson<unknown>("/api/staff", {
       cache: "no-store",
       signal: controller.signal,
     })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error);
+      .then(staffReceipt)
+      .then((data) => {
+        if (controller.signal.aborted) return;
         if (data.branchId !== s.snapshot?.branch.id)
           throw new Error(
             "Your active branch changed. Reload this page before continuing.",
@@ -503,6 +504,7 @@ function LocationManagement() {
                   }
                   disabled={!!switching || s.busy || s.retryRequired}
                   onClick={async () => {
+                    if (switching || s.busy || s.retryRequired) return;
                     setSwitching(branch.id);
                     try {
                       await switchBranch(branch.id);

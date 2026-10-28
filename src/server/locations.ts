@@ -2,15 +2,22 @@ import "server-only";
 import { z } from "zod";
 import { createHash, randomUUID } from "node:crypto";
 import { locationCommandSchema } from "../domain/locations";
-import type { Store } from "../domain/model";
 import { emptyStore } from "../domain/selectors";
+import type { Snapshot } from "../domain/model";
 import { DomainError } from "../domain/operations";
 import { branchesForUser, requireUser } from "./auth";
-import { readSnapshot } from "./repository";
+import { readSnapshot, touchChangeVersions } from "./repository";
+import {
+  storageMetadata,
+  writeStoreDelta,
+  type StorageMetadata,
+} from "./storage";
+import { readOperationalSnapshot } from "./queries";
 import type { Database } from "./database";
 const schema = z
   .object({
     branchId: z.string().min(1),
+    actorId: z.string().min(1).max(100).optional(),
     operationId: z.uuid(),
     revision: z.number().int().nonnegative(),
     command: locationCommandSchema,
@@ -25,11 +32,12 @@ export async function createLocation(
   db: Database,
   token: string | undefined,
   input: unknown,
-) {
+  options: { compact?: boolean } = {},
+): Promise<Snapshot> {
   const parsed = schema.safeParse(input);
   if (!parsed.success)
     throw new DomainError("Check the location code, name, and time zone.");
-  const { branchId, operationId, revision, command } = parsed.data;
+  const { branchId, actorId, operationId, revision, command } = parsed.data;
   return db.transaction(async (connection) => {
     await connection.query(
       "LOCK TABLE poker_users,poker_memberships IN SHARE ROW EXCLUSIVE MODE",
@@ -37,18 +45,34 @@ export async function createLocation(
     const user = await requireUser(connection, token);
     if (user.role !== "ADMIN")
       throw new DomainError("Only an admin can create locations.", 403);
+    if (actorId !== undefined && actorId !== user.id)
+      throw new DomainError(
+        "Your signed-in account changed. Reload this page before continuing.",
+        409,
+      );
     if (user.branchId !== branchId)
       throw new DomainError(
         "Your active branch changed. Reload this page before continuing.",
         409,
       );
     const row = (
-      await connection.query<{ data: Store; revision: number }>(
+      await connection.query<{ data: StorageMetadata; revision: number }>(
         "SELECT data,revision FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
         [branchId],
       )
     ).rows[0];
     if (!row) throw new DomainError("Branch has not been initialized.", 503);
+    // Session changes do not take the account-management table locks above.
+    const authorized = await requireUser(connection, token);
+    if (
+      authorized.id !== user.id ||
+      authorized.branchId !== user.branchId ||
+      authorized.role !== user.role
+    )
+      throw new DomainError(
+        "Your access changed. Reload this page before continuing.",
+        409,
+      );
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(command))
       .digest("hex");
@@ -61,7 +85,9 @@ export async function createLocation(
     if (previous) {
       if (previous.actor_id !== user.id || previous.fingerprint !== fingerprint)
         throw new DomainError("Operation identifier was already used.", 409);
-      return readSnapshot(connection, token);
+      return options.compact
+        ? readOperationalSnapshot(connection, token)
+        : readSnapshot(connection, token);
     }
     if (revision !== row.revision)
       throw new DomainError(
@@ -82,13 +108,19 @@ export async function createLocation(
     );
     await connection.query(
       "INSERT INTO poker_branch_state(branch_id,data) VALUES($1,$2)",
-      [command.id, JSON.stringify(emptyStore())],
+      [command.id, JSON.stringify(storageMetadata(emptyStore()))],
     );
     await connection.query(
       "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,'ADMIN')",
       [user.id, command.id],
     );
-    row.data.auditLogs.unshift({
+    const original = {
+      ...emptyStore(),
+      settings: row.data.settings,
+      currentDayId: row.data.currentDayId,
+    };
+    const next = structuredClone(original);
+    next.auditLogs.unshift({
       id: randomUUID(),
       time: new Date().toISOString(),
       actor: user.username,
@@ -98,14 +130,25 @@ export async function createLocation(
       reason: command.name,
       after: JSON.stringify({ name: command.name, timezone: command.timezone }),
     });
-    await connection.query(
-      "UPDATE poker_branch_state SET data=$1,revision=revision+1 WHERE branch_id=$2",
-      [JSON.stringify(row.data), branchId],
+    await writeStoreDelta(
+      connection,
+      branchId,
+      original,
+      next,
+      row.revision + 1,
+    );
+    await touchChangeVersions(
+      connection,
+      branchId,
+      ["venue:all"],
+      row.revision + 1,
     );
     await connection.query(
       "INSERT INTO poker_operations(branch_id,operation_id,actor_id,fingerprint,revision) VALUES($1,$2,$3,$4,$5)",
-      [branchId, operationId, user.id, fingerprint, revision + 1],
+      [branchId, operationId, user.id, fingerprint, row.revision + 1],
     );
-    return readSnapshot(connection, token);
+    return options.compact
+      ? readOperationalSnapshot(connection, token)
+      : readSnapshot(connection, token);
   });
 }

@@ -22,6 +22,14 @@ export function entryType(store: Store, tx: Transaction) {
     : tx.type;
 }
 export function debt(store: Store, playerId: string) {
+  if (store.readModel) {
+    const value = store.readModel.balances[playerId];
+    if (value === undefined)
+      throw new Error(
+        "Player balance is not loaded. Refresh records before continuing.",
+      );
+    return value;
+  }
   return store.transactions
     .filter((tx) => tx.playerId === playerId)
     .reduce((sum, tx) => sum + tx.creditDelta, 0);
@@ -47,16 +55,28 @@ export function playersForDay(
       seat: latest?.status === "ACTIVE" ? latest.seat : undefined,
       sessionStart: latest?.sessionStart,
       sessionEnd: latest?.sessionEnd,
-      buyIn: transactions
-        .filter((tx) => entryType(store, tx) === "Buy-in")
-        .reduce((sum, tx) => sum + tx.amount, 0),
-      cashOut: transactions
-        .filter((tx) => entryType(store, tx) === "Cash-out")
-        .reduce((sum, tx) => sum + tx.amount, 0),
+      buyIn: store.readModel
+        ? (store.readModel.playerDay[`${dayId}:${profile.id}`]?.buyIn ?? 0)
+        : transactions
+            .filter((tx) => entryType(store, tx) === "Buy-in")
+            .reduce((sum, tx) => sum + tx.amount, 0),
+      cashOut: store.readModel
+        ? (store.readModel.playerDay[`${dayId}:${profile.id}`]?.cashOut ?? 0)
+        : transactions
+            .filter((tx) => entryType(store, tx) === "Cash-out")
+            .reduce((sum, tx) => sum + tx.amount, 0),
     };
   });
 }
 export function totalsForDay(store: Store, dayId = store.currentDayId): Totals {
+  if (store.readModel && dayId) {
+    const totals = store.readModel.totals[dayId];
+    if (!totals)
+      throw new Error(
+        "Business day totals are not loaded. Refresh records before continuing.",
+      );
+    return totals;
+  }
   const day = store.days.find((value) => value.id === dayId);
   const transactions = store.transactions.filter((tx) => tx.dayId === dayId);
   const sum = (...types: string[]) =>
@@ -94,6 +114,8 @@ export function tablesForDay(
   dayId = store.currentDayId,
 ): PokerTable[] {
   return store.tables.map((table) => {
+    const saved = store.readModel?.tableTotals[table.id];
+    if (saved && dayId === store.currentDayId) return { ...table, ...saved };
     const local = {
       ...store,
       transactions: store.transactions.filter((tx) => tx.tableId === table.id),

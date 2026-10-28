@@ -129,7 +129,11 @@ test("ordinary database configuration is not disabled by demo protection", () =>
       await closeDatabase();
       console.log(JSON.stringify({ configured: typeof db.query === "function" }));
     })().catch(error => { console.error(error); process.exitCode = 1; });`,
-    { DATABASE_URL: "postgresql://prototype-test.invalid/prototype" },
+    {
+      DATABASE_URL:
+        "postgresql://app:testing-only-password@prototype-test.invalid/prototype?sslmode=verify-full",
+      APP_ORIGIN: "https://operations.example.com",
+    },
   );
   assert.equal(result.configured, true);
 });
@@ -150,6 +154,7 @@ for (const marker of markers) {
         const routes = {
           auth: ["GET", "POST", "DELETE"],
           state: ["GET", "POST"],
+          read: ["GET"],
           branch: ["POST"],
           staff: ["GET", "POST"],
           locations: ["GET", "POST"],
@@ -177,7 +182,7 @@ for (const marker of markers) {
       })().catch(error => { console.error(error); process.exitCode = 1; });`,
       marker,
     );
-    assert.equal(responses.length, 10);
+    assert.equal(responses.length, 11);
     for (const result of responses) {
       await t.test(`${result.method} /api/${result.route}`, () => {
         assert.equal(result.status, 404);

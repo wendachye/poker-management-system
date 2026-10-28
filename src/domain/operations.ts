@@ -140,6 +140,18 @@ function audit(
   });
 }
 
+function reservedCredit(store: Store, playerId: string) {
+  if (store.readModel) return store.readModel.reservedCredit[playerId] ?? 0;
+  return store.approvals
+    .filter(
+      (request) =>
+        request.playerId === playerId &&
+        request.type === "Buy-in" &&
+        request.status === "PENDING",
+    )
+    .reduce((sum, request) => sum + request.amount, 0);
+}
+
 /** Pure business operation. The repository commits its entire result atomically. */
 export function applyCommand(
   original: Store,
@@ -302,14 +314,7 @@ export function applyCommand(
       (player) => player.id === command.playerId,
     );
     requireThat(profile, "Player not found.");
-    const pendingCredit = store.approvals
-      .filter(
-        (request) =>
-          request.playerId === profile.id &&
-          request.type === "Buy-in" &&
-          request.status === "PENDING",
-      )
-      .reduce((sum, request) => sum + request.amount, 0);
+    const pendingCredit = reservedCredit(store, profile.id);
     requireThat(
       profile.type !== "CREDIT" ||
         command.creditLimit >= debt(store, profile.id) + pendingCredit,
@@ -622,14 +627,7 @@ export function applyCommand(
           "Resolve the pending cash-out first.",
         );
         if (profile?.type === "CREDIT") {
-          const reserved = store.approvals
-            .filter(
-              (request) =>
-                request.playerId === profile.id &&
-                request.type === "Buy-in" &&
-                request.status === "PENDING",
-            )
-            .reduce((sum, request) => sum + request.amount, 0);
+          const reserved = reservedCredit(store, profile.id);
           requireThat(
             debt(store, profile.id) + reserved + command.amount <=
               profile.creditLimit,
@@ -859,14 +857,7 @@ function validateEntry(store: Store, request: ApprovalRequest) {
         "Reverse later settlements before reversing this credit entry.",
       );
     if (profile?.type === "CREDIT" && tx.creditDelta < 0) {
-      const reserved = store.approvals
-        .filter(
-          (value) =>
-            value.playerId === profile.id &&
-            value.type === "Buy-in" &&
-            value.status === "PENDING",
-        )
-        .reduce((sum, value) => sum + value.amount, 0);
+      const reserved = reservedCredit(store, profile.id);
       requireThat(
         debt(store, profile.id) - tx.creditDelta + reserved <=
           profile.creditLimit,

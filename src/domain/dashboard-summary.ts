@@ -43,14 +43,13 @@ export function dashboardSummary(store: Store) {
     capacity,
     utilization: capacity ? Math.round((occupied / capacity) * 100) : null,
     closedTables: store.tables.length - occupancy.length,
-    outstandingCredit: store.transactions.reduce(
-      (sum, tx) => sum + tx.creditDelta,
-      0,
-    ),
-    pending: pending.length,
-    adminReview: pending.filter(
-      (request) => request.approvalLevel !== "MANAGER",
-    ).length,
+    outstandingCredit:
+      store.readModel?.outstandingCredit ??
+      store.transactions.reduce((sum, tx) => sum + tx.creditDelta, 0),
+    pending: store.readModel?.pendingCurrent ?? pending.length,
+    adminReview:
+      store.readModel?.adminReview ??
+      pending.filter((request) => request.approvalLevel !== "MANAGER").length,
     cashReceived: totals.cashReceived,
     cashPayout: totals.cashPayout,
     netCash: totals.cashReceived - totals.cashPayout,

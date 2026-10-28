@@ -5,6 +5,7 @@ import { hashPassword, login, changeBranch } from "../src/server/auth";
 import { createLocation, listLocations } from "../src/server/locations";
 import { readSnapshot, mutate } from "../src/server/repository";
 import { venueSettings } from "../src/domain/settings";
+import { DomainError } from "../src/domain/operations";
 
 test("location creation is admin-only, retry-safe, isolated and ready for independent setup", async () => {
   const { db, engine } = await testDatabase();
@@ -30,6 +31,7 @@ test("location creation is admin-only, retry-safe, isolated and ready for indepe
     const before = await readSnapshot(db, token);
     const request = {
       branchId: "local",
+      actorId: "owner",
       revision: before.revision,
       operationId: crypto.randomUUID(),
       command: {
@@ -47,6 +49,33 @@ test("location creation is admin-only, retry-safe, isolated and ready for indepe
     assert.deepEqual(
       (await listLocations(db, token)).branches.map((branch) => branch.id),
       ["local"],
+    );
+    await assert.rejects(
+      createLocation(db, token, { ...request, actorId: "previous-owner" }),
+      (error) => {
+        assert.ok(error instanceof DomainError);
+        assert.equal(error.status, 409);
+        assert.match(error.message, /account changed/);
+        return true;
+      },
+    );
+    assert.deepEqual(await readSnapshot(db, token), before);
+    assert.equal(
+      (
+        await db.query("SELECT id FROM poker_branches WHERE id=$1", [
+          "new-store",
+        ])
+      ).rows.length,
+      0,
+    );
+    assert.equal(
+      (
+        await db.query(
+          "SELECT operation_id FROM poker_operations WHERE operation_id=$1",
+          [request.operationId],
+        )
+      ).rows.length,
+      0,
     );
     const created = await createLocation(db, token, request);
     const retried = await createLocation(db, token, request);

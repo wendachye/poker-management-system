@@ -2,6 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import type { Database, SqlConnection } from "../../src/server/database";
 import { migrate } from "../../src/server/schema";
 import { emptyStore } from "../../src/domain/selectors";
+import { importStore } from "../../src/server/storage";
 
 export async function testDatabase() {
   const engine = await PGlite.create();
@@ -20,10 +21,7 @@ export async function testDatabase() {
     await db.query("INSERT INTO poker_branches(id,name) VALUES($1,$1)", [
       branch,
     ]);
-    await db.query(
-      "INSERT INTO poker_branch_state(branch_id,data) VALUES($1,$2)",
-      [branch, JSON.stringify(emptyStore())],
-    );
+    await importStore(db, branch, emptyStore());
   }
   return { db, engine };
 }

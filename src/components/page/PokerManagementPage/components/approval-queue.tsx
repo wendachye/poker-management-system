@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ReceiptText } from "lucide-react";
 import { displayName } from "@/lib/display-name";
 import { Button } from "@/components/ui/button";
@@ -48,11 +48,15 @@ export function ApprovalQueue({
   compact = false,
   embedded = false,
   pendingView = false,
+  pagination,
+  loading = false,
 }: {
   requests?: ApprovalRequest[];
   compact?: boolean;
   embedded?: boolean;
   pendingView?: boolean;
+  pagination?: { page: number; total: number; setPage: (page: number) => void };
+  loading?: boolean;
 }) {
   const s = usePokerManagementContext(),
     t = useText(),
@@ -62,16 +66,21 @@ export function ApprovalQueue({
   const [reason, setReason] = useState(""),
     [currentPage, setPage] = useState(0);
   const [receipt, setReceipt] = useState<Transaction | null>(null);
+  const [openingReview, setOpeningReview] = useState(false);
+  const contextRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => contextRequest.current?.abort(), []);
   const entries = requests ?? s.pendingApprovals;
   const emptyPendingQueue =
-    (pendingView || requests === undefined) && !s.pendingApprovals.length;
-  const page = Math.min(
-    currentPage,
-    Math.max(0, Math.ceil(entries.length / 20) - 1),
-  );
+    (pendingView || requests === undefined) &&
+    !(s.store.readModel?.pendingTotal ?? s.pendingApprovals.length);
+  const page =
+    pagination?.page ??
+    Math.min(currentPage, Math.max(0, Math.ceil(entries.length / 20) - 1));
   const visible = compact
     ? entries.slice(0, 4)
-    : entries.slice(page * 20, page * 20 + 20);
+    : pagination
+      ? entries
+      : entries.slice(page * 20, page * 20 + 20);
   const request = s.store.approvals.find((r) => r.id === reviewId);
   const reviewProgress = request ? approvalReviewProgress(request, t) : null;
   const requestDay = request
@@ -255,12 +264,32 @@ export function ApprovalQueue({
           className="h-11 px-3 sm:h-9"
           aria-label={t(actionLabel) + " · " + subject(r) + " · " + r.id}
           variant={actionLabel === "Review request" ? "default" : "outline"}
-          disabled={s.busy}
-          onClick={() => {
+          disabled={s.busy || openingReview}
+          onClick={async () => {
+            contextRequest.current?.abort();
+            const controller = new AbortController();
+            contextRequest.current = controller;
             s.setError("");
-            setDecision("APPROVED");
-            setReason("");
-            setReviewId(r.id);
+            setOpeningReview(true);
+            try {
+              await s.focusRead(
+                { resource: "requests", id: r.id },
+                controller.signal,
+              );
+              if (controller.signal.aborted) return;
+              setDecision("APPROVED");
+              setReason("");
+              setReviewId(r.id);
+            } catch (error) {
+              if (!controller.signal.aborted)
+                s.setError(
+                  error instanceof Error
+                    ? error.message
+                    : "Cannot load request.",
+                );
+            } finally {
+              if (!controller.signal.aborted) setOpeningReview(false);
+            }
           }}
         >
           {t(actionLabel)}
@@ -270,7 +299,7 @@ export function ApprovalQueue({
   }
   const content = (
     <div className="@container/approvals min-w-0 space-y-3">
-      {!entries.length && (
+      {!entries.length && !loading && (
         <EmptyState
           title={
             emptyPendingQueue
@@ -406,15 +435,18 @@ export function ApprovalQueue({
       ) : (
         <Pager
           page={page}
-          total={entries.length}
-          setPage={setPage}
+          total={pagination?.total ?? entries.length}
+          setPage={pagination?.setPage ?? setPage}
           label="Request pagination"
         />
       )}
       <Modal
         open={!!request}
         onOpenChange={(open) => {
-          if (!open) setReviewId("");
+          if (!open) {
+            setReviewId("");
+            s.clearReadFocus();
+          }
         }}
         title={reviewable ? "Review request" : "Request details"}
         description={request ? subject(request) : "Request details"}
@@ -503,6 +535,7 @@ export function ApprovalQueue({
                   );
                   if (original) {
                     setReviewId("");
+                    s.clearReadFocus();
                     setReceipt(original);
                   }
                 }}
@@ -523,6 +556,7 @@ export function ApprovalQueue({
                 }
                 onSuccess={() => {
                   setReviewId("");
+                  s.clearReadFocus();
                   if (s.draft("tx.search").trim() === request.id) {
                     s.setDraft("tx.search", "");
                     s.setDraft("tx.page", "0");
@@ -599,6 +633,7 @@ export function ApprovalQueue({
                   );
                   if (tx) {
                     setReviewId("");
+                    s.clearReadFocus();
                     setReceipt(tx);
                   }
                 }}

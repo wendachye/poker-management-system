@@ -1,4 +1,5 @@
 import test from "node:test";
+import { readStore } from "../src/server/storage";
 import assert from "node:assert/strict";
 import { testDatabase } from "./helpers/database";
 import { hashPassword, login, sessionUser } from "../src/server/auth";
@@ -287,11 +288,7 @@ test("saved sample rules support setup, revision protection, safe retries and br
       }),
       /branch changed/,
     );
-    const other = (
-      await f.db.query<{ data: { days: unknown[] } }>(
-        "SELECT data FROM poker_branch_state WHERE branch_id='other'",
-      )
-    ).rows[0];
+    const other = { data: await readStore(f.db, "other") };
     assert.equal(other.data.days.length, 0);
     assert.equal(
       (await readSnapshot(f.db, f.tokens.admin)).revision,

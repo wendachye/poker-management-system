@@ -1,4 +1,6 @@
 "use client";
+import { useState } from "react";
+import { useAuth } from "@/contexts/auth-context";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -51,6 +53,8 @@ export function PokerManagementPage({
   section?: SettingsSection | AdminSection;
 }) {
   const state = usePokerManagementContext();
+  const auth = useAuth();
+  const [retryingAccess, setRetryingAccess] = useState(false);
   const t = useText();
   const View = views[module];
   const settingsSection =
@@ -107,11 +111,46 @@ export function PokerManagementPage({
           )
         }
       />
-      {state.error && (
+      {auth.error && (
+        <Alert variant="destructive" role="alert">
+          <AlertTitle>{t("Cannot load staff access")}</AlertTitle>
+          <AlertDescription>
+            <p>{t(auth.error)}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={retryingAccess}
+              onClick={async () => {
+                setRetryingAccess(true);
+                try {
+                  await auth.refresh();
+                } catch {
+                  // The auth module retains a safe error and the retry action.
+                } finally {
+                  setRetryingAccess(false);
+                }
+              }}
+            >
+              {t(retryingAccess ? "Loading…" : "Retry")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {!auth.user && !auth.loading && !auth.error && (
+        <Alert role="alert">
+          <AlertDescription>
+            <p>{t("Your session has expired. Sign in again.")}</p>
+            <Button asChild size="sm">
+              <Link href="/login">{t("Sign in")}</Link>
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {(state.error || state.refreshError) && (
         <Alert variant="destructive" role="alert">
           <AlertTitle>{t("Action needed")}</AlertTitle>
           <AlertDescription>
-            {t(state.error)}{" "}
+            {t(state.error || state.refreshError)}{" "}
             <Button
               variant="outline"
               size="sm"
@@ -142,7 +181,7 @@ export function PokerManagementPage({
           </AlertDescription>
         </Alert>
       )}
-      {!state.snapshot ? (
+      {!state.snapshot && (auth.loading || auth.user) ? (
         <div
           role="status"
           aria-label={t("Loading branch records…")}
@@ -152,7 +191,7 @@ export function PokerManagementPage({
           <Skeleton className="h-32" />
           <Skeleton className="h-64 sm:col-span-2" />
         </div>
-      ) : (
+      ) : !state.snapshot ? null : (
         <>
           {needsSetup && module !== "settings" && (
             <Alert>

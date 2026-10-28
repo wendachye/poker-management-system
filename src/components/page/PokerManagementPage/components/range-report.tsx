@@ -19,6 +19,8 @@ import {
 } from "./shared";
 import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
+import type { Day, Totals } from "@/domain/model";
+import { downloadReadCsv, ReadStatus, useReadPage } from "./use-read-page";
 
 export function RangeReport({ today }: { today: string }) {
   const s = usePokerManagementContext(),
@@ -31,6 +33,15 @@ export function RangeReport({ today }: { today: string }) {
     preset === "custom" ? s.draft("range.to", defaults.to) : defaults.to;
   const query = s.draft("range.search"),
     status = s.draft("range.status");
+  const requestedPage = Math.max(0, Number(s.draft("range.page")) || 0);
+  const remote = useReadPage<Day & { totals: Totals }>({
+    resource: "range",
+    from,
+    to,
+    query,
+    status,
+    page: requestedPage,
+  });
   function clearFilters() {
     for (const key of ["search", "status", "page"])
       s.setDraft("range." + key, "");
@@ -42,23 +53,43 @@ export function RangeReport({ today }: { today: string }) {
     s.setDraft("range.preset", "custom");
     s.setDraft("range.page", "0");
   }
-  let reports: ReturnType<typeof compareReports> | null = null,
+  let reports: ReturnType<typeof compareReports> | null = remote.live
+      ? (remote.data?.report ?? null)
+      : null,
     error = "";
   try {
-    reports = compareReports(s.store, from, to);
+    if (!remote.live) reports = compareReports(s.store, from, to);
   } catch (e) {
     error =
       e instanceof Error ? e.message : "Choose valid start and end dates.";
   }
-  const filteredDays = (reports?.current.days ?? []).filter(
-    (day) =>
-      (!status || day.status === status) && day.date.includes(query.trim()),
-  );
-  const page = Math.min(
-    Math.max(0, Number(s.draft("range.page")) || 0),
-    Math.max(0, Math.ceil(filteredDays.length / 20) - 1),
-  );
+  const filteredDays = remote.live
+    ? (remote.data?.items ?? [])
+    : (reports?.current.days ?? []).filter(
+        (day) =>
+          (!status || day.status === status) && day.date.includes(query.trim()),
+      );
+  const total = remote.live ? (remote.data?.total ?? 0) : filteredDays.length;
+  const page = remote.live
+    ? (remote.data?.page ?? requestedPage)
+    : Math.min(
+        Math.max(0, Number(s.draft("range.page")) || 0),
+        Math.max(0, Math.ceil(filteredDays.length / 20) - 1),
+      );
   function download() {
+    if (remote.live) {
+      void downloadReadCsv(
+        { resource: "range", from, to },
+        `period-report-${from}-${to}.csv`,
+      ).catch((error: unknown) =>
+        s.setError(
+          error instanceof Error
+            ? error.message
+            : "Cannot download report. Please try again.",
+        ),
+      );
+      return;
+    }
     if (!reports) return;
     const { current, previous } = reports;
     const rows: (string | number)[][] = [
@@ -195,6 +226,7 @@ export function RangeReport({ today }: { today: string }) {
             <AlertDescription>{t(error)}</AlertDescription>
           </Alert>
         )}
+        <ReadStatus state={remote} />
         {reports && (
           <>
             <div className="flex flex-wrap gap-2 text-sm">
@@ -300,7 +332,9 @@ export function RangeReport({ today }: { today: string }) {
               columns={[
                 {
                   label: "Metric",
-                  render: (r) => <span className="font-medium">{t(r.label)}</span>,
+                  render: (r) => (
+                    <span className="font-medium">{t(r.label)}</span>
+                  ),
                 },
                 {
                   label: "Selected period",
@@ -358,7 +392,7 @@ export function RangeReport({ today }: { today: string }) {
                   : []
               }
               onClear={clearFilters}
-              resultCount={filteredDays.length}
+              resultCount={total}
             >
               <Field label="Status">
                 <Select
@@ -386,7 +420,11 @@ export function RangeReport({ today }: { today: string }) {
                 compact
                 wide
                 label="Daily breakdown"
-                rows={filteredDays.slice(page * 20, page * 20 + 20)}
+                rows={
+                  remote.live
+                    ? filteredDays
+                    : filteredDays.slice(page * 20, page * 20 + 20)
+                }
                 rowKey={(d) => d.id}
                 columns={[
                   {
@@ -398,6 +436,7 @@ export function RangeReport({ today }: { today: string }) {
                         aria-label={t("View daily report") + ": " + d.date}
                         onClick={() => {
                           s.setDraft("report.day", d.id);
+                          s.clearDraft("report.selectedDate");
                           for (const key of [
                             "playerSearch",
                             "playerStatus",
@@ -451,7 +490,7 @@ export function RangeReport({ today }: { today: string }) {
             <Pager
               label="Daily breakdown"
               page={page}
-              total={filteredDays.length}
+              total={total}
               setPage={(value) => s.setDraft("range.page", String(value))}
             />
           </Panel>

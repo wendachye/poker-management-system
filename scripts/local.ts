@@ -7,6 +7,7 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Database, SqlConnection } from "../src/server/database";
 import { initializeLocal } from "./local-setup";
+import { localOperationsEnvironment } from "./local-environment";
 
 const root = process.cwd();
 const localDir = resolve(root, ".local");
@@ -136,7 +137,7 @@ async function main() {
     {
       cwd: root,
       stdio: "inherit",
-      env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+      env: localOperationsEnvironment(process.env),
     },
   );
   web.once("error", (error) => {

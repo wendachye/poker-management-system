@@ -182,6 +182,28 @@ export type Store = {
   auditLogs: AuditLog[];
   days: Day[];
   currentDayId: string | null;
+  /** Ephemeral, exact SQL aggregates for a scoped server read. Never persisted. */
+  readModel?: StoreReadModel;
+};
+export type StoreReadModel = {
+  server: true;
+  balances: Record<string, number>;
+  /** Keys are dayId + ':' + playerId. */
+  playerDay: Record<string, { buyIn: number; cashOut: number }>;
+  totals: Record<string, Totals>;
+  tableTotals: Record<
+    string,
+    { rake: number; insurance: number; jackpot: number }
+  >;
+  outstandingCredit: number;
+  pendingTotal: number;
+  pendingCurrent: number;
+  adminReview: number;
+  reviewable: number;
+  pendingPlayers: Record<string, number>;
+  reservedCredit: Record<string, number>;
+  pendingDays?: Record<string, number>;
+  pendingTables?: Record<string, number>;
 };
 export type Snapshot = {
   revision: number;

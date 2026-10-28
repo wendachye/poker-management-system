@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   ChevronsUpDown,
   LoaderCircle,
@@ -11,6 +11,7 @@ import { prototypeEnabled } from "@/prototype/config";
 import { useAuth } from "@/contexts/auth-context";
 import { displayName } from "@/lib/display-name";
 import { useText } from "@/components/page/PokerManagementPage/components/shared";
+import { usePokerManagementContext } from "@/components/page/PokerManagementPage/PokerManagementProvider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   DropdownMenu,
@@ -29,14 +30,25 @@ import {
 
 export function NavUser() {
   const { user, logout } = useAuth();
+  const management = usePokerManagementContext();
+  const navigationHelpId = useId();
   const { isMobile } = useSidebar();
   const t = useText();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const navigationBlock = management.retryRequired
+    ? "Retry the unconfirmed request before switching venues or signing out."
+    : management.busy
+      ? "Wait for the current request to finish before switching venues or signing out."
+      : "";
 
   if (!user) return null;
 
   async function signOut() {
+    if (busy || navigationBlock) {
+      if (navigationBlock) setError(navigationBlock);
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -94,13 +106,23 @@ export function NavUser() {
               </p>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            {navigationBlock && (
+              <p
+                id={navigationHelpId}
+                role="status"
+                className="max-w-64 px-2 py-2 text-xs leading-5 text-muted-foreground"
+              >
+                {t(navigationBlock)}
+              </p>
+            )}
             {error && (
               <Alert variant="destructive" className="mb-1 max-w-72">
                 <AlertDescription>{t(error)}</AlertDescription>
               </Alert>
             )}
             <DropdownMenuItem
-              disabled={busy}
+              disabled={busy || !!navigationBlock}
+              aria-describedby={navigationBlock ? navigationHelpId : undefined}
               onSelect={(event) => {
                 event.preventDefault();
                 void signOut();

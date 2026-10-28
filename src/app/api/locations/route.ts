@@ -26,6 +26,7 @@ export async function POST(request: Request) {
         database(),
         await sessionToken(),
         await body(request),
+        { compact: true },
       ),
     );
   } catch (error) {

@@ -17,7 +17,8 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { Receipt } from "../components/receipt";
-import type { Transaction } from "@/domain/model";
+import type { ApprovalRequest, Transaction } from "@/domain/model";
+import { ReadStatus, useReadPage } from "../components/use-read-page";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money } from "../utils";
 import { displayName } from "@/lib/display-name";
@@ -63,7 +64,10 @@ export function TransactionsView() {
     type: val("filter"),
     query: val("search"),
   };
-  const requests = filterRequests(s.store, { ...requestFilters, view: status });
+  const localRequests = filterRequests(s.store, {
+    ...requestFilters,
+    view: status,
+  });
   const clearFilters = () => {
     set("day", "");
     set("filter", "");
@@ -106,13 +110,42 @@ export function TransactionsView() {
       (r) => r.id,
     ),
   );
-  const transactions = s.store.transactions.filter((tx) =>
+  const localTransactions = s.store.transactions.filter((tx) =>
     approvedIds.has(tx.approvalId),
   );
-  const page = Math.min(
-    Number(val("page", "0")),
-    Math.max(0, Math.ceil(transactions.length / 20) - 1),
-  );
+  const requestedPage = Math.max(0, Number(val("page", "0")) || 0);
+  const remote = useReadPage<ApprovalRequest | Transaction>({
+    resource: status === "APPROVED" ? "transactions" : "requests",
+    query: requestFilters.query,
+    dayId: requestFilters.dayId,
+    type: requestFilters.type,
+    status,
+    page: requestedPage,
+  });
+  const requests = remote.live
+    ? status === "APPROVED"
+      ? []
+      : ((remote.data?.items ?? []) as ApprovalRequest[])
+    : localRequests;
+  const transactions = remote.live
+    ? status === "APPROVED"
+      ? ((remote.data?.items ?? []) as Transaction[])
+      : []
+    : localTransactions;
+  const total = remote.live
+    ? (remote.data?.total ?? 0)
+    : status === "APPROVED"
+      ? transactions.length
+      : requests.length;
+  const page = remote.live
+    ? (remote.data?.page ?? requestedPage)
+    : Math.min(
+        Number(val("page", "0")),
+        Math.max(0, Math.ceil(transactions.length / 20) - 1),
+      );
+  const visibleTransactions = remote.live
+    ? transactions
+    : transactions.slice(page * 20, page * 20 + 20);
   const quickActions: RowAction[] = [
     ...(s.user?.role !== "DEALER"
       ? ([
@@ -133,7 +166,11 @@ export function TransactionsView() {
           {
             key: "repay",
             label: "Credit Repayment",
-            disabled: s.locked || !s.players.some((p) => p.creditUsed > 0),
+            disabled:
+              s.locked ||
+              !(s.store.readModel
+                ? s.store.readModel.outstandingCredit > 0
+                : s.players.some((p) => p.creditUsed > 0)),
             onSelect: () =>
               s.startOperation({
                 kind: "transaction",
@@ -270,9 +307,17 @@ export function TransactionsView() {
       </div>
     );
   }
-  function startReversal(tx: Transaction) {
+  async function startReversal(tx: Transaction) {
     const state = reversalRequestState(s.store, tx, s.user?.role, s.locked);
     if (!state.eligible || state.blocked || s.busy || s.retryRequired) return;
+    try {
+      await s.focusRead({ resource: "receipt", id: tx.id });
+    } catch (error) {
+      s.setError(
+        error instanceof Error ? error.message : "Cannot load receipt.",
+      );
+      return;
+    }
     set("reason", "");
     s.setError("");
     setReceipt(null);
@@ -340,9 +385,7 @@ export function TransactionsView() {
             }}
             activeFilters={activeFilters}
             onClear={clearFilters}
-            resultCount={
-              status === "APPROVED" ? transactions.length : requests.length
-            }
+            resultCount={total}
             primaryFilters={
               <Field label="Business day">
                 <Select
@@ -379,6 +422,7 @@ export function TransactionsView() {
             </Field>
           </ListToolbar>
         </div>
+        <ReadStatus state={remote} />
         <Tabs
           value={status}
           onValueChange={(v) => {
@@ -406,12 +450,12 @@ export function TransactionsView() {
                   <span>{t(label)}</span>
                   <span className="text-[10px] tabular-nums sm:text-xs">
                     (
-                    {
-                      filterRequests(s.store, {
-                        ...requestFilters,
-                        view: value as RequestView,
-                      }).length
-                    }
+                    {remote.live
+                      ? (remote.data?.counts[value] ?? 0)
+                      : filterRequests(s.store, {
+                          ...requestFilters,
+                          view: value as RequestView,
+                        }).length}
                     )
                   </span>
                 </TabsTrigger>
@@ -445,7 +489,7 @@ export function TransactionsView() {
                   aria-label={t("Transactions")}
                   className="divide-y border-y @min-[900px]/transactions:hidden"
                 >
-                  {transactions.slice(page * 20, page * 20 + 20).map((tx) => (
+                  {visibleTransactions.map((tx) => (
                     <li
                       key={tx.id}
                       className="min-w-0 space-y-2 px-3 py-3 sm:px-4"
@@ -508,50 +552,45 @@ export function TransactionsView() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {transactions
-                        .slice(page * 20, page * 20 + 20)
-                        .map((tx) => (
-                          <TableRow key={tx.id} data-transaction-row>
-                            <TableCell className="whitespace-normal py-2">
-                              <p className="break-words font-medium">
-                                {t(tx.type)}
-                              </p>
-                              <p className="mt-1 text-xs leading-4 text-muted-foreground">
-                                {timestamp(
-                                  tx.time,
-                                  s.snapshot!.branch.timezone,
-                                )}
-                              </p>
-                              {reversalDetails(tx)}
-                            </TableCell>
-                            <TableCell className="whitespace-normal py-2">
-                              <p className="line-clamp-2 break-words [overflow-wrap:anywhere]">
-                                {displayName(
-                                  s.players.find((p) => p.id === tx.playerId)
-                                    ?.name ?? t("House"),
-                                )}
-                              </p>
-                              <p className="mt-1 line-clamp-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                                {displayName(
-                                  s.tables.find(
-                                    (table) => table.id === tx.tableId,
-                                  )?.name ?? "—",
-                                )}
-                              </p>
-                            </TableCell>
-                            <TableCell className="py-2">{amount(tx)}</TableCell>
-                            <TableCell className="whitespace-normal py-2 text-xs">
-                              <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
-                                {displayName(tx.staff)}
-                              </span>
-                            </TableCell>
-                            <TableCell className="py-2">
-                              <div className="flex justify-end">
-                                {rowActions(tx)}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                      {visibleTransactions.map((tx) => (
+                        <TableRow key={tx.id} data-transaction-row>
+                          <TableCell className="whitespace-normal py-2">
+                            <p className="break-words font-medium">
+                              {t(tx.type)}
+                            </p>
+                            <p className="mt-1 text-xs leading-4 text-muted-foreground">
+                              {timestamp(tx.time, s.snapshot!.branch.timezone)}
+                            </p>
+                            {reversalDetails(tx)}
+                          </TableCell>
+                          <TableCell className="whitespace-normal py-2">
+                            <p className="line-clamp-2 break-words [overflow-wrap:anywhere]">
+                              {displayName(
+                                s.players.find((p) => p.id === tx.playerId)
+                                  ?.name ?? t("House"),
+                              )}
+                            </p>
+                            <p className="mt-1 line-clamp-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                              {displayName(
+                                s.tables.find(
+                                  (table) => table.id === tx.tableId,
+                                )?.name ?? "—",
+                              )}
+                            </p>
+                          </TableCell>
+                          <TableCell className="py-2">{amount(tx)}</TableCell>
+                          <TableCell className="whitespace-normal py-2 text-xs">
+                            <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
+                              {displayName(tx.staff)}
+                            </span>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <div className="flex justify-end">
+                              {rowActions(tx)}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
                     </TableBody>
                   </RecordTable>
                 </div>
@@ -560,7 +599,7 @@ export function TransactionsView() {
             <div className="px-3 pb-3 sm:px-4 sm:pb-4">
               <Pager
                 page={page}
-                total={transactions.length}
+                total={total}
                 setPage={(p) => set("page", String(p))}
                 label="Transaction pagination"
               />
@@ -577,6 +616,16 @@ export function TransactionsView() {
                 requests={requests}
                 pendingView={view === "PENDING"}
                 embedded
+                loading={remote.loading || !!remote.error}
+                pagination={
+                  remote.live
+                    ? {
+                        page,
+                        total,
+                        setPage: (p: number) => set("page", String(p)),
+                      }
+                    : undefined
+                }
               />
             </TabsContent>
           ))}
@@ -585,7 +634,10 @@ export function TransactionsView() {
       <Modal
         open={!!reversing}
         onOpenChange={(open) => {
-          if (!open) setReversing(null);
+          if (!open) {
+            setReversing(null);
+            s.clearReadFocus();
+          }
         }}
         title="Request reversal"
         description="Request approval to undo this entry. The original stays visible."
@@ -602,6 +654,7 @@ export function TransactionsView() {
             }
             onSuccess={() => {
               setReversing(null);
+              s.clearReadFocus();
               set("status", "PENDING");
               set("filter", "");
               set("search", "");

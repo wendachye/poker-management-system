@@ -6,6 +6,7 @@ import { settingsSchema } from "../domain/settings";
 import { tableRuleIssue } from "../domain/settings";
 import { MAX_MONEY } from "../domain/money";
 import type { Database, SqlConnection } from "./database";
+import { readStore, replaceStore } from "./storage";
 
 const id = z.string().min(1),
   amount = z.number().int().safe();
@@ -207,6 +208,14 @@ const payloadSchema = z
           fingerprint: z.string(),
           revision: z.number().int().nonnegative(),
           created_at: timestamp,
+          result_context: z
+            .object({
+              playerIds: z.array(id.max(100)).max(20).optional(),
+              approvalIds: z.array(id.max(100)).max(20).optional(),
+              transactionIds: z.array(id.max(100)).max(20).optional(),
+            })
+            .strict()
+            .optional(),
         })
         .strict(),
     ),
@@ -338,6 +347,18 @@ export function parseBackup(input: unknown): Backup {
   for (const o of p.operations) {
     reference(branches, o.branch_id);
     reference(users, o.actor_id);
+    if (o.result_context) {
+      const state = p.states.find((s) => s.branch_id === o.branch_id)!;
+      for (const [key, rows] of [
+        ["playerIds", state.data.profiles],
+        ["approvalIds", state.data.approvals],
+        ["transactionIds", state.data.transactions],
+      ] as const) {
+        const known = new Set(rows.map((row) => row.id));
+        for (const value of o.result_context[key] ?? [])
+          reference(known, value);
+      }
+    }
   }
   // Keep the original serialized payload: parsing can reorder object keys used by the checksum.
   return envelope.data as Backup;
@@ -359,18 +380,24 @@ async function capture(connection: SqlConnection): Promise<Backup> {
       "SELECT user_id,branch_id,role FROM poker_memberships ORDER BY branch_id,user_id",
     )
   ).rows;
-  const states = (
-    await connection.query<BackupPayload["states"][number]>(
-      "SELECT branch_id,revision,data FROM poker_branch_state ORDER BY branch_id",
+  const stateRows = (
+    await connection.query<{ branch_id: string; revision: number }>(
+      "SELECT branch_id,revision FROM poker_branch_state ORDER BY branch_id",
     )
   ).rows;
+  const states: BackupPayload["states"] = [];
+  for (const state of stateRows)
+    states.push({
+      ...state,
+      data: await readStore(connection, state.branch_id),
+    });
   const records = (
     await connection.query<
       Omit<BackupPayload["operations"][number], "created_at"> & {
         created_at: Date | string;
       }
     >(
-      "SELECT branch_id,operation_id,actor_id,fingerprint,revision,created_at FROM poker_operations ORDER BY branch_id,operation_id",
+      "SELECT branch_id,operation_id,actor_id,fingerprint,revision,created_at,result_context FROM poker_operations ORDER BY branch_id,operation_id",
     )
   ).rows;
   const operations = records.map((r) => ({
@@ -426,13 +453,22 @@ export async function restoreBackup(
   await db.transaction(async (connection) => {
     // Maintenance operation: block all writers until replacement commits or rolls back.
     await connection.query(
-      "LOCK TABLE poker_users,poker_memberships,poker_branches,poker_branch_state,poker_operations,poker_sessions,poker_login_attempts IN ACCESS EXCLUSIVE MODE",
+      "LOCK TABLE poker_users,poker_memberships,poker_branches,poker_branch_state,poker_operations,poker_sessions,poker_login_attempts,poker_profiles,poker_tables,poker_visits,poker_days,poker_approvals,poker_ledger,poker_audit,poker_change_versions,poker_financial_totals IN ACCESS EXCLUSIVE MODE",
     );
     await saveBeforeRestore(await capture(connection));
     for (const table of [
       "poker_sessions",
       "poker_login_attempts",
       "poker_operations",
+      "poker_financial_totals",
+      "poker_ledger",
+      "poker_approvals",
+      "poker_visits",
+      "poker_audit",
+      "poker_tables",
+      "poker_profiles",
+      "poker_days",
+      "poker_change_versions",
       "poker_memberships",
       "poker_branch_state",
       "poker_users",
@@ -455,13 +491,10 @@ export async function restoreBackup(
         [m.user_id, m.branch_id, m.role],
       );
     for (const s of p.states)
-      await connection.query(
-        "INSERT INTO poker_branch_state(branch_id,revision,data) VALUES($1,$2,$3)",
-        [s.branch_id, s.revision, JSON.stringify(s.data)],
-      );
+      await replaceStore(connection, s.branch_id, s.data, s.revision);
     for (const o of p.operations)
       await connection.query(
-        "INSERT INTO poker_operations(branch_id,operation_id,actor_id,fingerprint,revision,created_at) VALUES($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO poker_operations(branch_id,operation_id,actor_id,fingerprint,revision,created_at,result_context) VALUES($1,$2,$3,$4,$5,$6,$7)",
         [
           o.branch_id,
           o.operation_id,
@@ -469,6 +502,7 @@ export async function restoreBackup(
           o.fingerprint,
           o.revision,
           o.created_at,
+          JSON.stringify(o.result_context ?? {}),
         ],
       );
   });

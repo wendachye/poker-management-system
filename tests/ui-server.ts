@@ -4,7 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { schema } from "../src/server/schema";
+import { migrate } from "../src/server/schema";
 import { changeBranch, hashPassword, login, logout } from "../src/server/auth";
 import { emptyStore } from "../src/domain/selectors";
 import { defaultSettings } from "../src/domain/settings";
@@ -14,7 +14,16 @@ import type { Command } from "../src/domain/commands";
 import { tableLayoutFixture } from "./helpers/table-layout-fixture";
 import { financeLayoutFixture } from "./helpers/finance-layout-fixture";
 import { operatorFlowFixture } from "./helpers/operator-flow-fixture";
-import type { Store } from "../src/domain/model";
+import { localOperationsEnvironment } from "../scripts/local-environment";
+import { importStore, readStore } from "../src/server/storage";
+
+function testPort(name: string, fallback: number) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  if (!/^\d+$/.test(raw) || Number(raw) < 1024 || Number(raw) > 65535)
+    throw new Error(`${name} must be an integer between 1024 and 65535.`);
+  return Number(raw);
+}
 
 function adapt(engine: PGlite): Database {
   const connection = (client: Pick<PGlite, "query">): SqlConnection => ({
@@ -86,8 +95,17 @@ async function configureSampleVenues(db: Database) {
 }
 
 async function main() {
+  const appPort = testPort("UI_TEST_PORT", 3001);
+  const databasePort = testPort("UI_TEST_DATABASE_PORT", 55434);
+  if (appPort === databasePort)
+    throw new Error("UI test app and database ports must be different.");
+  const distDir = process.env.UI_TEST_DIST_DIR || ".local/ui-next";
+  if (!/^\.local\/ui(?:-[a-z0-9]+)*-next$/.test(distDir))
+    throw new Error(
+      "UI_TEST_DIST_DIR must be a dedicated Next.js folder such as .local/ui-integration-next.",
+    );
   const db = await PGlite.create();
-  await db.exec(schema);
+  await migrate(adapt(db));
   for (const branch of ["qa", "qa-other"]) {
     await db.query(
       "INSERT INTO poker_branches(id,name,timezone) VALUES($1,$2,$3)",
@@ -97,10 +115,7 @@ async function main() {
         "Asia/Kuala_Lumpur",
       ],
     );
-    await db.query(
-      "INSERT INTO poker_branch_state(branch_id,data) VALUES($1,$2)",
-      [branch, JSON.stringify(emptyStore())],
-    );
+    await importStore(adapt(db), branch, emptyStore());
   }
   for (const role of ["ADMIN", "MANAGER", "CASHIER", "DEALER"]) {
     const username = "qa." + role.toLowerCase();
@@ -118,26 +133,14 @@ async function main() {
   await configureSampleVenues(adapt(db));
   // Opt-in visual fixture affects only the disposable qa venue in this process.
   if (process.argv.includes("--operator-flow")) {
-    const configured = await adapt(db).query<{ data: Store }>(
-      "SELECT data FROM poker_branch_state WHERE branch_id=$1",
-      ["qa"],
-    );
-    await adapt(db).query(
-      "UPDATE poker_branch_state SET data=$1, revision=revision+1 WHERE branch_id=$2",
-      [JSON.stringify(operatorFlowFixture(configured.rows[0].data)), "qa"],
-    );
+    const configured = await readStore(adapt(db), "qa");
+    await importStore(adapt(db), "qa", operatorFlowFixture(configured), 5);
   }
   if (process.argv.includes("--table-layout")) {
-    await adapt(db).query(
-      "UPDATE poker_branch_state SET data=$1, revision=revision+1 WHERE branch_id=$2",
-      [JSON.stringify(tableLayoutFixture()), "qa"],
-    );
+    await importStore(adapt(db), "qa", tableLayoutFixture(), 5);
   }
   if (process.argv.includes("--finance-layout")) {
-    await adapt(db).query(
-      "UPDATE poker_branch_state SET data=$1, revision=revision+1 WHERE branch_id=$2",
-      [JSON.stringify(financeLayoutFixture()), "qa"],
-    );
+    await importStore(adapt(db), "qa", financeLayoutFixture(), 5);
     // Extra presentation-only accounts exercise paging, long usernames and all
     // access states. The normal qa.* logins above and default mode stay intact.
     const staffPasswordHash = await hashPassword("ui-test-password");
@@ -166,10 +169,23 @@ async function main() {
         );
     }
   }
+  if (process.argv.includes("--pagination")) {
+    const store = await readStore(adapt(db), "qa");
+    for (let index = 0; index < 45; index++)
+      store.profiles.push({
+        id: `pagination-player-${index}`,
+        name: `Pagination Player ${String(index + 1).padStart(2, "0")}`,
+        phone: `+1202558${String(index).padStart(4, "0")}`,
+        type: "CASH",
+        creditLimit: 0,
+        tags: [],
+      });
+    await importStore(adapt(db), "qa", store, 6);
+  }
   const socket = new PGLiteSocketServer({
     db,
     host: "127.0.0.1",
-    port: 55434,
+    port: databasePort,
     maxConnections: 10,
   });
   await socket.start();
@@ -181,24 +197,23 @@ async function main() {
       "--hostname",
       "127.0.0.1",
       "--port",
-      "3001",
+      String(appPort),
     ],
     {
       stdio: "inherit",
       env: {
-        ...process.env,
-        DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:55434/postgres",
-        APP_ORIGIN: "http://127.0.0.1:3001",
-        NEXT_DIST_DIR: ".local/ui-next",
-        NEXT_TELEMETRY_DISABLED: "1",
+        ...localOperationsEnvironment(process.env),
+        DATABASE_URL: `postgresql://postgres:postgres@127.0.0.1:${databasePort}/postgres`,
+        APP_ORIGIN: `http://127.0.0.1:${appPort}`,
+        NEXT_DIST_DIR: distDir,
       },
       windowsHide: true,
     },
   );
-  app.on("exit", async () => {
+  app.on("exit", async (code) => {
     await socket.stop();
     await db.close();
-    process.exit(0);
+    process.exit(code ?? 1);
   });
   process.on("SIGINT", () => app.kill());
 }

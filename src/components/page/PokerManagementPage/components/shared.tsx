@@ -193,7 +193,7 @@ export function Field({
   label: string;
   hint?: string;
   optional?: boolean;
-  children: ReactNode;
+  children: ReactElement;
 }) {
   const id = useId(),
     t = useText(),
@@ -312,6 +312,8 @@ type ChoiceProps = {
   "aria-describedby"?: string;
   "aria-invalid"?: boolean;
   className?: string;
+  onSearchChange?: (query: string) => void;
+  searching?: boolean;
 };
 export function ChoiceButtons({
   options,
@@ -409,6 +411,8 @@ export function SearchSelect({
   required,
   disabled,
   className,
+  onSearchChange,
+  searching,
   ...props
 }: ChoiceProps) {
   const [open, setOpen] = useState(false),
@@ -421,7 +425,13 @@ export function SearchSelect({
     ]),
   );
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) onSearchChange?.("");
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           {...props}
@@ -451,6 +461,7 @@ export function SearchSelect({
         className="w-[var(--radix-popover-trigger-width)] p-0"
       >
         <Command
+          shouldFilter={!onSearchChange}
           filter={(itemValue, query) => {
             const option = searchOptions.get(itemValue);
             return option && matchesSearchChoice(option, query) ? 1 : 0;
@@ -459,9 +470,12 @@ export function SearchSelect({
           <CommandInput
             placeholder={t("Search by name or phone")}
             aria-label={t("Search by name or phone")}
+            onValueChange={onSearchChange}
           />
           <CommandList>
-            <CommandEmpty>{t("No matching players.")}</CommandEmpty>
+            <CommandEmpty>
+              {t(searching ? "Loading records…" : "No matching players.")}
+            </CommandEmpty>
             <CommandGroup>
               {options.map((o) => (
                 <CommandItem
@@ -472,6 +486,7 @@ export function SearchSelect({
                     markDirty?.();
                     onValueChange(o.value);
                     setOpen(false);
+                    onSearchChange?.("");
                   }}
                 >
                   {t(o.label)}
@@ -612,16 +627,10 @@ export function ActionForm({
             try {
               const retry = s.retryRequired;
               const expected = revision ?? openedRevision?.current;
-              if (
-                !retry &&
-                expected !== undefined &&
-                expected !== s.snapshot?.revision
-              )
-                throw new Error(
-                  "Records changed while this form was open. Close and reopen it to review the latest values.",
-                );
               if (!retry) attemptedHere.current = true;
-              const saved = retry ? await s.retryLast() : await onSubmit();
+              const saved = retry
+                ? await s.retryLast()
+                : await s.withReviewedRevision(expected, onSubmit);
               if (saved === true && attemptedHere.current) onSuccess?.();
             } catch (error) {
               s.setError(

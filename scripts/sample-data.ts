@@ -5,6 +5,7 @@ import { defaultSettings } from "../src/domain/settings";
 import type { Command } from "../src/domain/commands";
 import type { Staff, Store, EntryType, PlayerTag } from "../src/domain/model";
 import type { Database } from "../src/server/database";
+import { readStore, replaceStore } from "../src/server/storage";
 
 const SAMPLE_OPERATION = "b4824185-8f4d-4ad3-81e0-f9af1b627ede";
 const SAMPLE_VERSION = "local-sample-data-v1";
@@ -299,13 +300,14 @@ export async function seedLocalSamples(
 ) {
   return db.transaction(async (connection) => {
     const row = (
-      await connection.query<{ revision: number; data: Store }>(
-        "SELECT revision, data FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
+      await connection.query<{ revision: number }>(
+        "SELECT revision FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
         ["local"],
       )
     ).rows[0];
     if (!row)
       throw new Error("Start npm run local before loading sample data.");
+    const current = await readStore(connection, "local");
     const exists =
       (
         await connection.query(
@@ -313,17 +315,17 @@ export async function seedLocalSamples(
           ["local", SAMPLE_OPERATION],
         )
       ).rows.length > 0;
-    if (exists) return { added: false, ...sampleSummary(row.data) };
+    if (exists) return { added: false, ...sampleSummary(current) };
     if (
-      row.data.currentDayId ||
-      Object.values(row.data).some(
+      current.currentDayId ||
+      Object.values(current).some(
         (value) => Array.isArray(value) && value.length > 0,
       )
     )
       throw new Error(
         "Local Venue already contains records. Sample loading stopped without changing them.",
       );
-    await backup?.(row);
+    await backup?.({ revision: row.revision, data: current });
     const actors = Object.fromEntries(
       (["cashier", "manager", "admin", "dealer"] as const).map((role) => [
         role,
@@ -347,10 +349,7 @@ export async function seedLocalSamples(
         [actor.id, "local", actor.role],
       );
     }
-    await connection.query(
-      "UPDATE poker_branch_state SET data=$1,revision=revision+1 WHERE branch_id=$2",
-      [JSON.stringify(next), "local"],
-    );
+    await replaceStore(connection, "local", next, row.revision + 1);
     await connection.query(
       "INSERT INTO poker_operations(branch_id,operation_id,actor_id,fingerprint,revision) VALUES($1,$2,$3,$4,$5)",
       [

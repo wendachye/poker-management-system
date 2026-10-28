@@ -17,12 +17,19 @@ import { ListToolbar } from "../components/list-toolbar";
 import { RangeReport } from "../components/range-report";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Link } from "@/i18n/navigation";
-import { playersForDay, totalsForDay } from "@/domain/selectors";
+import { emptyStore, playersForDay, totalsForDay } from "@/domain/selectors";
+import type { Player } from "@/domain/model";
+import {
+  downloadReadCsv,
+  ReadStatus,
+  useReadPage,
+} from "../components/use-read-page";
 import { venueSettings } from "@/domain/settings";
 import { businessDayDates } from "@/lib/business-day-dates";
 import { closingCashDraft } from "@/lib/closing-cash-draft";
 import { displayName } from "@/lib/display-name";
 import { matchesListSearch } from "@/lib/list-search";
+import { reportDateInput, reportSelection } from "@/lib/report-selection";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money, parseMoney, toCsv } from "../utils";
 import {
@@ -52,27 +59,53 @@ export function ReportsView() {
   const val = (key: string, fallback = "") =>
       s.draft("report." + key, fallback),
     set = (key: string, v: string) => s.setDraft("report." + key, v);
-  const selected = val("day") || s.store.currentDayId || "",
-    day = s.store.days.find((d) => d.id === selected),
-    totals = totalsForDay(s.store, selected);
-  const players = playersForDay(s.store, selected).filter((p) =>
-    s.store.sessions.some(
-      (session) => session.playerId === p.id && session.dayId === selected,
-    ),
+  const selected = val("day") || s.store.currentDayId || "";
+  const selectedDate = s.draftValue("report.selectedDate");
+  const requestedPage = Math.max(0, Number(val("playerPage")) || 0);
+  const remote = useReadPage<Player>(
+    {
+      resource: "report",
+      ...reportSelection(selectedDate, val("day"), s.store.currentDayId),
+      query: val("playerSearch"),
+      status: val("playerStatus"),
+      page: requestedPage,
+    },
+    val("mode", "day") === "day" && !!(selected || selectedDate),
   );
-  const filteredPlayers = players.filter(
-    (player) =>
-      (!val("playerStatus") || player.status === val("playerStatus")) &&
-      matchesListSearch(
-        val("playerSearch"),
-        [displayName(player.name)],
-        [player.phone],
-      ),
-  );
-  const playerPage = Math.min(
-    Math.max(0, Number(val("playerPage")) || 0),
-    Math.max(0, Math.ceil(filteredPlayers.length / 20) - 1),
-  );
+  const day = remote.live
+    ? remote.data?.day
+    : s.store.days.find((d) => d.id === selected);
+  const totals = remote.live
+    ? (remote.data?.totals ?? totalsForDay(emptyStore()))
+    : totalsForDay(s.store, selected);
+  const localPlayers = remote.live
+    ? []
+    : playersForDay(s.store, selected).filter((p) =>
+        s.store.sessions.some(
+          (session) => session.playerId === p.id && session.dayId === selected,
+        ),
+      );
+  const players = remote.live ? (remote.data?.items ?? []) : localPlayers;
+  const filteredPlayers = remote.live
+    ? players
+    : players.filter(
+        (player) =>
+          (!val("playerStatus") || player.status === val("playerStatus")) &&
+          matchesListSearch(
+            val("playerSearch"),
+            [displayName(player.name)],
+            [player.phone],
+          ),
+      );
+  const playerTotal = remote.live
+    ? (remote.data?.total ?? 0)
+    : filteredPlayers.length;
+  const playerPage = remote.live
+    ? (remote.data?.page ?? requestedPage)
+    : Math.min(
+        Math.max(0, Number(val("playerPage")) || 0),
+        Math.max(0, Math.ceil(filteredPlayers.length / 20) - 1),
+      );
   const closes = day?.closes.toReversed() ?? [];
   const filteredCloses = closes.filter((close) =>
     matchesListSearch(val("closeSearch"), [close.actor, close.reason]),
@@ -91,6 +124,7 @@ export function ReportsView() {
   }
   function selectDay(id: string) {
     set("day", id);
+    s.clearDraft("report.selectedDate");
     clearPlayerFilters();
     clearCloseFilters();
   }
@@ -101,7 +135,9 @@ export function ReportsView() {
     s.snapshot!.branch.timezone,
   );
   const ready =
-    !s.locked && !s.activePlayers.length && !s.pendingApprovals.length;
+    !s.locked &&
+    !s.activePlayers.length &&
+    !(s.store.readModel?.pendingCurrent ?? s.pendingApprovals.length);
   const reconciliation = closingCashDraft(
     val("count"),
     s.totals.expectedCash,
@@ -124,6 +160,19 @@ export function ReportsView() {
     );
   }
   function download() {
+    if (remote.live) {
+      void downloadReadCsv(
+        { resource: "report", dayId: day?.id, date: selectedDate || undefined },
+        "daily-close-" + (day?.date ?? "report") + ".csv",
+      ).catch((error: unknown) =>
+        s.setError(
+          error instanceof Error
+            ? error.message
+            : "Cannot download report. Please try again.",
+        ),
+      );
+      return;
+    }
     const rows: (string | number)[][] = [
       ["Branch", displayName(s.snapshot!.branch.name)],
       ["Business date", day?.date ?? ""],
@@ -236,7 +285,24 @@ export function ReportsView() {
               </AlertDescription>
             </Alert>
           )}
-          {!day ? (
+          {remote.live && (
+            <div className="max-w-sm">
+              <Field label="Report date">
+                <Input
+                  type="date"
+                  value={reportDateInput(selectedDate, day?.date, s.day?.date)}
+                  onChange={(event) => {
+                    set("selectedDate", event.target.value);
+                    set("day", "");
+                    clearPlayerFilters();
+                    clearCloseFilters();
+                  }}
+                />
+              </Field>
+            </div>
+          )}
+          <ReadStatus state={remote} />
+          {!day && (remote.loading || remote.error) ? null : !day ? (
             <EmptyState
               title="No business day yet"
               description={
@@ -259,6 +325,7 @@ export function ReportsView() {
                       variant="outline"
                       className="h-11 sm:h-9"
                       onClick={download}
+                      disabled={remote.loading || !!remote.error}
                     >
                       <Download />
                       {t("Export daily CSV")}
@@ -266,18 +333,20 @@ export function ReportsView() {
                   </div>
                 }
               >
-                <div className="max-w-sm">
-                  <Field label="Report date">
-                    <Select
-                      value={selected}
-                      onValueChange={selectDay}
-                      options={s.store.days.toReversed().map((d) => ({
-                        value: d.id,
-                        label: d.date + " · " + t(d.status),
-                      }))}
-                    />
-                  </Field>
-                </div>
+                {!remote.live && (
+                  <div className="max-w-sm">
+                    <Field label="Report date">
+                      <Select
+                        value={selected}
+                        onValueChange={selectDay}
+                        options={s.store.days.toReversed().map((d) => ({
+                          value: d.id,
+                          label: d.date + " · " + t(d.status),
+                        }))}
+                      />
+                    </Field>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
                   {[
                     ["Expected cash", money(totals.expectedCash)],
@@ -308,7 +377,7 @@ export function ReportsView() {
                 title="Player results"
                 description="List filters only change the rows shown. Report totals and CSV exports include all records in the selected report."
               >
-                {players.length > 0 && (
+                {(remote.live || players.length > 0) && (
                   <ListToolbar
                     compact
                     search={val("playerSearch")}
@@ -334,7 +403,7 @@ export function ReportsView() {
                         : []
                     }
                     onClear={clearPlayerFilters}
-                    resultCount={filteredPlayers.length}
+                    resultCount={playerTotal}
                   >
                     <Field label="Status">
                       <Select
@@ -352,7 +421,9 @@ export function ReportsView() {
                     </Field>
                   </ListToolbar>
                 )}
-                {!players.length ? (
+                {!players.length &&
+                !val("playerSearch") &&
+                !val("playerStatus") ? (
                   <EmptyState title="No visits for this day" />
                 ) : !filteredPlayers.length ? (
                   <EmptyState title="No matching player results">
@@ -364,10 +435,14 @@ export function ReportsView() {
                   <RecordList
                     compact
                     label="Player results"
-                    rows={filteredPlayers.slice(
-                      playerPage * 20,
-                      playerPage * 20 + 20,
-                    )}
+                    rows={
+                      remote.live
+                        ? filteredPlayers
+                        : filteredPlayers.slice(
+                            playerPage * 20,
+                            playerPage * 20 + 20,
+                          )
+                    }
                     rowKey={(p) => p.id}
                     columns={[
                       {
@@ -406,7 +481,7 @@ export function ReportsView() {
                 <Pager
                   label="Player results"
                   page={playerPage}
-                  total={filteredPlayers.length}
+                  total={playerTotal}
                   setPage={(page) => set("playerPage", String(page))}
                 />
               </Panel>
@@ -584,7 +659,9 @@ export function ReportsView() {
             </p>
             {[
               {
-                count: s.pendingApprovals.length,
+                count:
+                  s.store.readModel?.pendingCurrent ??
+                  s.pendingApprovals.length,
                 label: "pending approvals",
                 href: "/transactions",
                 action: "Review requests",

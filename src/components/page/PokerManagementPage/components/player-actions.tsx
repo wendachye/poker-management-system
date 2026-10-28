@@ -24,7 +24,9 @@ export function PlayerActions({
   const pendingRequest = s.pendingApprovals.find(
     (r) => r.playerId === player.id,
   );
-  const pending = !!pendingRequest;
+  const pending = s.store.readModel
+    ? !!s.store.readModel.pendingPlayers[player.id]
+    : !!pendingRequest;
   const blocked = s.locked || s.busy || s.retryRequired;
   const pendingDescriptionId = useId();
   const actions: RowAction[] = [];
@@ -88,7 +90,7 @@ export function PlayerActions({
       }
       aria-describedby={compact && pending ? pendingDescriptionId : undefined}
     >
-      {pendingRequest && (
+      {pending && (
         <Button asChild size="sm" variant="outline" className="h-11 sm:h-9">
           <Link
             href="/transactions"
@@ -98,7 +100,7 @@ export function PlayerActions({
               s.setDraft("tx.status", "PENDING");
               s.setDraft("tx.day", "");
               s.setDraft("tx.filter", "");
-              s.setDraft("tx.search", pendingRequest.id);
+              s.setDraft("tx.search", pendingRequest?.id ?? player.phone);
               s.setDraft("tx.page", "0");
               s.closeOperation();
             }}

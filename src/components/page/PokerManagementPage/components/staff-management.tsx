@@ -10,7 +10,8 @@ import type { Role } from "@/domain/model";
 import type { StaffAccount } from "@/domain/staff";
 import { displayName } from "@/lib/display-name";
 import { matchesListSearch } from "@/lib/list-search";
-import { managementRequest } from "@/lib/management-request";
+import { managementJson } from "@/lib/management-request";
+import { staffReceipt } from "@/lib/management-contracts";
 import {
   staffFormCommand,
   type StaffFormAction,
@@ -68,13 +69,13 @@ export function StaffManagement() {
   const branchId = s.snapshot!.branch.id;
   useEffect(() => {
     const controller = new AbortController();
-    void managementRequest("/api/staff", {
+    void managementJson<unknown>("/api/staff", {
       cache: "no-store",
       signal: controller.signal,
     })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error);
+      .then(staffReceipt)
+      .then((data) => {
+        if (controller.signal.aborted) return;
         if (data.branchId !== branchId)
           throw new Error(
             "Your active branch changed. Reload this page before continuing.",

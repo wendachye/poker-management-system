@@ -2,11 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PGlite } from "@electric-sql/pglite";
 import { seedLocalSamples, sampleSummary } from "../scripts/sample-data";
-import { schema } from "../src/server/schema";
+import { migrate } from "../src/server/schema";
+import { importStore, readStore } from "../src/server/storage";
 import { emptyStore, debt, totalsForDay } from "../src/domain/selectors";
 import { applyCommand, canApprove } from "../src/domain/operations";
 import type { Database, SqlConnection } from "../src/server/database";
-import type { Store, Staff } from "../src/domain/model";
+import type { Staff } from "../src/domain/model";
 
 function adapt(engine: PGlite): Database {
   const connection = (client: Pick<PGlite, "query">): SqlConnection => ({
@@ -22,14 +23,11 @@ function adapt(engine: PGlite): Database {
 }
 async function setup() {
   const engine = await PGlite.create();
-  await engine.exec(schema);
+  await migrate(adapt(engine));
   await engine.query(
     "INSERT INTO poker_branches(id,name,timezone) VALUES('local','Local Venue','Asia/Kuala_Lumpur')",
   );
-  await engine.query(
-    "INSERT INTO poker_branch_state(branch_id,data) VALUES('local',$1)",
-    [JSON.stringify(emptyStore())],
-  );
+  await importStore(adapt(engine), "local", emptyStore());
   return engine;
 }
 
@@ -46,11 +44,14 @@ test("sample loader creates valid scenarios once and leaves accounts unable to s
     assert.equal(first.businessDays, 3);
     assert.equal(first.pendingRequests, 5);
     assert.equal(first.rejectedRequests, 1);
-    const before = (
-      await db.query<{ revision: number; data: Store }>(
-        "SELECT revision,data FROM poker_branch_state WHERE branch_id='local'",
-      )
-    ).rows[0];
+    const before = {
+      revision: (
+        await db.query<{ revision: number }>(
+          "SELECT revision FROM poker_branch_state WHERE branch_id='local'",
+        )
+      ).rows[0].revision,
+      data: await readStore(db, "local"),
+    };
     const store = before.data;
     assert.deepEqual(
       store.days.map((d) => d.date),
@@ -109,11 +110,14 @@ test("sample loader creates valid scenarios once and leaves accounts unable to s
         Object.entries(second).filter(([key]) => key !== "added"),
       ),
     );
-    const after = (
-      await db.query(
-        "SELECT revision,data FROM poker_branch_state WHERE branch_id='local'",
-      )
-    ).rows[0];
+    const after = {
+      revision: (
+        await db.query<{ revision: number }>(
+          "SELECT revision FROM poker_branch_state WHERE branch_id='local'",
+        )
+      ).rows[0].revision,
+      data: await readStore(db, "local"),
+    };
     assert.deepEqual(after, before);
   } finally {
     await engine.close();
@@ -130,19 +134,19 @@ test("sample loader refuses existing venue records without modifying them", asyn
       dealer: "",
       status: "OPEN",
     });
-    await engine.query(
-      "UPDATE poker_branch_state SET data=$1,revision=7 WHERE branch_id='local'",
-      [JSON.stringify(store)],
-    );
+    await importStore(adapt(engine), "local", store, 7);
     await assert.rejects(
       seedLocalSamples(adapt(engine)),
       /already contains records/,
     );
-    const after = (
-      await engine.query<{ data: Store; revision: number }>(
-        "SELECT data,revision FROM poker_branch_state WHERE branch_id='local'",
-      )
-    ).rows[0];
+    const after = {
+      revision: (
+        await engine.query<{ revision: number }>(
+          "SELECT revision FROM poker_branch_state WHERE branch_id='local'",
+        )
+      ).rows[0].revision,
+      data: await readStore(adapt(engine), "local"),
+    };
     assert.deepEqual(after, { data: store, revision: 7 });
     assert.equal(
       (await engine.query("SELECT id FROM poker_users")).rows.length,

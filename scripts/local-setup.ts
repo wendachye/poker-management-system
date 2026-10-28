@@ -3,6 +3,7 @@ import type { Database } from "../src/server/database";
 import { hashPassword } from "../src/server/auth";
 import { migrate } from "../src/server/schema";
 import { emptyStore } from "../src/domain/selectors";
+import { storageMetadata } from "../src/server/storage";
 import type { Role } from "../src/domain/model";
 
 /** Bootstrap local accounts once. Never reset passwords or existing branch data. */
@@ -15,7 +16,7 @@ export async function initializeLocal(db: Database) {
     );
     await connection.query(
       "INSERT INTO poker_branch_state(branch_id,data) VALUES($1,$2) ON CONFLICT(branch_id) DO NOTHING",
-      ["local", JSON.stringify(emptyStore())],
+      ["local", JSON.stringify(storageMetadata(emptyStore()))],
     );
     const created: { username: string; password: string; role: Role }[] = [];
     for (const role of ["ADMIN", "MANAGER", "CASHIER"] as const) {
