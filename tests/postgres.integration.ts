@@ -18,6 +18,10 @@ import { mutate, readSnapshot } from "../src/server/repository";
 import { migrate, schemaMigrationStatus } from "../src/server/schema";
 import { manageStaff } from "../src/server/staff";
 import { createLocation } from "../src/server/locations";
+import {
+  CANCELLED_OPERATION_FINGERPRINT,
+  recoverOperation,
+} from "../src/server/operation-recovery";
 import { configuredStore } from "./helpers/store";
 import { replaceStore } from "../src/server/storage";
 import {
@@ -268,6 +272,44 @@ async function simultaneous<T>(
   }
 }
 
+/** Establish actual lock wait order before releasing independent requests. */
+async function orderedRecoveryRace(
+  branchId: string,
+  actions: [() => Promise<unknown>, () => Promise<unknown>],
+) {
+  const holder = await lockPool.connect();
+  const pending: Promise<PromiseSettledResult<unknown>>[] = [];
+  let committed = false;
+  try {
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT branch_id FROM poker_branch_state WHERE branch_id=$1 FOR UPDATE",
+      [branchId],
+    );
+    const holderPid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0].pid;
+    const pids = await Promise.all([
+      backendPid(firstPool),
+      backendPid(secondPool),
+    ]);
+    assert.notEqual(pids[0], pids[1]);
+    for (let index = 0; index < actions.length; index++) {
+      pending.push(
+        Promise.allSettled([actions[index]()]).then((results) => results[0]),
+      );
+      await waitForBlocked(pids[index], holderPid);
+    }
+    await holder.query("COMMIT");
+    committed = true;
+    return await Promise.all(pending);
+  } finally {
+    if (!committed) await holder.query("ROLLBACK");
+    holder.release();
+    await Promise.all(pending);
+  }
+}
+
 /** Change the session only after an independent writer is waiting on the row. */
 async function sessionChangeWhileBlocked<T>(
   branchId: string,
@@ -359,6 +401,136 @@ test("two independent requests with the same operation identifier commit one mut
     1,
   );
 });
+
+for (const writer of ["state", "staff", "location"] as const)
+  for (const first of ["writer", "recovery"] as const)
+    test(`PostgreSQL ${writer} recovery serializes ${first} first and resolves one immutable outcome`, async () => {
+      const run = await fixture();
+      const targetId = `recover-${randomBytes(6).toString("hex")}`;
+      const reference = {
+        branchId: run.branchId,
+        actorId: run.users.admin,
+        operationId: randomUUID(),
+      };
+      const input = {
+        ...reference,
+        revision: 0,
+        command:
+          writer === "state"
+            ? tableCommand(targetId)
+            : writer === "staff"
+              ? {
+                  kind: "STAFF_CREATE",
+                  username: targetId,
+                  password,
+                  role: "CASHIER",
+                  reason: "Fictional recovery race",
+                }
+              : {
+                  kind: "CREATE_LOCATION",
+                  id: targetId,
+                  name: targetId,
+                  timezone: "Asia/Kuala_Lumpur",
+                },
+      };
+      const save = (db: Database) =>
+        writer === "state"
+          ? mutate(db, run.tokens.admin, input, { compact: true })
+          : writer === "staff"
+            ? manageStaff(db, run.tokens.admin, input, { compact: true })
+            : createLocation(db, run.tokens.admin, input, { compact: true });
+      const recover = (db: Database) =>
+        recoverOperation(db, run.tokens.admin, reference);
+      const before = await readSnapshot(firstDb, run.tokens.admin);
+      const results = await orderedRecoveryRace(run.branchId, [
+        () => (first === "writer" ? save(firstDb) : recover(firstDb)),
+        () => (first === "writer" ? recover(secondDb) : save(secondDb)),
+      ]);
+      const resolved = await recover(secondDb);
+      assert.deepEqual(await recover(firstDb), resolved);
+      if (first === "writer") {
+        assert.equal(results[0].status, "fulfilled");
+        assert.equal(results[1].status, "fulfilled");
+        assert.equal(resolved.status, "saved");
+        if (results[0].status === "fulfilled")
+          assert.deepEqual(resolved.snapshot, results[0].value);
+        assert.equal(resolved.snapshot.revision, 1);
+      } else {
+        assert.equal(results[0].status, "fulfilled");
+        assert.equal(results[1].status, "rejected");
+        if (results[1].status === "rejected") {
+          status(results[1].reason, 409);
+          assert.match(results[1].reason.message, /cancelled during recovery/);
+        }
+        assert.equal(resolved.status, "cancelled");
+        await assert.rejects(save(secondDb), /cancelled during recovery/);
+        assert.deepEqual(await readSnapshot(firstDb, run.tokens.admin), before);
+        assert.equal(
+          (
+            await firstDb.query(
+              "SELECT id FROM poker_users WHERE username=$1",
+              [targetId],
+            )
+          ).rows.length,
+          0,
+        );
+        assert.equal(
+          (
+            await firstDb.query("SELECT id FROM poker_branches WHERE id=$1", [
+              targetId,
+            ])
+          ).rows.length,
+          0,
+        );
+      }
+      const saved = (
+        await firstDb.query<{ fingerprint: string }>(
+          "SELECT fingerprint FROM poker_operations WHERE branch_id=$1 AND operation_id=$2",
+          [run.branchId, reference.operationId],
+        )
+      ).rows;
+      assert.equal(saved.length, 1);
+      assert.equal(
+        saved[0].fingerprint === CANCELLED_OPERATION_FINGERPRINT,
+        first === "recovery",
+      );
+    });
+
+for (const sessionChange of ["logout", "venue switch"] as const)
+  test(`PostgreSQL recovery waiting on the writer lock refuses a committed ${sessionChange} without creating a tombstone`, async () => {
+    const run = await fixture();
+    const destination = await fixture();
+    await firstDb.query(
+      "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,'ADMIN')",
+      [run.users.admin, destination.branchId],
+    );
+    const reference = {
+      branchId: run.branchId,
+      actorId: run.users.admin,
+      operationId: randomUUID(),
+    };
+    const result = await sessionChangeWhileBlocked(
+      run.branchId,
+      () => recoverOperation(secondDb, run.tokens.admin, reference),
+      () =>
+        sessionChange === "logout"
+          ? logout(firstDb, run.tokens.admin)
+          : changeBranch(firstDb, run.tokens.admin, destination.branchId),
+    );
+    assert.equal(result.status, "rejected");
+    if (result.status === "rejected")
+      status(result.reason, sessionChange === "logout" ? 401 : 409);
+    assert.equal(
+      (
+        await firstDb.query(
+          "SELECT operation_id FROM poker_operations WHERE branch_id=$1 AND operation_id=$2",
+          [run.branchId, reference.operationId],
+        )
+      ).rows.length,
+      0,
+    );
+    assert.equal((await readSnapshot(firstDb, run.tokens.manager)).revision, 0);
+  });
 
 test("simultaneous stale edits commit one change and return one 409 conflict", async () => {
   const run = await fixture();

@@ -49,6 +49,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup } from "radix-ui";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
+  RequestRecoveryAlert,
+  RequestRecoveryResult,
+} from "./request-recovery-alert";
+import {
   Select as UiSelect,
   SelectContent,
   SelectItem,
@@ -672,18 +676,17 @@ export function ActionForm({
               <AlertDescription>{t(s.error)}</AlertDescription>
             </Alert>
           )}
-          {s.retryRequired && (
-            <Alert className="mt-4">
-              <AlertDescription>
-                {t(
-                  "The last request has an unconfirmed result. Retry it before continuing.",
-                )}
-                <Button type="submit" disabled={s.busy}>
-                  {t("Retry last request")}
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
+          <RequestRecoveryAlert
+            state={s}
+            t={t}
+            className="mt-4"
+            onRetry={() => {
+              void s.retryLast().then((saved) => {
+                if (saved && attemptedHere.current) onSuccess?.();
+              });
+            }}
+          />
+          <RequestRecoveryResult state={s} t={t} className="mt-4" />
           {Children.map(children, (child) =>
             isValidElement(child) && child.type === FormActions
               ? cloneElement(child as ReactElement<{ disabled?: boolean }>, {
@@ -858,10 +861,18 @@ export function Modal({
       <AlertDialog open={open && confirmClose} onOpenChange={setConfirmClose}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t("Discard unsaved changes?")}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {t(
+                s.retryRequired
+                  ? "Close this form?"
+                  : "Discard unsaved changes?",
+              )}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               {t(
-                "Your changes have not been submitted. Continue editing or discard them.",
+                s.retryRequired
+                  ? "Closing the form keeps the request recovery information. Check the previous request before entering it again."
+                  : "Continue editing or close this form and discard its draft.",
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -876,7 +887,7 @@ export function Modal({
                 onOpenChange(false);
               }}
             >
-              {t("Discard changes")}
+              {t(s.retryRequired ? "Close form" : "Discard changes")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -17,6 +17,10 @@ import { venueSettings } from "@/domain/settings";
 import { displayName } from "@/lib/display-name";
 import { Link } from "@/i18n/navigation";
 import { PageHeader } from "./components/page-header";
+import {
+  RequestRecoveryAlert,
+  RequestRecoveryResult,
+} from "./components/request-recovery-alert";
 import type { ModuleKey } from "./types";
 import {
   adminModules,
@@ -164,23 +168,8 @@ export function PokerManagementPage({
           </AlertDescription>
         </Alert>
       )}
-      {state.retryRequired && (
-        <Alert>
-          <AlertDescription>
-            <p>
-              {t(
-                "The last request has an unconfirmed result. Retry it before continuing.",
-              )}
-            </p>
-            <Button
-              disabled={state.busy}
-              onClick={() => void state.retryLast()}
-            >
-              {t("Retry last request")}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <RequestRecoveryAlert state={state} t={t} />
+      <RequestRecoveryResult state={state} t={t} />
       {!state.snapshot && (auth.loading || auth.user) ? (
         <div
           role="status"

@@ -1197,6 +1197,182 @@ test(
     );
 
     await t.test(
+      "metadata-only recovery confirms saved requests and cancels delayed writes through authenticated HTTP",
+      async () => {
+        const route = "/api/operations/recover";
+        const before = await admin.snapshot();
+        const reference = () => ({
+          branchId: before.branch.id,
+          actorId: before.user.id,
+          operationId: randomUUID(),
+        });
+        type RecoveryReceipt = {
+          status: "saved" | "cancelled";
+          branchId: string;
+          actorId: string;
+          operationId: string;
+          snapshot: Snapshot;
+        };
+        await new StaffBrowser().json(route, "POST", reference(), 401);
+        assert.equal(
+          (
+            await admin.response(route, "POST", reference(), {
+              Origin: "https://unrelated.invalid",
+            })
+          ).response.status,
+          403,
+        );
+        assert.equal(
+          (
+            await admin.response(route, "POST", reference(), {
+              "Content-Type": "text/plain",
+            })
+          ).response.status,
+          415,
+        );
+        await admin.json(
+          route,
+          "POST",
+          { ...reference(), command: { password } },
+          400,
+        );
+        await admin.json(
+          route,
+          "POST",
+          { ...reference(), actorId: "different-staff" },
+          409,
+        );
+        await admin.json(
+          route,
+          "POST",
+          { ...reference(), branchId: "http-other" },
+          409,
+        );
+        for (const [endpoint, command] of [
+          [
+            "/api/state",
+            {
+              kind: "TABLE",
+              name: "Cancelled HTTP table",
+              dealer: "",
+              status: "OPEN",
+            },
+          ],
+          [
+            "/api/staff",
+            {
+              kind: "STAFF_CREATE",
+              username: "http.cancelled",
+              password,
+              role: "CASHIER",
+              reason: "Fictional delayed HTTP save",
+            },
+          ],
+          [
+            "/api/locations",
+            {
+              kind: "CREATE_LOCATION",
+              id: "http-cancelled",
+              name: "Cancelled HTTP Venue",
+              timezone: "Asia/Kuala_Lumpur",
+            },
+          ],
+        ] as const) {
+          const checkpoint = reference();
+          const result = await admin.json<RecoveryReceipt>(
+            route,
+            "POST",
+            checkpoint,
+          );
+          assert.equal(result.status, "cancelled");
+          assert.equal(result.operationId, checkpoint.operationId);
+          assert.equal(result.actorId, checkpoint.actorId);
+          assert.equal(result.branchId, checkpoint.branchId);
+          assert.deepEqual(result.snapshot, before);
+          assert.deepEqual(await admin.json(route, "POST", checkpoint), result);
+          const delayed = await admin.json<{ error: string }>(
+            endpoint,
+            "POST",
+            {
+              ...checkpoint,
+              revision: before.revision,
+              command,
+            },
+            409,
+          );
+          assert.match(delayed.error, /cancelled during recovery/);
+          assert.deepEqual(await admin.snapshot(), before);
+        }
+        const checkpoint = reference();
+        const saved = await admin.json<Snapshot>("/api/state", "POST", {
+          ...checkpoint,
+          revision: before.revision,
+          command: {
+            kind: "TABLE",
+            name: "Recovered HTTP table",
+            dealer: "",
+            status: "OPEN",
+          },
+        });
+        const confirmed = await admin.json<RecoveryReceipt>(
+          route,
+          "POST",
+          checkpoint,
+        );
+        assert.equal(confirmed.status, "saved");
+        assert.deepEqual(confirmed.snapshot, saved);
+        assert.deepEqual(
+          await admin.json(route, "POST", checkpoint),
+          confirmed,
+        );
+        assert.equal(JSON.stringify(confirmed).includes(password), false);
+        assert.equal(
+          JSON.stringify(confirmed).includes("password_hash"),
+          false,
+        );
+        const reviewer = await manager.json<{ user: Snapshot["user"] }>(
+          "/api/auth",
+        );
+        await manager.json(
+          route,
+          "POST",
+          { ...checkpoint, actorId: reviewer.user.id },
+          403,
+        );
+        const revoked = new StaffBrowser();
+        const identity = await revoked.signIn("http.manager");
+        await revoked.json("/api/auth", "DELETE", {});
+        const expiredReference = { ...reference(), actorId: identity.user.id };
+        await revoked.json(route, "POST", expiredReference, 401);
+        assert.equal(
+          (
+            await fixturePool.query(
+              "SELECT operation_id FROM poker_operations WHERE operation_id=$1",
+              [expiredReference.operationId],
+            )
+          ).rows.length,
+          0,
+        );
+        assert.equal(
+          (
+            await fixturePool.query(
+              "SELECT id FROM poker_users WHERE username='http.cancelled'",
+            )
+          ).rows.length,
+          0,
+        );
+        assert.equal(
+          (
+            await fixturePool.query(
+              "SELECT id FROM poker_branches WHERE id='http-cancelled'",
+            )
+          ).rows.length,
+          0,
+        );
+      },
+    );
+
+    await t.test(
       "login throttling hides unknown names, ignores forged source headers and creates no sessions",
       async () => {
         const visitor = new StaffBrowser();

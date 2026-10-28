@@ -9,6 +9,7 @@ import type { Database, SqlConnection } from "./database";
 import { readSnapshot, touchChangeVersions } from "./repository";
 import { writeStoreDelta, type StorageMetadata } from "./storage";
 import { readOperationalSnapshot } from "./queries";
+import { assertOperationNotCancelled } from "./operation-recovery";
 import {
   assertStaffAccountMutable,
   keepActiveAdmins,
@@ -95,6 +96,7 @@ export async function manageStaff(
       )
     ).rows[0];
     if (previous) {
+      assertOperationNotCancelled(previous.fingerprint);
       if (
         previous.actor_id !== actor.id ||
         previous.fingerprint !== fingerprint

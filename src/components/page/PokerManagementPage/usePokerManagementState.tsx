@@ -7,6 +7,18 @@ import { usePathname } from "@/i18n/navigation";
 import { managementJson } from "@/lib/management-request";
 import { ManagementResponseError } from "@/lib/management-response";
 import { snapshotReceipt } from "@/lib/management-contracts";
+import {
+  operationRecoveryReceipt,
+  operationSnapshotReceipt,
+} from "@/lib/operation-recovery";
+import {
+  clearPendingOperation,
+  listPendingOperations,
+  PendingOperationStorageError,
+  pendingOperation,
+  writePendingOperation,
+  type PendingOperation,
+} from "@/lib/pending-operation";
 import { createBackgroundRefresh } from "@/lib/background-refresh";
 import { approvalDecisionMessage } from "@/lib/approval-decision-message";
 import { prototypeEnabled } from "@/prototype/config";
@@ -47,6 +59,13 @@ export function usePokerManagementState() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [retryRequired, setRetryRequired] = useState(false);
+  const [recoveryCheckpoint, setRecoveryCheckpoint] =
+    useState<PendingOperation | null>(null);
+  const [recoveryError, setRecoveryError] = useState("");
+  const [checkpointWriteFailed, setCheckpointWriteFailed] = useState(false);
+  const [recoveredResult, setRecoveredResult] = useState<
+    "saved" | "cancelled" | null
+  >(null);
   const [error, setError] = useState("");
   const [refreshError, setRefreshError] = useState("");
   const [notice, setNotice] = useState("");
@@ -71,7 +90,41 @@ export function usePokerManagementState() {
     fingerprint: string;
     payload: string;
     endpoint: string;
+    checkpoint?: PendingOperation;
   } | null>(null);
+  const synchronizeRecovery = useCallback(() => {
+    if (prototypeEnabled || !user) return;
+    try {
+      const checkpoints = listPendingOperations(window.localStorage, {
+        actorId: user.id,
+        branchId: user.branchId,
+      });
+      setRecoveryCheckpoint(
+        checkpoints.find(
+          (checkpoint) =>
+            checkpoint.operationId !==
+            uncertain.current?.checkpoint?.operationId,
+        ) ?? null,
+      );
+      setRecoveryError("");
+    } catch (error) {
+      setRecoveryError(
+        error instanceof Error
+          ? error.message
+          : "Cannot access request recovery information in this browser.",
+      );
+    }
+  }, [user]);
+  useEffect(() => {
+    if (prototypeEnabled || !user) return;
+    void Promise.resolve().then(synchronizeRecovery);
+    window.addEventListener("storage", synchronizeRecovery);
+    window.addEventListener("focus", synchronizeRecovery);
+    return () => {
+      window.removeEventListener("storage", synchronizeRecovery);
+      window.removeEventListener("focus", synchronizeRecovery);
+    };
+  }, [synchronizeRecovery, user]);
   const accept = useCallback((next: Snapshot) => {
     const previousUser = acceptedSnapshot.current?.user;
     if (
@@ -201,10 +254,12 @@ export function usePokerManagementState() {
     endpoint = "/api/state",
   ) {
     if (!snapshot || inFlight.current) return false;
+    const wasUncertain = uncertain.current !== null;
     inFlight.current = true;
     setBusy(true);
     setError("");
     setNotice("");
+    setRecoveredResult(null);
     try {
       const fingerprint = JSON.stringify(command);
       if (
@@ -215,23 +270,61 @@ export function usePokerManagementState() {
         throw new Error(
           "Retry the previous request before submitting a different operation.",
         );
-      const payload =
-        uncertain.current?.payload ??
-        JSON.stringify({
+      let checkpoint = uncertain.current?.checkpoint;
+      let payload = uncertain.current?.payload;
+      if (!payload) {
+        const operationId = crypto.randomUUID();
+        if (!prototypeEnabled) {
+          try {
+            const previous = listPendingOperations(window.localStorage, {
+              actorId: snapshot.user.id,
+              branchId: snapshot.branch.id,
+            });
+            if (previous.length) {
+              setRecoveryCheckpoint(previous[0]);
+              throw new Error(
+                "Check the previous request before submitting another operation.",
+              );
+            }
+            checkpoint = pendingOperation({
+              version: 1,
+              operationId,
+              actorId: snapshot.user.id,
+              branchId: snapshot.branch.id,
+              endpoint,
+              createdAt: Date.now(),
+            });
+            // Persist only recovery metadata, before sending any command.
+            writePendingOperation(window.localStorage, checkpoint);
+            setCheckpointWriteFailed(false);
+            setRecoveryError("");
+          } catch (error) {
+            synchronizeRecovery();
+            if (error instanceof PendingOperationStorageError) {
+              setCheckpointWriteFailed(true);
+              setRecoveryError(error.message);
+            }
+            throw error;
+          }
+        }
+        payload = JSON.stringify({
           branchId: snapshot.branch.id,
           actorId: snapshot.user.id,
-          operationId: crypto.randomUUID(),
+          operationId,
           revision: reviewedRevision.current ?? snapshot.revision,
           command,
         });
-      uncertain.current = { fingerprint, payload, endpoint };
-      const data = snapshotReceipt(
+      }
+      uncertain.current = { fingerprint, payload, endpoint, checkpoint };
+      const data = operationSnapshotReceipt(
         await managementJson<unknown>(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: payload,
         }),
+        { actorId: snapshot.user.id, branchId: snapshot.branch.id },
       );
+      if (checkpoint) clearPendingOperation(window.localStorage, checkpoint);
       uncertain.current = null;
       accept(data);
       if (
@@ -267,7 +360,19 @@ export function usePokerManagementState() {
       return true;
     } catch (error) {
       if (error instanceof ManagementResponseError) {
-        if (!error.uncertain) uncertain.current = null;
+        if (!error.uncertain) {
+          // A later rejection cannot prove that an earlier uncertain attempt
+          // did not commit. Keep its checkpoint for the locked server check.
+          if (!wasUncertain && uncertain.current?.checkpoint) {
+            try {
+              clearPendingOperation(
+                window.localStorage,
+                uncertain.current.checkpoint,
+              );
+            } catch {}
+          }
+          uncertain.current = null;
+        }
         if (error.status === 401) {
           // eslint-disable-next-line @next/next/no-location-assign-relative-destination
           window.location.assign("/login");
@@ -285,6 +390,63 @@ export function usePokerManagementState() {
       inFlight.current = false;
       setBusy(false);
       setRetryRequired(uncertain.current !== null);
+      synchronizeRecovery();
+    }
+  }
+  async function recoverLast() {
+    const checkpoint = recoveryCheckpoint ?? uncertain.current?.checkpoint;
+    if (!checkpoint || !snapshot || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setRecoveredResult(null);
+    try {
+      const result = operationRecoveryReceipt(
+        await managementJson<unknown>("/api/operations/recover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operationId: checkpoint.operationId,
+            actorId: checkpoint.actorId,
+            branchId: checkpoint.branchId,
+          }),
+        }),
+        checkpoint,
+      );
+      clearPendingOperation(window.localStorage, checkpoint);
+      if (uncertain.current?.checkpoint?.operationId === checkpoint.operationId)
+        uncertain.current = null;
+      accept(result.snapshot);
+      setOperation(null);
+      setDrafts({});
+      setNow(Date.now());
+      const message =
+        result.status === "saved"
+          ? "The previous request was saved. Review the refreshed records before continuing."
+          : "The previous request was not saved and its old request is cancelled. You can enter it again.";
+      setNotice(message);
+      setRecoveredResult(result.status);
+      try {
+        await refreshAuth();
+      } catch {}
+    } catch (error) {
+      if (error instanceof ManagementResponseError && error.status === 401) {
+        // The checkpoint survives sign-in; recovery never stores the command.
+        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+        window.location.assign("/login");
+        return;
+      }
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Cannot check the previous request. Try again before continuing.",
+      );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+      setRetryRequired(uncertain.current !== null);
+      synchronizeRecovery();
     }
   }
   const store = snapshot?.store ?? emptyStore();
@@ -506,7 +668,26 @@ export function usePokerManagementState() {
         delete next[key];
         return next;
       }),
-    retryRequired,
+    retryRequired:
+      retryRequired ||
+      !!recoveryCheckpoint ||
+      !!recoveryError ||
+      checkpointWriteFailed,
+    recoveryCheckpoint,
+    recoveryError:
+      recoveryError ||
+      (checkpointWriteFailed
+        ? "Cannot access request recovery information in this browser."
+        : ""),
+    recoveredResult,
+    synchronizeRecovery: () => {
+      setCheckpointWriteFailed(false);
+      synchronizeRecovery();
+    },
+    recoverLast,
+    canRetryLast: retryRequired,
+    canRecoverLast:
+      !!recoveryCheckpoint || (!prototypeEnabled && retryRequired),
     retryLast: () =>
       uncertain.current
         ? submit(

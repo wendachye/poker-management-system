@@ -12,6 +12,7 @@ import type { Database, SqlConnection } from "./database";
 import { readStore, writeStoreDelta, type StorageMetadata } from "./storage";
 import { loadCommandStore } from "./command-store";
 import { readOperationalSnapshot } from "./queries";
+import { assertOperationNotCancelled } from "./operation-recovery";
 
 type ResultContext = {
   playerIds?: string[];
@@ -110,6 +111,7 @@ export async function mutate(
       )
     ).rows[0];
     if (previous) {
+      assertOperationNotCancelled(previous.fingerprint);
       if (previous.actor_id !== user.id || previous.fingerprint !== fingerprint)
         throw new DomainError("Operation identifier was already used.", 409);
       return options.compact

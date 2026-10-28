@@ -13,6 +13,7 @@ import {
   type StorageMetadata,
 } from "./storage";
 import { readOperationalSnapshot } from "./queries";
+import { assertOperationNotCancelled } from "./operation-recovery";
 import type { Database } from "./database";
 const schema = z
   .object({
@@ -83,6 +84,7 @@ export async function createLocation(
       )
     ).rows[0];
     if (previous) {
+      assertOperationNotCancelled(previous.fingerprint);
       if (previous.actor_id !== user.id || previous.fingerprint !== fingerprint)
         throw new DomainError("Operation identifier was already used.", 409);
       return options.compact
