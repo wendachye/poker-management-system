@@ -1,5 +1,11 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useAuth } from "@/contexts/auth-context";
 import { toast } from "sonner";
 import { useLocale, useMessages } from "next-intl";
@@ -22,6 +28,7 @@ import {
 import { createBackgroundRefresh } from "@/lib/background-refresh";
 import { approvalDecisionMessage } from "@/lib/approval-decision-message";
 import { prototypeEnabled } from "@/prototype/config";
+import { matchesOperationalAccess } from "@/lib/operational-access";
 import type { Command, SeatSwapParticipant } from "@/domain/commands";
 import type { StaffCommand } from "@/domain/staff";
 import type { LocationCommand } from "@/domain/locations";
@@ -76,6 +83,10 @@ export function usePokerManagementState() {
   const inFlight = useRef(false);
   const latestRevision = useRef(-1);
   const acceptedSnapshot = useRef<Snapshot | null>(null);
+  const authenticatedStaff = useRef(user);
+  useLayoutEffect(() => {
+    authenticatedStaff.current = user;
+  }, [user]);
   const activeBranch = useRef<string | null>(null);
   const readFocus = useRef<{
     playerId?: string;
@@ -125,35 +136,51 @@ export function usePokerManagementState() {
       window.removeEventListener("focus", synchronizeRecovery);
     };
   }, [synchronizeRecovery, user]);
-  const accept = useCallback((next: Snapshot) => {
-    const previousUser = acceptedSnapshot.current?.user;
+  const checkAccess = useCallback((next: Snapshot) => {
     if (
       !prototypeEnabled &&
-      previousUser &&
-      (previousUser.id !== next.user.id || previousUser.role !== next.user.role)
+      !matchesOperationalAccess(authenticatedStaff.current, next)
     ) {
-      // Another tab may have changed the signed-in staff or their permissions.
+      // A first or delayed response must match the identity displayed to staff.
       window.location.reload();
       return false;
     }
-    if (activeBranch.current && activeBranch.current !== next.branch.id) {
-      if (!prototypeEnabled) {
+    return true;
+  }, []);
+  const accept = useCallback(
+    (next: Snapshot) => {
+      if (!checkAccess(next)) return false;
+      const previousUser = acceptedSnapshot.current?.user;
+      if (
+        !prototypeEnabled &&
+        previousUser &&
+        (previousUser.id !== next.user.id ||
+          previousUser.role !== next.user.role)
+      ) {
+        // Another tab may have changed the signed-in staff or their permissions.
         window.location.reload();
         return false;
       }
-      latestRevision.current = -1;
-      setDrafts({});
-      setOperation(null);
-    }
-    activeBranch.current = next.branch.id;
-    if (next.revision >= latestRevision.current) {
-      latestRevision.current = next.revision;
-      acceptedSnapshot.current = next;
-      setSnapshot(next);
-      return true;
-    }
-    return false;
-  }, []);
+      if (activeBranch.current && activeBranch.current !== next.branch.id) {
+        if (!prototypeEnabled) {
+          window.location.reload();
+          return false;
+        }
+        latestRevision.current = -1;
+        setDrafts({});
+        setOperation(null);
+      }
+      activeBranch.current = next.branch.id;
+      if (next.revision >= latestRevision.current) {
+        latestRevision.current = next.revision;
+        acceptedSnapshot.current = next;
+        setSnapshot(next);
+        return true;
+      }
+      return false;
+    },
+    [checkAccess],
+  );
   const refresh = useCallback(async () => {
     try {
       const query = new URLSearchParams(
@@ -254,6 +281,7 @@ export function usePokerManagementState() {
     endpoint = "/api/state",
   ) {
     if (!snapshot || inFlight.current) return false;
+    if (!checkAccess(snapshot)) return false;
     const wasUncertain = uncertain.current !== null;
     inFlight.current = true;
     setBusy(true);
@@ -396,6 +424,7 @@ export function usePokerManagementState() {
   async function recoverLast() {
     const checkpoint = recoveryCheckpoint ?? uncertain.current?.checkpoint;
     if (!checkpoint || !snapshot || inFlight.current) return;
+    if (!checkAccess(snapshot)) return;
     inFlight.current = true;
     setBusy(true);
     setError("");
@@ -482,6 +511,8 @@ export function usePokerManagementState() {
         }),
       );
       if (signal?.aborted) throw signal.reason;
+      if (!checkAccess(page.context))
+        throw new DOMException("Staff access changed.", "AbortError");
       if (page.revision < latestRevision.current)
         throw new ManagementResponseError(
           "Records changed. Refresh records, review them and try again.",
@@ -507,7 +538,7 @@ export function usePokerManagementState() {
       setRefreshError("");
       return page;
     },
-    [accept],
+    [accept, checkAccess],
   );
   const focusRead = useCallback(
     async (query: ReadQuery, signal?: AbortSignal) => {

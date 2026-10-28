@@ -167,6 +167,16 @@ These controls do not clear the session cookie or metadata-only pending-request 
 
 Local verification on 29 October 2026 passed 502 isolated tests, 30 native PostgreSQL checks, 16 HTTP checks and 16 desktop/mobile recovery cases using fictional fixtures. The HTTP test held a staff-table lock until the server layout redirected to the unavailable sign-in page; the existing cookie remained usable after unlocking. Browser cases covered repeated 503s, confirmed expiration, a saved login with a failed follow-up read, repeated ambiguous account switches, preserved pending-request metadata and English/Chinese layouts at 1280px and 390px. Both builds and built HTTP smoke checks passed. Evidence is retained under the ignored `.local/session-recovery-2026-10-29` directory. These local checks do not establish hosted availability or staff acceptance.
 
+## Operational context across browser tabs
+
+Operational snapshots and paginated list results must match the staff ID, role and venue currently established by authentication, including the first response after sign-in. A mismatched response triggers a full reload before its records or actionable rows are accepted. Retained asynchronous callbacks consult the latest committed authentication identity. Submitting an operation or checking a previous request also checks this boundary before sending anything.
+
+This closes an initial-load race where another tab could change the shared session between the authentication read and the first operational read, leaving the header and records associated with different staff or venues. Existing server-side actor and venue validation remains authoritative. The separate browser-memory prototype retains its persona and venue reset behavior, and pending-request metadata is preserved across the reload.
+
+The CSV download path is separate from operational context acceptance. Binding report exports to the staff and venue reviewed in the current tab remains a follow-up; ordinary server-side export authorization still applies.
+
+Local verification on 29 October 2026 passed 507 isolated tests, 30 native PostgreSQL checks, 16 HTTP checks, 20 source-derived callback regressions and 14 desktop/mobile workflow cases. Real cookie, venue and role changes between authentication and the first operational response caused a reload before crossed records were accepted. A later paginated-list change returned no actionable rows under the previous access context. Race cases sent no operation POSTs and retained pending-request metadata; the normal sample check-in, seating, RM500 buy-in and independent approval still worked. Both builds and built HTTP smoke checks passed. Evidence is retained under the ignored `.local/operational-access-2026-10-29` directory. A separate mobile screenshot refinement timed out while waiting for the sidebar to close after an immediate Escape; it remains an inconclusive dismissal check, recorded separately from the completed functional cases.
+
 ## Verify changes
 
 Run the existing suite, typecheck, lint and both operations/demo builds. The real PostgreSQL and full HTTP workflow suites are intentionally separate:
