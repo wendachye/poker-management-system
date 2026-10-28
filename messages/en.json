@@ -1093,6 +1093,9 @@
     "cannot_load_staff_access": "Cannot load staff access",
     "loading_records": "Loading records…",
     "cannot_load_records": "Cannot load records.",
-    "cannot_download_report_please_try_again": "Cannot download report. Please try again."
+    "cannot_download_report_please_try_again": "Cannot download report. Please try again.",
+    "checking_for_an_existing_player": "Checking for an existing player…",
+    "checking_for_an_existing_player_wait_before_continuing": "Checking for an existing player. Wait before continuing.",
+    "cannot_check_this_phone_number_retry_the_check_before_continuing": "Cannot check this phone number. Retry the check before continuing."
   }
 }

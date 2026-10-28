@@ -32,6 +32,20 @@ Both `NEXT_PUBLIC_POKER_PROTOTYPE=1` and `POKER_PROTOTYPE_MODE=1` must be enable
 
 If a demo deployment shows staff sign-in instead, verify its source commit and that both prototype markers were enabled at build and runtime. Real operations use a separate deployment, database and configuration; do not change the stakeholder project's mode to onboard real staff.
 
+## Native PostgreSQL sample system on localhost
+
+For the complete authenticated system with persistent fictional data on native PostgreSQL 18, start Docker Desktop and run:
+
+```sh
+npm run local:postgres
+```
+
+Open [localhost:3001](http://localhost:3001/en/login). Initial sample accounts are `local.admin`, `local.manager`, `local.cashier` and `local.dealer`, all with the local test password **`local-test-password`**. This mode uses real HTTP routes and PostgreSQL; the stakeholder prototype above keeps its separate browser-memory mode. These launchers share the default app port, so run one at a time.
+
+Samples include a populated venue, a separate venue for clean-day exercises, flexible 5/10 and 10/25 tables, cash/credit players, approvals and closing history. Records and later credential changes persist on restart. The launcher preserves existing `.env.local`, the older embedded local database, cloud configuration and unrelated services. Database files live in its labelled Docker volume; Ctrl+C stops the web app while preserving the sample database.
+
+Use `npm run local:postgres -- --backup` to save and independently verify a read-only native backup. See the [native PostgreSQL local guide](docs/local-postgres.md) for accounts, persistence, rules, backup limits and the desktop/mobile verification record.
+
 ## Local first (no Docker or cloud account)
 
 Use Node.js 22.13+ and install the project dependencies once with `yarn install --frozen-lockfile`. Start both the app and persistent local database with:

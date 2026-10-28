@@ -1093,6 +1093,9 @@
     "cannot_load_staff_access": "无法加载员工访问权限",
     "loading_records": "正在加载记录…",
     "cannot_load_records": "无法加载记录。",
-    "cannot_download_report_please_try_again": "无法下载报表，请重试。"
+    "cannot_download_report_please_try_again": "无法下载报表，请重试。",
+    "checking_for_an_existing_player": "正在检查是否已有此玩家…",
+    "checking_for_an_existing_player_wait_before_continuing": "正在检查是否已有此玩家，请等待检查完成后继续。",
+    "cannot_check_this_phone_number_retry_the_check_before_continuing": "无法检查此电话号码，请重试检查后再继续。"
   }
 }

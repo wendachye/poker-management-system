@@ -136,11 +136,17 @@ function CheckInDialog({
     { resource: "players", status: "OUT", query: playerSearch },
     value("mode") === "returning",
   );
+  const phoneLookupEnabled =
+    value("mode") !== "returning" &&
+    value("phone").replace(/\D/g, "").length >= 7;
   const phoneLookup = useReadPage<Player>(
     { resource: "players", query: value("phone"), pageSize: 5 },
-    value("mode") !== "returning" &&
-      value("phone").replace(/\D/g, "").length >= 7,
+    phoneLookupEnabled,
   );
+  const phoneCheckRequired = phoneLookup.live && phoneLookupEnabled;
+  const phoneCheckBlocked =
+    phoneCheckRequired &&
+    (phoneLookup.loading || !!phoneLookup.error || !phoneLookup.data);
   const returningPlayers = returningLookup.live
     ? (returningLookup.data?.items ?? [])
     : s.players;
@@ -158,6 +164,15 @@ function CheckInDialog({
     (returning
       ? selected?.type === "CREDIT"
       : value("type", "CASH") === "CREDIT");
+  const phoneCheckStatus = phoneCheckRequired ? (
+    phoneLookup.error ? (
+      <ReadStatus state={phoneLookup} />
+    ) : phoneCheckBlocked ? (
+      <p role="status" className="text-sm text-muted-foreground">
+        {t("Checking for an existing player…")}
+      </p>
+    ) : null
+  ) : null;
   return (
     <Modal
       open
@@ -175,6 +190,12 @@ function CheckInDialog({
             value("table"))
         }
         onSubmit={() => {
+          if (phoneCheckBlocked)
+            throw new Error(
+              phoneLookup.error
+                ? "Cannot check this phone number. Retry the check before continuing."
+                : "Checking for an existing player. Wait before continuing.",
+            );
           if (duplicate)
             throw new Error(
               "This phone number belongs to an existing player. Select that player to check in.",
@@ -346,6 +367,7 @@ function CheckInDialog({
                       />
                     </Field>
                   </FormGrid>
+                  {phoneCheckStatus}
                   {duplicate && (
                     <Alert role="status">
                       <AlertDescription className="min-w-0 space-y-3">
@@ -501,6 +523,7 @@ function CheckInDialog({
           )}
           {step === "seat" && (
             <>
+              {phoneCheckStatus}
               {duplicate && (
                 <Alert variant="destructive" role="alert">
                   <AlertDescription>
@@ -636,7 +659,9 @@ function CheckInDialog({
             </>
           )}
         </div>
-        <FormActions disabled={creditBlocked || !!duplicate}>
+        <FormActions
+          disabled={creditBlocked || !!duplicate || phoneCheckBlocked}
+        >
           {step === "player"
             ? "Choose seat"
             : buyInNext

@@ -6,6 +6,7 @@
   "scripts": {
     "prototype": "node --import tsx scripts/prototype.ts",
     "local": "node --conditions=react-server --import tsx scripts/local.ts",
+    "local:postgres": "node --conditions=react-server --import tsx scripts/local-postgres.ts --port 3001",
     "local:db": "node --conditions=react-server --import tsx scripts/local.ts --database-only",
     "local:seed": "node --conditions=react-server --import tsx scripts/seed-local.ts",
     "local:backup": "node --conditions=react-server --import tsx scripts/backup-local.ts backup",
