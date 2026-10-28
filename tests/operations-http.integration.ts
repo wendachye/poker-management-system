@@ -335,6 +335,14 @@ class StaffBrowser {
     return this.json<Snapshot>("/api/state");
   }
 
+  document(route: string) {
+    return fetch(origin + route, {
+      headers: this.cookie ? { Cookie: this.cookie } : {},
+      redirect: "manual",
+      signal: AbortSignal.timeout(20000),
+    });
+  }
+
   async csv(route: string) {
     const response = await fetch(origin + route, {
       headers: { Cookie: this.cookie },
@@ -1613,6 +1621,48 @@ test(
           ).length,
           1,
         );
+      },
+    );
+
+    await t.test(
+      "a temporary server-layout outage preserves the session for a read-only recovery",
+      async () => {
+        const before = await admin.json<{ user: Snapshot["user"] }>(
+          "/api/auth",
+        );
+        const holder = await fixturePool.connect();
+        let locked = false;
+        try {
+          await holder.query("BEGIN");
+          locked = true;
+          await holder.query("LOCK TABLE poker_users IN ACCESS EXCLUSIVE MODE");
+          const unavailable = await admin.document("/en/tables");
+          assert.equal(unavailable.status, 307);
+          const target = new URL(unavailable.headers.get("location")!, origin);
+          assert.equal(target.pathname, "/en/login");
+          assert.equal(target.searchParams.get("unavailable"), "1");
+          assert.equal(
+            unavailable.headers
+              .getSetCookie()
+              .some((cookie) => cookie.startsWith("poker_session=")),
+            false,
+          );
+          await unavailable.arrayBuffer();
+        } finally {
+          if (locked) await holder.query("ROLLBACK");
+          holder.release();
+        }
+        const after = await admin.json<{ user: Snapshot["user"] }>("/api/auth");
+        assert.deepEqual(after.user, before.user);
+        const loginPage = await admin.document("/en/login?unavailable=1");
+        assert.equal(loginPage.status, 200);
+        assert.equal(
+          loginPage.headers
+            .getSetCookie()
+            .some((cookie) => cookie.startsWith("poker_session=")),
+          false,
+        );
+        await loginPage.arrayBuffer();
       },
     );
 

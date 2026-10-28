@@ -1118,6 +1118,17 @@
     "close_this_form": "Close this form?",
     "closing_the_form_keeps_the_request_recovery_information_check_the_previous_request_before_entering_it_again": "Closing the form keeps the request recovery information. Check the previous request before entering it again.",
     "continue_editing_or_close_this_form_and_discard_its_draft": "Continue editing or close this form and discard its draft.",
-    "close_form": "Close form"
+    "close_form": "Close form",
+    "check_your_connection_and_continue": "Check your connection and continue.",
+    "checking_staff_access": "Checking staff access…",
+    "connection_unavailable": "Connection unavailable",
+    "continue_your_session": "Continue your session",
+    "the_service_could_not_be_reached_check_the_connection_to_continue_with_your_existing_session": "The service could not be reached. Check the connection to continue with your existing session.",
+    "a_staff_session_is_available_check_access_to_continue": "A staff session is available. Check access to continue.",
+    "checking_connection": "Checking connection…",
+    "retry_connection": "Retry connection",
+    "use_another_account": "Use another account",
+    "cannot_check_staff_access_right_now_please_try_again": "Cannot check staff access right now. Please try again.",
+    "the_active_session_is_for_a_different_account_sign_in_again_to_use_the_requested_account": "The active session is for a different account. Sign in again to use the requested account."
   }
 }

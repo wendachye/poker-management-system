@@ -157,6 +157,16 @@ Database pools carry an opaque configuration signature tied to the exact pool in
 
 Local verification on 29 October 2026 passed 494 isolated tests, 30 native PostgreSQL checks and 15 HTTP checks. A 120-response service burst executed four metadata queries through one probe while retaining distinct response references. Deterministic clock tests cover overdue timer delivery, cache expiry, late success and configuration changes. Adapter regressions cover held/queued connections, rejection before SQL, rollback before commit and unchanged ordinary transactions. The native HTTP scenario held a schema lock: 30 concurrent checks timed out, ten later checks after cache expiry retained one waiting SQL probe, a staff table save succeeded, and readiness recovered after unlocking. Both builds and built HTTP smoke checks passed. The local web app was restarted against its existing sample volume; setup reported no new sample data and preserved staff passwords. Evidence is retained under the ignored `.local/readiness-2026-10-29` directory. Cloud staging and hosted acceptance remain deferred.
 
+## Recovering staff access after an outage
+
+An unavailable sign-in page offers **Retry connection** instead of asking staff to submit credentials again. This checks the existing session with a fresh, read-only `/api/auth` request. A verified session resumes the dashboard; a confirmed expired session returns to the normal sign-in form. A temporary or incomplete response keeps the recovery screen available. There is no automatic retry or dashboard redirect based only on a cached identity.
+
+A successful credential submission can lose its follow-up access response. The same recovery action checks its session without repeating the credential POST. If an attempted account switch instead finds a different active account, the page stays on sign-in, clears the password and asks staff to sign in to the intended account. It does not silently continue under the previous staff member. Account names from cached sessions are not displayed on the recovery screen.
+
+These controls do not clear the session cookie or metadata-only pending-request checkpoints. After access returns, use **Check previous request** to resolve an uncertain operation before entering it again. Access recovery does not itself retry financial writes or establish their outcome.
+
+Local verification on 29 October 2026 passed 502 isolated tests, 30 native PostgreSQL checks, 16 HTTP checks and 16 desktop/mobile recovery cases using fictional fixtures. The HTTP test held a staff-table lock until the server layout redirected to the unavailable sign-in page; the existing cookie remained usable after unlocking. Browser cases covered repeated 503s, confirmed expiration, a saved login with a failed follow-up read, repeated ambiguous account switches, preserved pending-request metadata and English/Chinese layouts at 1280px and 390px. Both builds and built HTTP smoke checks passed. Evidence is retained under the ignored `.local/session-recovery-2026-10-29` directory. These local checks do not establish hosted availability or staff acceptance.
+
 ## Verify changes
 
 Run the existing suite, typecheck, lint and both operations/demo builds. The real PostgreSQL and full HTTP workflow suites are intentionally separate:

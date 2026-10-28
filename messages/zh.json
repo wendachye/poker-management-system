@@ -1118,6 +1118,17 @@
     "close_this_form": "关闭此表单？",
     "closing_the_form_keeps_the_request_recovery_information_check_the_previous_request_before_entering_it_again": "关闭表单后仍会保留请求恢复信息。请先检查上一笔请求，再重新输入。",
     "continue_editing_or_close_this_form_and_discard_its_draft": "您可以继续编辑，或关闭表单并放弃当前草稿。",
-    "close_form": "关闭表单"
+    "close_form": "关闭表单",
+    "check_your_connection_and_continue": "请检查连接后继续。",
+    "checking_staff_access": "正在检查员工访问权限…",
+    "connection_unavailable": "暂时无法连接",
+    "continue_your_session": "继续当前会话",
+    "the_service_could_not_be_reached_check_the_connection_to_continue_with_your_existing_session": "暂时无法连接服务。请检查连接，恢复后可继续当前会话。",
+    "a_staff_session_is_available_check_access_to_continue": "已有员工会话。请检查访问权限后继续。",
+    "checking_connection": "正在检查连接…",
+    "retry_connection": "重新连接",
+    "use_another_account": "使用其他账户",
+    "cannot_check_staff_access_right_now_please_try_again": "暂时无法检查员工访问权限。请重试。",
+    "the_active_session_is_for_a_different_account_sign_in_again_to_use_the_requested_account": "当前会话属于其他账户。请重新登录所需的账户。"
   }
 }
