@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { displayName } from "@/lib/display-name";
 import { parseCashOutDraftAmount } from "@/lib/cash-out-form";
+import { creditRepaymentDraft } from "@/lib/credit-repayment-form";
 import {
   buyInQuickAmounts,
   validBuyInDraftAmount,
@@ -682,8 +683,11 @@ function TransactionDialog({
       : buyInCap;
   const cashOutAmount =
     type === "Cash-out" ? parseCashOutDraftAmount(val("amount")) : null;
-  let amount = cashOutAmount ?? 0;
-  if (type !== "Cash-out") {
+  const repaymentDraft = repayment
+    ? creditRepaymentDraft(val("amount"), selectedPlayer?.creditUsed ?? 0)
+    : null;
+  let amount = cashOutAmount ?? repaymentDraft?.amount ?? 0;
+  if (type !== "Cash-out" && !repayment) {
     try {
       amount = parseMoney(val("amount", "0"), true);
     } catch {}
@@ -698,6 +702,16 @@ function TransactionDialog({
     cashOutAmount !== null &&
     selectedPlayer?.status === "ACTIVE" &&
     selectedTable?.status === "OPEN";
+  const validRepaymentAmount =
+    selectedPlayer?.type === "CREDIT" && !!repaymentDraft?.valid;
+  const validDraftAmount =
+    type === "Buy-in"
+      ? validBuyInAmount
+      : type === "Cash-out"
+        ? validCashOutAmount
+        : repayment
+          ? validRepaymentAmount
+          : amount > 0;
   const noteField = (
     <Field
       label="Note"
@@ -795,7 +809,7 @@ function TransactionDialog({
                 />
               </Field>
             </div>
-          ) : !sessionEntry ? (
+          ) : !sessionEntry && !repayment ? (
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <p className="min-w-0 break-words text-sm">
                 <span className="font-medium">{t(title)}</span>
@@ -895,14 +909,14 @@ function TransactionDialog({
             <div className="min-w-0 space-y-2 text-xs">
               <dl
                 className={
-                  type === "Cash-out"
+                  type === "Cash-out" || repayment
                     ? "space-y-2"
                     : "grid grid-cols-2 gap-x-3 gap-y-2"
                 }
               >
                 {[
                   ["Outstanding credit", selectedPlayer.creditUsed],
-                  ...(type === "Cash-out"
+                  ...(type === "Cash-out" || repayment
                     ? []
                     : [["Available credit", availableCredit]]),
                 ].map(([label, value]) => (
@@ -916,7 +930,7 @@ function TransactionDialog({
                   </div>
                 ))}
               </dl>
-              {type !== "Cash-out" && (
+              {type !== "Cash-out" && !repayment && (
                 <p className="text-muted-foreground">
                   {t("Credit limit")}: {money(selectedPlayer.creditLimit)}
                   {pendingCredit > 0 && (
@@ -1032,6 +1046,11 @@ function TransactionDialog({
             >
               {t("Repay full balance")} · {money(selectedPlayer.creditUsed)}
             </Button>
+          )}
+          {repayment && repaymentDraft?.exceedsDebt && (
+            <p className="text-sm font-medium text-destructive" role="alert">
+              {t("Repayment cannot exceed outstanding credit.")}
+            </p>
           )}
           {type === "Buy-in" && selectedPlayer && selectedTable && (
             <div className="min-w-0 space-y-2 text-xs leading-5 [overflow-wrap:anywhere]">
@@ -1159,7 +1178,7 @@ function TransactionDialog({
                   />
                 </Button>
               </CollapsibleTrigger>
-              {sessionEntry && !changingType && (
+              {(sessionEntry || repayment) && !changingType && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -1176,9 +1195,7 @@ function TransactionDialog({
           )}
         </FormSection>
         <div className="min-w-0 space-y-2">
-          {(type === "Cash-out"
-            ? validCashOutAmount
-            : type !== "Buy-in" || validBuyInAmount) && (
+          {validDraftAmount && (
             <EntryImpact
               request={{ type, amount, playerId: val("player") || undefined }}
             />
@@ -1188,11 +1205,7 @@ function TransactionDialog({
           </p>
         </div>
         <FormActions
-          disabled={
-            !!disabledReason ||
-            (type === "Buy-in" && !validBuyInAmount) ||
-            (type === "Cash-out" && !validCashOutAmount)
-          }
+          disabled={!!disabledReason || !validDraftAmount}
           summary={
             type === "Cash-out" ? (
               validCashOutAmount ? (
@@ -1239,6 +1252,47 @@ function TransactionDialog({
                 ) : (
                   <p className="text-xs text-muted-foreground">
                     {t("Enter a valid buy-in amount.")}
+                  </p>
+                )}
+              </div>
+            ) : repayment ? (
+              <div
+                className="min-w-0 space-y-1"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                {selectedPlayer && (
+                  <p
+                    className="truncate text-xs text-muted-foreground"
+                    title={displayName(selectedPlayer.name)}
+                  >
+                    {displayName(selectedPlayer.name)}
+                  </p>
+                )}
+                {validRepaymentAmount ? (
+                  <dl className="space-y-1">
+                    <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                      <dt className="text-xs text-muted-foreground">
+                        {t("Cash received")}
+                      </dt>
+                      <dd className="whitespace-nowrap text-base font-semibold tabular-nums">
+                        {money(amount)}
+                      </dd>
+                    </div>
+                    <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                      <dt>{t("Credit still owed after approval")}</dt>
+                      <dd className="whitespace-nowrap tabular-nums">
+                        {money(repaymentDraft!.remainingDebt!)}
+                      </dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      selectedPlayer
+                        ? "Enter a valid repayment amount."
+                        : "Select a credit player.",
+                    )}
                   </p>
                 )}
               </div>

@@ -2,6 +2,7 @@
 import type { ApprovalRequest } from "@/domain/model";
 import { ledgerImpact } from "@/domain/ledger-impact";
 import { displayName } from "@/lib/display-name";
+import { reversalEffectRows } from "@/lib/reversal-presentation";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money } from "../utils";
 import { useText } from "./shared";
@@ -82,18 +83,7 @@ export function EntryImpact({ request }: { request: ImpactRequest }) {
   const creditAfter = player ? player.creditUsed + impact.creditDelta : 0;
   const effects: { label: string; value: number; primary?: boolean }[] = [];
   if (request.type === "Reversal") {
-    if (impact.cashReceived !== 0)
-      effects.push({ label: "Cash received", value: impact.cashReceived });
-    if (impact.cashPayout !== 0)
-      effects.push({ label: "Cash payout", value: impact.cashPayout });
-    if (impact.creditDelta !== 0)
-      effects.push({
-        label:
-          original?.type === "Cash-out" && impact.creditDelta > 0
-            ? "Credit debt restored"
-            : "Credit change",
-        value: impact.creditDelta,
-      });
+    effects.push(...reversalEffectRows(impact));
   } else {
     if (
       [

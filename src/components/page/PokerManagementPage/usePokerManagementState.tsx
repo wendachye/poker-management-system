@@ -196,13 +196,15 @@ export function usePokerManagementState() {
       const message =
         command.kind === "DECIDE"
           ? approvalDecisionMessage(data.store, command.approvalId)
-          : command.kind === "REQUEST" || command.kind === "CORRECT"
-            ? "Request sent for approval."
-            : command.kind === "CHECK_IN"
-              ? "Player checked in."
-              : command.kind === "CLOSE_DAY"
-                ? "Business day closed."
-                : "Saved successfully.";
+          : command.kind === "CORRECT"
+            ? "Reversal sent for approval."
+            : command.kind === "REQUEST"
+              ? "Request sent for approval."
+              : command.kind === "CHECK_IN"
+                ? "Player checked in."
+                : command.kind === "CLOSE_DAY"
+                  ? "Business day closed."
+                  : "Saved successfully.";
       setNotice(message);
       const key = message
         .toLowerCase()

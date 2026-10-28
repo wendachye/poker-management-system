@@ -3,7 +3,7 @@ import { ApprovalQueue } from "../components/approval-queue";
 import { filterRequests, type RequestView } from "@/domain/request-filters";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useState } from "react";
-import { Plus, ReceiptText, RotateCcw } from "lucide-react";
+import { ChevronDown, Plus, ReceiptText, RotateCcw } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,16 @@ import type { Transaction } from "@/domain/model";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money } from "../utils";
 import { displayName } from "@/lib/display-name";
+import {
+  reversalRequestState,
+  validReversalReason,
+} from "@/lib/reversal-presentation";
+import { EntryImpact } from "../components/entry-impact";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   ActionForm,
   Field,
@@ -220,11 +230,12 @@ export function TransactionsView() {
     );
   }
   function rowActions(tx: Transaction) {
-    const canReverse =
-      !tx.reversesId &&
-      !s.store.transactions.some((entry) => entry.reversesId === tx.id) &&
-      tx.dayId === s.store.currentDayId &&
-      s.user?.role !== "DEALER";
+    const reversalState = reversalRequestState(
+      s.store,
+      tx,
+      s.user?.role,
+      s.locked,
+    );
     return (
       <div className="flex shrink-0 items-center gap-1.5">
         <Button
@@ -237,7 +248,7 @@ export function TransactionsView() {
         >
           <ReceiptText />
         </Button>
-        {canReverse && (
+        {reversalState.eligible && (
           <RowActions
             iconOnly
             label={t("Transaction actions") + " · " + tx.id}
@@ -247,20 +258,11 @@ export function TransactionsView() {
                 label: t("Request reversal"),
                 icon: RotateCcw,
                 destructive: true,
-                disabled:
-                  s.busy ||
-                  s.locked ||
-                  s.pendingApprovals.some((p) => p.reversesId === tx.id),
-                description: s.pendingApprovals.some(
-                  (p) => p.reversesId === tx.id,
-                )
+                disabled: s.busy || s.retryRequired || reversalState.blocked,
+                description: reversalState.pending
                   ? "Resolve pending request first"
                   : undefined,
-                onSelect: () => {
-                  set("reason", "");
-                  s.setError("");
-                  setReversing(tx);
-                },
+                onSelect: () => startReversal(tx),
               },
             ]}
           />
@@ -268,6 +270,17 @@ export function TransactionsView() {
       </div>
     );
   }
+  function startReversal(tx: Transaction) {
+    const state = reversalRequestState(s.store, tx, s.user?.role, s.locked);
+    if (!state.eligible || state.blocked || s.busy || s.retryRequired) return;
+    set("reason", "");
+    s.setError("");
+    setReceipt(null);
+    setReversing(tx);
+  }
+  const reversingState = reversing
+    ? reversalRequestState(s.store, reversing, s.user?.role, s.locked)
+    : null;
   return (
     <div className="space-y-5">
       <DayNotice />
@@ -575,11 +588,11 @@ export function TransactionsView() {
           if (!open) setReversing(null);
         }}
         title="Request reversal"
-        description="The original entry stays in the ledger. An approved reversal records an offsetting entry."
+        description="Request approval to undo this entry. The original stays visible."
       >
         {reversing && (
           <ActionForm
-            disabled={s.locked}
+            disabled={!reversingState?.eligible || reversingState.blocked}
             onSubmit={() =>
               s.submit({
                 kind: "CORRECT",
@@ -600,27 +613,68 @@ export function TransactionsView() {
             <FormSection title="Original transaction">
               <Alert>
                 <AlertDescription>
-                  <p className="font-medium">
-                    {t(reversing.type)} · {money(reversing.amount)}
+                  <p className="font-medium">{t(reversing.type)}</p>
+                  <p className="tabular-nums">
+                    {t(
+                      reversing.type === "Cash-out" ? "Cash payout" : "Amount",
+                    )}
+                    :{" "}
+                    {money(
+                      reversing.type === "Cash-out"
+                        ? reversing.cashPayout
+                        : reversing.amount,
+                    )}
                   </p>
-                  <p>
-                    {displayName(
-                      s.players.find((p) => p.id === reversing.playerId)
-                        ?.name ?? t("House"),
-                    )}{" "}
-                    · {timestamp(reversing.time, s.snapshot!.branch.timezone)}
+                  {reversing.type === "Cash-out" && (
+                    <p className="tabular-nums">
+                      {t("Chips returned")}: {money(reversing.amount)}
+                    </p>
+                  )}
+                  <p className="break-words [overflow-wrap:anywhere]">
+                    {subject(reversing)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {timestamp(reversing.time, s.snapshot!.branch.timezone)}
                   </p>
                 </AlertDescription>
               </Alert>
+              <Collapsible className="min-w-0 rounded-lg border">
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-11 w-full justify-between px-3 text-xs sm:h-9"
+                  >
+                    {t("Reference details")}
+                    <ChevronDown aria-hidden="true" className="size-4" />
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-2 border-t p-3 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                  <p>
+                    {t("Reference")}: {reversing.id}
+                  </p>
+                  <p>
+                    {t("Request reference")}: {reversing.approvalId}
+                  </p>
+                </CollapsibleContent>
+              </Collapsible>
             </FormSection>
+            <EntryImpact
+              request={{
+                type: "Reversal",
+                amount: reversing.amount,
+                playerId: reversing.playerId,
+                reversesId: reversing.id,
+              }}
+            />
             <p className="text-sm text-muted-foreground">
               {t(
-                "After the reversal is approved, create a new entry with the correct details.",
+                "After approval, create a corrected entry only if a replacement is needed. It requires separate approval.",
               )}
             </p>
             <Field
               label="Reason for change"
-              hint="Explain why this entry needs to be reversed."
+              hint="Explain why this entry needs to be reversed in at least 3 characters."
             >
               <Textarea
                 required
@@ -630,7 +684,38 @@ export function TransactionsView() {
                 onChange={(e) => set("reason", e.target.value)}
               />
             </Field>
-            <FormActions destructive>Request reversal</FormActions>
+            <FormActions
+              destructive
+              disabled={!validReversalReason(val("reason"))}
+              summary={
+                <div className="min-w-0 space-y-1 text-xs">
+                  <p
+                    className="truncate text-muted-foreground"
+                    title={subject(reversing)}
+                  >
+                    {subject(reversing)}
+                  </p>
+                  <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-2">
+                    <span>
+                      {t(
+                        reversing.type === "Cash-out"
+                          ? "Original cash payout"
+                          : reversing.type,
+                      )}
+                    </span>
+                    <span className="whitespace-nowrap text-sm font-semibold tabular-nums">
+                      {money(
+                        reversing.type === "Cash-out"
+                          ? reversing.cashPayout
+                          : reversing.amount,
+                      )}
+                    </span>
+                  </div>
+                </div>
+              }
+            >
+              Request reversal
+            </FormActions>
           </ActionForm>
         )}
       </Modal>
@@ -639,6 +724,7 @@ export function TransactionsView() {
           transaction={receipt}
           close={() => setReceipt(null)}
           onViewTransaction={setReceipt}
+          onRequestReversal={startReversal}
         />
       )}
     </div>

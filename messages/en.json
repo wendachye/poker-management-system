@@ -1067,6 +1067,18 @@
     "explain_the_difference_in_at_least_3_characters": "Explain the difference in at least 3 characters.",
     "enter_the_counted_cash_to_continue": "Enter the counted cash to continue.",
     "closing_note": "Closing note",
-    "this_note_will_be_saved_with_the_closing_edit_or_clear_it_if_the_count_changed": "This note will be saved with the closing. Edit or clear it if the count changed."
+    "this_note_will_be_saved_with_the_closing_edit_or_clear_it_if_the_count_changed": "This note will be saved with the closing. Edit or clear it if the count changed.",
+    "enter_a_valid_repayment_amount": "Enter a valid repayment amount.",
+    "reversal_sent_for_approval": "Reversal sent for approval.",
+    "credit_still_owed_after_approval": "Credit still owed after approval",
+    "cash_received_reversed": "Cash received reversed",
+    "cash_payout_reversed": "Cash payout reversed",
+    "credit_debt_reduced": "Credit debt reduced",
+    "request_approval_to_undo_this_entry_the_original_stays_visible": "Request approval to undo this entry. The original stays visible.",
+    "reference_details": "Reference details",
+    "after_approval_create_a_corrected_entry_only_if_a_replacement_is_needed_it_requires_separate_approval": "After approval, create a corrected entry only if a replacement is needed. It requires separate approval.",
+    "explain_why_this_entry_needs_to_be_reversed_in_at_least_3_characters": "Explain why this entry needs to be reversed in at least 3 characters.",
+    "the_reversal_is_awaiting_approval_the_original_entry_has_not_changed": "The reversal is awaiting approval. The original entry has not changed.",
+    "create_a_corrected_entry_only_if_a_replacement_is_needed_the_new_amount_starts_blank_and_requires_separate_approval": "Create a corrected entry only if a replacement is needed. The new amount starts blank and requires separate approval."
   }
 }

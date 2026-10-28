@@ -4,6 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { Transaction } from "@/domain/model";
 import { displayName } from "@/lib/display-name";
+import { reversalRequestState } from "@/lib/reversal-presentation";
+import { Link } from "@/i18n/navigation";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { useText, useTimestamp } from "./shared";
 import { money } from "../utils";
@@ -20,10 +22,12 @@ export function Receipt({
   transaction: tx,
   close,
   onViewTransaction,
+  onRequestReversal,
 }: {
   transaction: Transaction;
   close: () => void;
   onViewTransaction: (transaction: Transaction) => void;
+  onRequestReversal?: (transaction: Transaction) => void;
 }) {
   const s = usePokerManagementContext(),
     t = useText(),
@@ -34,9 +38,10 @@ export function Receipt({
   const reversal = original
     ? s.store.transactions.find((entry) => entry.reversesId === original.id)
     : undefined;
-  const reversalPending =
-    !!original &&
-    s.pendingApprovals.some((request) => request.reversesId === original.id);
+  const reversalState = original
+    ? reversalRequestState(s.store, original, s.user?.role, s.locked)
+    : null;
+  const reversalPending = reversalState?.pending;
   const cashOut = tx.type === "Cash-out" || original?.type === "Cash-out";
   const relatedPending =
     !!original &&
@@ -87,6 +92,22 @@ export function Receipt({
             {t(tx.type)} · {timestamp(tx.time, s.snapshot!.branch.timezone)}
           </DialogDescription>
         </DialogHeader>
+        {onRequestReversal &&
+          !tx.reversesId &&
+          reversalState?.eligible &&
+          !reversalPending && (
+            <Button
+              variant="outline"
+              className="min-h-11 max-w-full whitespace-normal print:hidden sm:min-h-9"
+              disabled={reversalState.blocked || s.busy || s.retryRequired}
+              onClick={() => {
+                if (!reversalState.blocked && !s.busy && !s.retryRequired)
+                  onRequestReversal(tx);
+              }}
+            >
+              {t("Request reversal")}
+            </Button>
+          )}
         {(reversal || reversalPending) && (
           <div className="space-y-3 rounded-lg border bg-muted/30 p-3 text-sm">
             <Badge variant={reversal ? "secondary" : "warning"}>
@@ -102,10 +123,32 @@ export function Receipt({
               {t(
                 reversal
                   ? "The reversal is posted. Both entries remain in the ledger."
-                  : "After the reversal is approved, create a new entry with the correct details.",
+                  : "The reversal is awaiting approval. The original entry has not changed.",
               )}
             </p>
             <div className="flex flex-wrap gap-2 print:hidden [&>button]:min-h-11 sm:[&>button]:min-h-9">
+              {reversalPending && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-11 max-w-full whitespace-normal sm:min-h-9"
+                  asChild
+                >
+                  <Link
+                    href="/transactions"
+                    onClick={() => {
+                      s.setDraft("tx.status", "PENDING");
+                      s.setDraft("tx.day", "");
+                      s.setDraft("tx.filter", "");
+                      s.setDraft("tx.search", reversalPending.id);
+                      s.setDraft("tx.page", "0");
+                      close();
+                    }}
+                  >
+                    {t("View request")}
+                  </Link>
+                </Button>
+              )}
               {tx.reversesId && original && (
                 <Button
                   variant="outline"
@@ -145,6 +188,13 @@ export function Receipt({
                 </Button>
               )}
             </div>
+            {canReplace && (
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  "Create a corrected entry only if a replacement is needed. The new amount starts blank and requires separate approval.",
+                )}
+              </p>
+            )}
             {canReplace && correctionBlocked && (
               <p className="text-xs text-muted-foreground">
                 {t(

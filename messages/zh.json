@@ -1067,6 +1067,18 @@
     "explain_the_difference_in_at_least_3_characters": "请用至少3个字符说明差额原因。",
     "enter_the_counted_cash_to_continue": "输入实点现金金额后继续。",
     "closing_note": "结账备注",
-    "this_note_will_be_saved_with_the_closing_edit_or_clear_it_if_the_count_changed": "此备注将随结账记录保存。如果清点金额有变，请修改或清除备注。"
+    "this_note_will_be_saved_with_the_closing_edit_or_clear_it_if_the_count_changed": "此备注将随结账记录保存。如果清点金额有变，请修改或清除备注。",
+    "enter_a_valid_repayment_amount": "请输入有效的还款金额。",
+    "reversal_sent_for_approval": "冲正申请已提交审批。",
+    "credit_still_owed_after_approval": "审批后剩余欠款",
+    "cash_received_reversed": "撤销现金收入",
+    "cash_payout_reversed": "撤销现金支出",
+    "credit_debt_reduced": "减少信贷欠款",
+    "request_approval_to_undo_this_entry_the_original_stays_visible": "申请审批以撤销此记录。原记录仍会保留。",
+    "reference_details": "参考编号详情",
+    "after_approval_create_a_corrected_entry_only_if_a_replacement_is_needed_it_requires_separate_approval": "审批通过后，仅在需要替换时创建更正记录。更正记录需另行审批。",
+    "explain_why_this_entry_needs_to_be_reversed_in_at_least_3_characters": "请用至少3个字符说明撤销此记录的原因。",
+    "the_reversal_is_awaiting_approval_the_original_entry_has_not_changed": "撤销申请正在等待审批，原记录尚未改变。",
+    "create_a_corrected_entry_only_if_a_replacement_is_needed_the_new_amount_starts_blank_and_requires_separate_approval": "仅在需要替换时创建更正记录。新金额留空，需填写并单独提交审批。"
   }
 }
