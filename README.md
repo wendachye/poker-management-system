@@ -174,6 +174,8 @@ The [indexed operations guide](docs/indexed-operations.md) describes the storage
 
 The [staff access guide](docs/staff-access-security.md) records shared login budgets, bounded password work, migration v4 and operator account recovery/retry rules. Application safeguards are implemented; verified host/WAF source limits and controlled operator access still need deployment acceptance.
 
+The [cloud staging guide](docs/cloud-staging.md) provides a guarded first-time initializer for a dedicated empty PostgreSQL 17/18 database. It creates separate schema-owner/application roles and fictional staff/venues without importing local data. The staging application needs its own operations deployment and secret configuration.
+
 The [capacity plan](docs/capacity-plan.md) records the target of 2–5 venues and up to fifty concurrent staff, along with synthetic local measurements. `yarn capacity:baseline` is an explicitly guarded, disposable PostgreSQL benchmark; turnover amounts do not determine its entry-count scenarios. Initial, timer and focus refreshes share an outstanding background request. An open list refreshes its bounded server page; an open player/request/receipt refreshes its focused context. Explicit refreshes remain independent. Run the versioned, checksummed migrations with `yarn db:migrate` before starting an operations release; health checks reject missing or incompatible migration metadata. Earlier full-aggregate capacity results remain historical evidence and must not be presented as measurements of the indexed implementation.
 
 ## Operating rules
