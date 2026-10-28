@@ -2,7 +2,25 @@ import { PGlite } from "@electric-sql/pglite";
 import { isDeepStrictEqual } from "node:util";
 import type { Database, SqlConnection } from "../src/server/database";
 import { migrate } from "../src/server/schema";
-import { createBackup, restoreBackup, type Backup } from "../src/server/backup";
+import {
+  createBackup,
+  restoreBackup,
+  type Backup,
+  type BackupPayload,
+} from "../src/server/backup";
+
+function comparable(payload: BackupPayload) {
+  return {
+    ...payload,
+    createdAt: "",
+    // Older format-v1 backups predate bounded retry contexts. Restore deliberately
+    // materializes their database default; no authoritative history is changed.
+    operations: payload.operations.map((operation) => ({
+      ...operation,
+      result_context: operation.result_context ?? {},
+    })),
+  };
+}
 
 /** Exercise the real restore against a disposable in-memory database, never the local socket. */
 export async function verifyBackup(backup: Backup) {
@@ -23,8 +41,8 @@ export async function verifyBackup(backup: Backup) {
     const restored = await createBackup(db);
     if (
       !isDeepStrictEqual(
-        { ...restored.payload, createdAt: "" },
-        { ...backup.payload, createdAt: "" },
+        comparable(restored.payload),
+        comparable(backup.payload),
       )
     )
       throw new Error("Restored records do not match the backup.");

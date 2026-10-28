@@ -62,3 +62,5 @@ jobs:
       - run: yarn test:postgres
       - name: Verify staff workflows through Next HTTP routes and PostgreSQL
         run: yarn test:operations-http
+      - name: Rehearse schema upgrade, restricted app privileges and backup recovery
+        run: yarn recovery:drill

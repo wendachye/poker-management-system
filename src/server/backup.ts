@@ -5,11 +5,13 @@ import type { Store } from "../domain/model";
 import { settingsSchema } from "../domain/settings";
 import { tableRuleIssue } from "../domain/settings";
 import { MAX_MONEY } from "../domain/money";
+import { assertFinancialIntegrity } from "../domain/store-integrity";
 import type { Database, SqlConnection } from "./database";
 import { readStore, replaceStore } from "./storage";
 
 const id = z.string().min(1),
   amount = z.number().int().safe();
+const revision = z.number().int().safe().min(0).max(2_147_483_647);
 const timestamp = z.iso.datetime({ offset: true });
 const role = z.enum(["DEALER", "CASHIER", "MANAGER", "ADMIN"]);
 const txType = z.enum([
@@ -194,7 +196,7 @@ const payloadSchema = z
       z
         .object({
           branch_id: id,
-          revision: z.number().int().nonnegative(),
+          revision,
           data: storeSchema,
         })
         .strict(),
@@ -206,7 +208,7 @@ const payloadSchema = z
           operation_id: id,
           actor_id: id,
           fingerprint: z.string(),
-          revision: z.number().int().nonnegative(),
+          revision,
           created_at: timestamp,
           result_context: z
             .object({
@@ -242,10 +244,7 @@ function reference(set: Set<string>, value: string | null | undefined) {
 function validateStore(store: Store, users: Set<string>) {
   for (const table of store.tables) {
     const issue = tableRuleIssue(store, table);
-    if (issue)
-      throw new Error(
-        `Backup contains invalid rules for table ${table.name}: ${issue}`,
-      );
+    if (issue) throw new Error("Backup contains invalid table rules.");
   }
   for (const rows of [
     store.profiles,
@@ -298,6 +297,7 @@ function validateStore(store: Store, users: Set<string>) {
     for (const vote of request.votes) reference(users, vote.staffId);
   }
   for (const log of store.auditLogs) reference(users, log.actorId);
+  assertFinancialIntegrity(store);
 }
 export function parseBackup(input: unknown): Backup {
   const envelope = z
@@ -330,11 +330,11 @@ export function parseBackup(input: unknown): Backup {
     p.operations.map((o) => JSON.stringify([o.branch_id, o.operation_id])),
   );
   const branches = new Set(p.branches.map((b) => b.id)),
-    users = new Set(p.users.map((u) => u.id));
+    users = new Set(p.users.map((u) => u.id)),
+    states = new Map(p.states.map((state) => [state.branch_id, state]));
   for (const b of p.branches) {
     new Intl.DateTimeFormat("en", { timeZone: b.timezone });
-    if (!p.states.some((s) => s.branch_id === b.id))
-      throw new Error("Backup is missing branch state.");
+    if (!states.has(b.id)) throw new Error("Backup is missing branch state.");
   }
   for (const m of p.memberships) {
     reference(branches, m.branch_id);
@@ -347,8 +347,10 @@ export function parseBackup(input: unknown): Backup {
   for (const o of p.operations) {
     reference(branches, o.branch_id);
     reference(users, o.actor_id);
+    const state = states.get(o.branch_id)!;
+    if (o.revision > state.revision)
+      throw new Error("Backup operation revision exceeds its branch state.");
     if (o.result_context) {
-      const state = p.states.find((s) => s.branch_id === o.branch_id)!;
       for (const [key, rows] of [
         ["playerIds", state.data.profiles],
         ["approvalIds", state.data.approvals],
@@ -364,7 +366,10 @@ export function parseBackup(input: unknown): Backup {
   return envelope.data as Backup;
 }
 
-async function capture(connection: SqlConnection): Promise<Backup> {
+/** Forensic safety capture only: its checksum does not certify semantic validity.
+ * A corrupt current database must not prevent restoration of validated input.
+ */
+async function captureUnverified(connection: SqlConnection): Promise<Backup> {
   const branches = (
     await connection.query<BackupPayload["branches"][number]>(
       "SELECT id,name,timezone FROM poker_branches ORDER BY id",
@@ -404,25 +409,31 @@ async function capture(connection: SqlConnection): Promise<Backup> {
     ...r,
     created_at: new Date(r.created_at).toISOString(),
   }));
-  return parseBackup(
-    sealBackup({
-      format: "poker-local-backup",
-      version: 1,
-      createdAt: new Date().toISOString(),
-      branches,
-      users,
-      memberships,
-      states,
-      operations,
-    }),
-  );
+  return sealBackup({
+    format: "poker-local-backup",
+    version: 1,
+    createdAt: new Date().toISOString(),
+    branches,
+    users,
+    memberships,
+    states,
+    operations,
+  });
+}
+/** Capture and validate complete authoritative records in the caller's snapshot.
+ * Call inside a repeatable-read read-only transaction for an audit/export.
+ */
+export async function captureBackup(
+  connection: SqlConnection,
+): Promise<Backup> {
+  return parseBackup(await captureUnverified(connection));
 }
 export async function createBackup(db: Database) {
   return db.transaction(async (connection) => {
     await connection.query(
       "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
-    return capture(connection);
+    return captureBackup(connection);
   });
 }
 export function backupSummary(backup: Backup) {
@@ -455,7 +466,9 @@ export async function restoreBackup(
     await connection.query(
       "LOCK TABLE poker_users,poker_memberships,poker_branches,poker_branch_state,poker_operations,poker_sessions,poker_login_attempts,poker_login_budget,poker_profiles,poker_tables,poker_visits,poker_days,poker_approvals,poker_ledger,poker_audit,poker_change_versions,poker_financial_totals IN ACCESS EXCLUSIVE MODE",
     );
-    await saveBeforeRestore(await capture(connection));
+    // Preserve the old records for investigation even if they fail normal
+    // backup validation. Never present this safety copy as a verified backup.
+    await saveBeforeRestore(await captureUnverified(connection));
     for (const table of [
       "poker_sessions",
       "poker_login_attempts",

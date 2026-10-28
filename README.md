@@ -81,19 +81,21 @@ npm run local:verify-backup -- ".local/backups/full-YOUR-BACKUP-FILENAME.json"
 npm run local:restore -- ".local/backups/full-YOUR-BACKUP-FILENAME.json"
 ```
 
-The verify command restores the file into a disposable in-memory database and compares every saved record, without changing your persistent database. The restore command validates the file and shows a **preview only**. To replace all local branches and accounts with that backup, repeat it with `--confirm`:
+The verify command works offline without a running launcher or configured database. It restores the file into a disposable in-memory database and compares saved records, including authoritative history order and retry identifiers. Older missing retry contexts normalize to the database's empty default. The restore command validates the file and shows a **preview only**. To replace all local branches and accounts with that backup, repeat it with `--confirm`:
 
 ```sh
 npm run local:restore -- ".local/backups/full-YOUR-BACKUP-FILENAME.json" --confirm
 ```
 
-The full backup contains branches, password hashes, staff memberships, players, seating, business days, approvals, ledger entries, audit history, and operation identifiers used to prevent duplicate retries. It uses a versioned JSON format with a checksum and validates record shapes and references. The older `before-samples-*.json` files only contain branch state and cannot be used with this restore command.
+The full backup contains branches, password hashes, staff memberships, players, seating, business days, approvals, ledger entries, audit history, and operation identifiers used to prevent duplicate retries. Its versioned JSON format validates the checksum, shapes, references, approval history, cash/credit effects, reversals, session lifecycle and closing arithmetic. The older `before-samples-*.json` files only contain branch state and cannot be used with this restore command.
 
-Before a restore changes anything, it saves the current database to a separate `before-restore-*.json` file. If that file cannot be saved, the restore stops. Replacement runs in one database transaction; a failure rolls all changes back. All sessions are revoked on successful restore, so close other app tabs and sign in again using the accounts and passwords from the restored backup. `.local/credentials.txt` is not rewritten and might no longer match a restored account.
+Before a restore changes anything, it saves the current database to a separate `before-restore-unverified-*.json` safety snapshot. This retains potentially corrupt current records for investigation; it is not a verified restore point. If that file cannot be saved, the restore stops. Only validated input can be restored. Replacement runs in one database transaction; a failure rolls all changes back. All sessions are revoked on successful restore, so close other app tabs and sign in again using the accounts and passwords from the restored backup. `.local/credentials.txt` is not rewritten and might no longer match a restored account.
 
-Keep these files private: they contain venue records and password hashes. Copy important backups to a separate private drive; a file on the same disk does not protect against disk failure. Sessions and temporary login-throttle counters are intentionally excluded. These commands only accept the embedded local database URL, refuse production mode, and limit restore files to 100 MB. Do not copy a live `.local/postgres` directory; stop the launcher first if taking a separate filesystem copy.
+Keep these files private: they contain venue records and password hashes and are not encrypted. Copy important backups to a separate private drive; a file on the same disk does not protect against disk failure. Sessions and temporary login-throttle counters are intentionally excluded. Backup/restore mutations only accept the embedded local development database URL and refuse production mode. Both file reads and writes enforce the same 100 MiB UTF-8 budget. Publication requires a filesystem supporting hard links and cannot overwrite an existing file. Do not copy a live `.local/postgres` directory; stop the launcher first if taking a separate filesystem copy.
 
 Automated restore tests use isolated databases, including a sample-data round trip, damaged-file rejection, a failed safety backup, and rollback after a write failure. They do not overwrite your running venue to test recovery.
+
+`yarn db:verify` performs a read-only maintenance audit of the explicitly configured database, checking complete financial history against independently calculated saved summaries. It loads full history and is not a polling health endpoint. `yarn recovery:drill` rehearses native PostgreSQL upgrades, restricted app permissions and recovery using only an explicit disposable loopback `POSTGRES_TEST_DATABASE_URL`; it never falls back to your configured database. See [data integrity and recovery](docs/data-integrity-and-recovery.md) for controls, commands and remaining hosted recovery requirements.
 
 ## Optional local PostgreSQL with Docker
 
