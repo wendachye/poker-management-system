@@ -18,13 +18,23 @@ function unavailable(): never {
 }
 
 test("prototype health reports its mode without opening a database", async () => {
-  const response = await healthResponse(unavailable, {
-    NEXT_PUBLIC_POKER_PROTOTYPE: "1",
-    POKER_PROTOTYPE_MODE: "1",
-  });
+  const savedError = console.error;
+  const events: unknown[][] = [];
+  let response: Response;
+  try {
+    console.error = (...args: unknown[]) => events.push(args);
+    response = await healthResponse(unavailable, {
+      NEXT_PUBLIC_POKER_PROTOTYPE: "1",
+      POKER_PROTOTYPE_MODE: "1",
+    });
+  } finally {
+    console.error = savedError;
+  }
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: "ok", mode: "prototype" });
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.match(response.headers.get("x-request-id") ?? "", /^[a-f0-9-]{36}$/);
+  assert.deepEqual(events, [], "Healthy prototype probes remain quiet");
 });
 
 test("mismatched prototype flags report unavailable without opening a database", async () => {
@@ -104,6 +114,123 @@ test("database failures return generic no-store status without leaking details",
   });
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+});
+
+test("readiness failures emit fixed coarse categories correlated with generic public responses", async () => {
+  const savedError = console.error;
+  const logs: unknown[][] = [];
+  const missingSchema: SqlConnection = {
+    async query<T>(sql: string) {
+      return {
+        rows: (sql.includes("to_regclass") ? [{ relation: null }] : []) as T[],
+      };
+    },
+  };
+  const brokenDatabase = () => ({
+    async query() {
+      throw Object.assign(
+        new Error("private-password; private-host; SELECT protected_records"),
+        { code: "ECONNRESET" },
+      );
+    },
+  });
+  const cases = [
+    {
+      reason: "PROTOTYPE_FLAGS",
+      mode: "prototype",
+      env: { NEXT_PUBLIC_POKER_PROTOTYPE: "1" },
+      connect: unavailable,
+    },
+    {
+      reason: "CONFIGURATION",
+      mode: "operations",
+      env: { ...operations, APP_ORIGIN: "http://private-host" },
+      connect: unavailable,
+    },
+    {
+      reason: "DATABASE",
+      mode: "operations",
+      env: operations,
+      connect: brokenDatabase,
+    },
+    {
+      reason: "SCHEMA",
+      mode: "operations",
+      env: operations,
+      connect: () => missingSchema,
+    },
+  ];
+  try {
+    console.error = (...args: unknown[]) => logs.push(args);
+    const references = new Set<string>();
+    for (const item of cases) {
+      const response = await healthResponse(item.connect, item.env);
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), {
+        status: "unavailable",
+        mode: item.mode,
+      });
+      const requestId = response.headers.get("x-request-id")!;
+      assert.match(requestId, /^[a-f0-9-]{36}$/);
+      assert.equal(references.has(requestId), false);
+      references.add(requestId);
+      const event = JSON.parse(logs.at(-1)![0] as string);
+      assert.equal(event.event, "readiness_failed");
+      assert.equal(event.requestId, requestId);
+      assert.equal(event.route, "/api/health");
+      assert.equal(event.reason, item.reason);
+      assert.equal(new Date(event.timestamp).toISOString(), event.timestamp);
+      if (item.reason === "DATABASE") assert.equal(event.code, "ECONNRESET");
+      assert.ok(
+        Object.keys(event).every((key) =>
+          [
+            "timestamp",
+            "event",
+            "requestId",
+            "route",
+            "reason",
+            "code",
+          ].includes(key),
+        ),
+      );
+    }
+    assert.equal(logs.length, cases.length);
+    assert.doesNotMatch(
+      JSON.stringify(logs),
+      /private-|production-secret-example|SELECT|protected_records|password/,
+    );
+  } finally {
+    console.error = savedError;
+  }
+});
+
+test("readiness status survives hostile errors and unavailable logging sinks", async () => {
+  const savedError = console.error;
+  try {
+    console.error = () => {
+      throw new Error("private log sink failure");
+    };
+    const response = await healthResponse(
+      () => ({
+        async query() {
+          throw {
+            get code() {
+              throw new Error("private diagnostic accessor");
+            },
+          };
+        },
+      }),
+      operations,
+    );
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      status: "unavailable",
+      mode: "operations",
+    });
+    assert.match(response.headers.get("x-request-id") ?? "", /^[a-f0-9-]{36}$/);
+  } finally {
+    console.error = savedError;
+  }
 });
 
 test("readiness requires the actual schema, not only an answering database", async () => {

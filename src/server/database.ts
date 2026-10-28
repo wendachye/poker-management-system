@@ -2,6 +2,7 @@ import "server-only";
 import { Pool } from "pg";
 import { databasePoolErrorCode, databasePoolOptions } from "./database-options";
 import { validateProductionConfig } from "./production-config";
+import { logOperationalEvent } from "./operational-events";
 
 export interface SqlConnection {
   query<T = Record<string, unknown>>(
@@ -79,7 +80,8 @@ export function database(): Database {
       ...databasePoolOptions(process.env),
     });
     pool.on("error", (error) => {
-      console.error("Poker database pool connection failed:", {
+      logOperationalEvent({
+        event: "database_pool_error",
         code: databasePoolErrorCode(error),
       });
     });

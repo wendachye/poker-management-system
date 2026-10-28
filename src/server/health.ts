@@ -1,5 +1,8 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { database, type SqlConnection } from "./database";
+import { databasePoolErrorCode } from "./database-options";
+import { logOperationalEvent } from "./operational-events";
 import { validateProductionConfig } from "./production-config";
 import { schemaMigrationStatus } from "./schema";
 
@@ -129,7 +132,11 @@ const requiredColumns: Record<string, string[]> = {
   ],
 };
 
-function response(ready: boolean, mode: "prototype" | "operations") {
+function response(
+  ready: boolean,
+  mode: "prototype" | "operations",
+  requestId: string,
+) {
   return Response.json(
     { status: ready ? "ok" : "unavailable", mode },
     {
@@ -137,6 +144,7 @@ function response(ready: boolean, mode: "prototype" | "operations") {
       headers: {
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
+        "X-Request-ID": requestId,
       },
     },
   );
@@ -147,16 +155,38 @@ export async function healthResponse(
   connect: () => SqlConnection = database,
   env: Environment = process.env,
 ) {
+  const requestId = randomUUID();
+  function unavailable(
+    mode: "prototype" | "operations",
+    reason: "CONFIGURATION" | "DATABASE" | "SCHEMA" | "PROTOTYPE_FLAGS",
+    error?: unknown,
+  ) {
+    if (error === undefined)
+      logOperationalEvent({ event: "readiness_failed", requestId, reason });
+    else
+      logOperationalEvent({
+        event: "readiness_failed",
+        requestId,
+        reason,
+        code: databasePoolErrorCode(error),
+      });
+    return response(false, mode, requestId);
+  }
   const publicDemo = env.NEXT_PUBLIC_POKER_PROTOTYPE === "1";
   const serverDemo = env.POKER_PROTOTYPE_MODE === "1";
   if (publicDemo || serverDemo)
-    return response(publicDemo && serverDemo, "prototype");
+    return publicDemo && serverDemo
+      ? response(true, "prototype", requestId)
+      : unavailable("prototype", "PROTOTYPE_FLAGS");
+  let stage: "CONFIGURATION" | "DATABASE" | "SCHEMA" = "CONFIGURATION";
   try {
     if (env.NODE_ENV === "production") validateProductionConfig(env);
+    stage = "DATABASE";
     const db = connect();
     await db.query("SELECT 1");
+    stage = "SCHEMA";
     if (!(await schemaMigrationStatus(db)).ready)
-      return response(false, "operations");
+      return unavailable("operations", "SCHEMA");
     const columns = await db.query<{
       table_name: string;
       column_name: string;
@@ -173,8 +203,10 @@ export async function healthResponse(
     const ready = Object.entries(requiredColumns).every(([table, fields]) =>
       fields.every((field) => present.has(`${table}.${field}`)),
     );
-    return response(ready, "operations");
-  } catch {
-    return response(false, "operations");
+    return ready
+      ? response(true, "operations", requestId)
+      : unavailable("operations", "SCHEMA");
+  } catch (error) {
+    return unavailable("operations", stage, error);
   }
 }

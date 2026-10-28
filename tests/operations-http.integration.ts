@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import path from "node:path";
@@ -1369,6 +1369,136 @@ test(
           ).rows.length,
           0,
         );
+      },
+    );
+
+    await t.test(
+      "operational auth and readiness events correlate server-generated references without sensitive input",
+      async () => {
+        const visitor = new StaffBrowser();
+        const forged = randomUUID();
+        const signedIn = await visitor.response(
+          "/api/auth",
+          "POST",
+          { username: "http.admin", password },
+          {
+            "X-Request-ID": forged,
+            "X-Forwarded-For": "private-source-marker",
+          },
+        );
+        assert.equal(signedIn.response.status, 200);
+        assert.notEqual(signedIn.response.headers.get("x-request-id"), forged);
+        const rejected = await Promise.all(
+          ["http.admin", "private-missing-user-marker"].map((username) =>
+            visitor.response(
+              "/api/auth?private-query-marker=private-value-marker",
+              "POST",
+              { username, password: "private-password-marker" },
+              { "X-Request-ID": forged },
+            ),
+          ),
+        );
+        for (const result of rejected)
+          assert.equal(result.response.status, 401);
+        const signedOut = await visitor.response("/api/auth", "DELETE", {});
+        assert.equal(signedOut.response.status, 200);
+        let unhealthy: Response;
+        await fixturePool.query(
+          "ALTER TABLE poker_login_budget RENAME COLUMN attempts TO missing_attempts",
+        );
+        try {
+          unhealthy = await fetch(origin + "/api/health", {
+            signal: AbortSignal.timeout(30_000),
+            headers: { "X-Request-ID": forged },
+          });
+          assert.equal(unhealthy.status, 503);
+          assert.notEqual(unhealthy.headers.get("x-request-id"), forged);
+          assert.deepEqual(await unhealthy.json(), {
+            status: "unavailable",
+            mode: "operations",
+          });
+        } finally {
+          await fixturePool.query(
+            "ALTER TABLE poker_login_budget RENAME COLUMN missing_attempts TO attempts",
+          );
+        }
+        const references = [
+          signedIn.response,
+          ...rejected.map((result) => result.response),
+          signedOut.response,
+          unhealthy!,
+        ].map((response) => response.headers.get("x-request-id"));
+        assert.equal(new Set(references).size, 5);
+        const deadline = Date.now() + 5000;
+        let events: Record<string, unknown>[] = [];
+        while (Date.now() < deadline) {
+          events = (
+            await readFile(path.join(workDirectory, "server.log"), "utf8")
+          )
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith("{"))
+            .flatMap((line) => {
+              try {
+                return [JSON.parse(line) as Record<string, unknown>];
+              } catch {
+                return [];
+              }
+            })
+            .filter((event) => references.includes(event.requestId as string));
+          if (events.length === 5) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(events.length, 5);
+        for (const response of [signedIn, ...rejected, signedOut]) {
+          const event = events.find(
+            (entry) =>
+              entry.requestId === response.response.headers.get("x-request-id"),
+          )!;
+          assert.equal(event.event, "auth_request");
+          assert.equal(event.route, "/api/auth");
+          assert.equal(event.status, response.response.status);
+          assert.ok(
+            typeof event.durationMs === "number" && event.durationMs >= 0,
+          );
+          assert.equal(
+            new Date(event.timestamp as string).toISOString(),
+            event.timestamp,
+          );
+        }
+        const failures = rejected.map((result) =>
+          events.find(
+            (event) =>
+              event.requestId === result.response.headers.get("x-request-id"),
+          )!,
+        );
+        assert.equal(failures[0].outcome, failures[1].outcome);
+        const readiness = events.find(
+          (event) => event.requestId === unhealthy!.headers.get("x-request-id"),
+        )!;
+        assert.equal(readiness.event, "readiness_failed");
+        assert.equal(readiness.route, "/api/health");
+        assert.equal(readiness.reason, "SCHEMA");
+        const serialized = JSON.stringify(events);
+        for (const privateValue of [
+          forged,
+          "http.admin",
+          "http-owner",
+          "http-venue",
+          password,
+          "private-source-marker",
+          "private-query-marker",
+          "private-value-marker",
+          "private-password-marker",
+          "private-missing-user-marker",
+          ownedName,
+          loginSecret,
+        ])
+          assert.equal(
+            serialized.includes(privateValue),
+            false,
+            "Operational events must omit private values",
+          );
+        assert.equal((await fetch(origin + "/api/health")).status, 200);
       },
     );
 

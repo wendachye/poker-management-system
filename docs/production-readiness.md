@@ -133,6 +133,18 @@ The local request-recovery verification on 29 October 2026 passed 444 isolated t
 
 Fourteen isolated browser cases passed at 1280px desktop and 390px mobile widths. They covered lost receipts after reload, exact UUID replay, a terminal rejection after an earlier uncertain response, recovery controls inside open forms, preservation of another staff member's checkpoint and storage failures before POST. No unexpected browser errors or horizontal overflow were observed. Both operations and prototype builds passed; the sample prototype keeps the recovery API disabled. Evidence is retained under the ignored `.local/request-recovery-2026-10-29` directory. These fictional local checks do not replace hosted recovery, sustained load or staff acceptance gates.
 
+## Local operational diagnostics
+
+The operations server emits one JSON event per observed HTTP sign-in/sign-out outcome, unexpected request failure, pool idle error and failed readiness probe. Events have a UTC timestamp and fixed event names. Auth events include only the fixed `/api/auth` route, method, HTTP status, coarse outcome and rounded monotonic duration. Readiness failures include only `/api/health` and a configuration, database, schema or prototype-mode category. Recognized SQL, connection and client-timeout codes remain allowlisted; unknown codes become generic categories.
+
+Sign-in/sign-out and readiness response `X-Request-ID` headers match their event references. The server generates these IDs and ignores supplied request-ID headers. Known and unknown sign-in rejections use the same outcome category. Events exclude usernames, staff/player/venue identifiers, IP addresses, query strings, request/response bodies, passwords, cookies, tokens, SQL and raw error messages. Runtime validation rejects extra fields and snapshots validated primitive values before output.
+
+The event writer handles throwing accessors and synchronous/asynchronous output failures without replacing an operation's result. A `request_failed` event records an unavailable HTTP result; it does not prove that a financial operation failed to commit. Use the existing exact retry or **Check previous request** flow to resolve an uncertain save.
+
+View these events in the local server terminal alongside framework output. The application event whitelist does not configure framework, reverse-proxy or hosting-provider logs. Console delivery is best effort, with no new service or database writes. Shared collection, durable retention, access control, alert thresholds and hosted incident response still require rollout configuration. Business audit records remain separate. Cloud staging remains deferred during this local pass.
+
+Local verification on 29 October 2026 passed 460 isolated tests, 30 native PostgreSQL checks and 14 HTTP checks using fictional fixtures. Regression cases cover retained timeout categories, changing/throwing error accessors, concurrent correlation IDs, preserved cookies and retry advice, silent healthy probes and failing output sinks. Actual HTTP checks matched auth/readiness events to server-generated response IDs, rejected forged references, verified identical known/unknown rejection categories and excluded sensitive test markers. Both operations/prototype builds and built HTTP smoke checks passed. Evidence is in the ignored `.local/operational-logging-2026-10-29` directory; no new frontend workflow changes were made in this batch.
+
 ## Verify changes
 
 Run the existing suite, typecheck, lint and both operations/demo builds. The real PostgreSQL and full HTTP workflow suites are intentionally separate:

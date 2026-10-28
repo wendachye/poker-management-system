@@ -15,17 +15,36 @@ export class AuthAdmissionError extends DomainError {
   }
 }
 
+/** Sample marked error values once before using them in a response. */
+export function authAdmissionDetails(error: unknown): {
+  status: 429 | 503;
+  retryAfterSeconds: number;
+  message: string;
+} | null {
+  try {
+    if (!(error instanceof Error)) return null;
+    const candidate = error as AuthAdmissionError;
+    const marked = candidate[admissionError];
+    const status = candidate.status;
+    const retryAfterSeconds = candidate.retryAfterSeconds;
+    const message = candidate.message;
+    return marked === true &&
+      (status === 429 || status === 503) &&
+      Number.isInteger(retryAfterSeconds) &&
+      retryAfterSeconds >= 1 &&
+      retryAfterSeconds <= 900 &&
+      typeof message === "string" &&
+      message.length <= 1000
+      ? { status, retryAfterSeconds, message }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The marker also survives duplicated server bundles and development refreshes. */
 export function authAdmissionRetryAfter(error: unknown): number | null {
-  if (!(error instanceof Error)) return null;
-  const candidate = error as AuthAdmissionError;
-  return candidate[admissionError] === true &&
-    (candidate.status === 429 || candidate.status === 503) &&
-    Number.isInteger(candidate.retryAfterSeconds) &&
-    candidate.retryAfterSeconds >= 1 &&
-    candidate.retryAfterSeconds <= 900
-    ? candidate.retryAfterSeconds
-    : null;
+  return authAdmissionDetails(error)?.retryAfterSeconds ?? null;
 }
 
 export type WorkLimits = Readonly<{

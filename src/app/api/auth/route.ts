@@ -17,9 +17,11 @@ import {
   sessionToken,
 } from "@/server/http";
 import { DomainError } from "@/domain/operations";
-import { authAdmissionRetryAfter } from "@/server/password-work";
+
+import { observeAuth } from "@/server/auth-observation";
 
 export const runtime = "nodejs";
+
 export async function GET() {
   const disabled = prototypeApiResponse();
   if (disabled) return disabled;
@@ -34,7 +36,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const disabled = prototypeApiResponse();
   if (disabled) return disabled;
-  try {
+  return observeAuth("POST", async (requestId) => {
     const credentials = z
       .object({
         username: z.string().trim().min(1).max(100),
@@ -58,29 +60,16 @@ export async function POST(request: Request) {
       path: "/",
       maxAge: SESSION_SECONDS,
     });
-    return json({ user: await requireUser(db, token) });
-  } catch (error) {
-    const retryAfter = authAdmissionRetryAfter(error);
-    if (retryAfter !== null) {
-      const response = json(
-        { error: (error as Error).message },
-        (error as DomainError).status,
-      );
-      response.headers.set("Retry-After", String(retryAfter));
-      return response;
-    }
-    return failure(error);
-  }
+    return json({ user: await requireUser(db, token) }, 200, requestId);
+  });
 }
 export async function DELETE(request: Request) {
   const disabled = prototypeApiResponse();
   if (disabled) return disabled;
-  try {
+  return observeAuth("DELETE", async (requestId) => {
     await body(request);
     await logout(database(), await sessionToken());
     (await cookies()).delete(SESSION_COOKIE);
-    return json({ ok: true });
-  } catch (error) {
-    return failure(error);
-  }
+    return json({ ok: true }, 200, requestId);
+  });
 }

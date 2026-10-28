@@ -5,6 +5,7 @@ import { DomainError } from "../domain/operations";
 import { SESSION_COOKIE } from "./auth";
 import { databasePoolErrorCode } from "./database-options";
 import { validateProductionConfig } from "./production-config";
+import { logOperationalEvent } from "./operational-events";
 
 const MAX_BODY_BYTES = 16000;
 // Match the media type exactly, while allowing well-formed token/quoted parameters.
@@ -14,7 +15,11 @@ const JSON_CONTENT_TYPE =
 export async function sessionToken() {
   return (await cookies()).get(SESSION_COOKIE)?.value;
 }
-export function json(value: unknown, status = 200, requestId = randomUUID()) {
+export function json(
+  value: unknown,
+  status = 200,
+  requestId: string = randomUUID(),
+) {
   return Response.json(value, {
     status,
     headers: {
@@ -92,14 +97,15 @@ export async function body(request: Request) {
     throw new DomainError("Invalid JSON.");
   }
 }
-export function failure(error: unknown) {
-  if (error instanceof DomainError)
-    return json({ error: error.message }, error.status);
-  const requestId = randomUUID();
+export function failure(error: unknown, requestId: string = randomUUID()) {
+  try {
+    if (error instanceof DomainError)
+      return json({ error: error.message }, error.status, requestId);
+  } catch {}
   const category = databasePoolErrorCode(error);
   const code = category === "UNKNOWN" ? "SERVER_ERROR" : category;
   // SQL errors can contain credentials, record values and query parameters.
-  console.error(JSON.stringify({ event: "request_failed", requestId, code }));
+  logOperationalEvent({ event: "request_failed", requestId, code });
   return json(
     {
       error:

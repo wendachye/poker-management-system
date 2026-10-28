@@ -180,6 +180,34 @@ test("pool diagnostics expose only recognized error categories", () => {
     assert.equal(databasePoolErrorCode(error), "UNKNOWN");
 });
 
+test("throwing diagnostic accessors and revoked proxies cannot replace the original failure", () => {
+  const messageGetter = new Error();
+  Object.defineProperty(messageGetter, "message", {
+    get() {
+      throw new Error("private message getter");
+    },
+  });
+  const codeGetter = {
+    get code() {
+      throw new Error("private code getter");
+    },
+  };
+  const hasTrap = new Proxy(
+    {},
+    {
+      has() {
+        throw new Error("private has trap");
+      },
+    },
+  );
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  for (const error of [messageGetter, codeGetter, hasTrap, revoked.proxy]) {
+    assert.doesNotThrow(() => databasePoolErrorCode(error));
+    assert.equal(databasePoolErrorCode(error), "UNKNOWN");
+  }
+});
+
 function failurePool(failures: Record<string, Error> = {}) {
   const queries: string[] = [];
   const releases: (boolean | undefined)[] = [];
@@ -307,9 +335,28 @@ test("real pool idle-error events are handled without logging raw connection det
       1,
       "Pool reuse must not duplicate error handlers",
     );
-    assert.deepEqual(messages, [
-      ["Poker database pool connection failed:", { code: "ECONNRESET" }],
-    ]);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].length, 1);
+    const event = JSON.parse(messages[0][0] as string);
+    assert.equal(event.event, "database_pool_error");
+    assert.equal(event.code, "ECONNRESET");
+    assert.equal(new Date(event.timestamp).toISOString(), event.timestamp);
+    assert.deepEqual(Object.keys(event).sort(), ["code", "event", "timestamp"]);
+    assert.doesNotMatch(
+      JSON.stringify(messages),
+      /private-password|private-host/,
+    );
+    const hostile = {
+      get code() {
+        throw new Error("private diagnostic failure");
+      },
+    };
+    assert.doesNotThrow(() => pool.emit("error", hostile));
+    assert.equal(JSON.parse(messages[1][0] as string).code, "UNKNOWN");
+    console.error = () => {
+      throw new Error("private log sink failure");
+    };
+    assert.doesNotThrow(() => pool.emit("error", hostile));
   } finally {
     console.error = savedError;
     await closeDatabase();

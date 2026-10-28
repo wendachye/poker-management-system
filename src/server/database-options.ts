@@ -100,33 +100,42 @@ export function databasePoolOptions(env: DatabaseEnvironment): PoolConfig {
 
 /** Report a useful category without exposing connection strings or server details. */
 export function databasePoolErrorCode(error: unknown): string {
-  if (error instanceof Error) {
-    const timeout = new Map([
-      ["timeout exceeded when trying to connect", "POOL_ACQUIRE_TIMEOUT"],
-      ["Connection terminated due to connection timeout", "CONNECTION_TIMEOUT"],
-      ["Query read timeout", "QUERY_READ_TIMEOUT"],
-    ]).get(error.message);
-    if (timeout) return timeout;
+  try {
+    if (error instanceof Error) {
+      const timeout = new Map([
+        ["timeout exceeded when trying to connect", "POOL_ACQUIRE_TIMEOUT"],
+        [
+          "Connection terminated due to connection timeout",
+          "CONNECTION_TIMEOUT",
+        ],
+        ["Query read timeout", "QUERY_READ_TIMEOUT"],
+      ]).get(error.message);
+      if (timeout) return timeout;
+    }
+    const knownCodes = new Set([
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "EPIPE",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "57P01",
+      "57P02",
+      "57P03",
+      "53300",
+      "23503",
+      "23505",
+      "40001",
+      "40P01",
+      "55P03",
+      "57014",
+    ]);
+    const code =
+      error && typeof error === "object" && "code" in error ? error.code : null;
+    return typeof code === "string" && knownCodes.has(code) ? code : "UNKNOWN";
+  } catch {
+    // Error objects and proxies may have throwing accessors. Diagnostics must
+    // not replace the original failure or escape an idle-pool event handler.
+    return "UNKNOWN";
   }
-  const knownCodes = new Set([
-    "ECONNRESET",
-    "ECONNREFUSED",
-    "ETIMEDOUT",
-    "EPIPE",
-    "ENOTFOUND",
-    "EAI_AGAIN",
-    "57P01",
-    "57P02",
-    "57P03",
-    "53300",
-    "23503",
-    "23505",
-    "40001",
-    "40P01",
-    "55P03",
-    "57014",
-  ]);
-  const code =
-    error && typeof error === "object" && "code" in error ? error.code : null;
-  return typeof code === "string" && knownCodes.has(code) ? code : "UNKNOWN";
 }

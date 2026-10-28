@@ -95,11 +95,16 @@ test("unexpected server failures have a correlation ID and never log raw SQL or 
   assert.match(requestId ?? "", /^[a-f0-9-]{36}$/);
   assert.equal(response.headers.get("cache-control"), "no-store");
   const event = JSON.parse(logs[0][0] as string);
-  assert.deepEqual(event, {
-    event: "request_failed",
-    requestId,
-    code: "ECONNRESET",
-  });
+  assert.equal(new Date(event.timestamp).toISOString(), event.timestamp);
+  assert.deepEqual(
+    { ...event, timestamp: undefined },
+    {
+      event: "request_failed",
+      requestId,
+      code: "ECONNRESET",
+      timestamp: undefined,
+    },
+  );
   assert.doesNotMatch(JSON.stringify(logs), /private_|SELECT/);
   assert.doesNotMatch(JSON.stringify(await response.json()), /private_|SELECT/);
 });
