@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReadPage, ReadQuery } from "@/domain/read-model";
 import type { Snapshot } from "@/domain/model";
 import { prototypeEnabled } from "@/prototype/config";
@@ -62,19 +62,33 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
   const { read, snapshot, readGeneration, registerRead } =
     usePokerManagementContext();
   const key = JSON.stringify(query);
+  const branchId = snapshot?.branch.id;
+  const staffId = snapshot?.user.id;
+  const role = snapshot?.user.role;
+  const access = useMemo(
+    () => ({ enabled, branchId, staffId, role, read }),
+    [enabled, branchId, staffId, role, read],
+  );
+  const eligible = enabled && !!branchId && !!staffId && !!role;
   const [attempt, retry] = useState(0);
   const [result, setResult] = useState<{
     key: string;
+    access: typeof access;
     data: ReadPage<T>;
   } | null>(null);
   const [failure, setFailure] = useState<{
     key: string;
+    access: typeof access;
     message: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const previousRequest = useRef<ReadSearchRequest | null>(null);
-  const error = failure?.key === key ? failure.message : "";
-  const branchId = snapshot?.branch.id;
+  const currentResult =
+    eligible && result?.access === access && result.key === key;
+  const error =
+    eligible && failure?.access === access && failure.key === key
+      ? failure.message
+      : "";
   const revision = snapshot?.revision;
   useEffect(() => {
     const parsed = JSON.parse(key) as ReadQuery;
@@ -85,12 +99,12 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
       attempt,
       readGeneration,
       enabled,
-      readIdentity: read,
+      readIdentity: access,
       registerReadIdentity: registerRead,
     };
     const delay = readSearchDelay(previousRequest.current, request);
     previousRequest.current = request;
-    if (prototypeEnabled || !enabled || !branchId) return;
+    if (prototypeEnabled || !eligible) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let unregister = () => {};
@@ -99,7 +113,7 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
       try {
         unregister = registerRead(parsed);
         const data = await read<T>(parsed, controller.signal);
-        if (!controller.signal.aborted) setResult({ key, data });
+        if (!controller.signal.aborted) setResult({ key, access, data });
       } catch (error) {
         if (
           !controller.signal.aborted &&
@@ -107,6 +121,7 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
         )
           setFailure({
             key,
+            access,
             message:
               error instanceof Error ? error.message : "Cannot load records.",
           });
@@ -128,6 +143,8 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
     };
   }, [
     key,
+    access,
+    eligible,
     branchId,
     revision,
     attempt,
@@ -138,12 +155,10 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
   ]);
   return {
     live: !prototypeEnabled,
-    data: result?.key === key ? result.data : null,
+    data: currentResult ? result.data : null,
     error,
     loading:
-      !prototypeEnabled &&
-      enabled &&
-      (loading || (result?.key !== key && !error)),
+      !prototypeEnabled && eligible && (loading || (!currentResult && !error)),
     retry: () => retry((value) => value + 1),
   };
 }

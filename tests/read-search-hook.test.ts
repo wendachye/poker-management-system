@@ -86,6 +86,11 @@ type Slot = {
   deps?: unknown[];
   cleanup?: () => void;
 };
+type AccessSnapshot = {
+  branch: { id: string | undefined };
+  user: { id: string | undefined; role: string | undefined };
+  revision: number;
+};
 function harness(prototype = false) {
   const clock = new Clock();
   const requests: Array<{
@@ -116,12 +121,18 @@ function harness(prototype = false) {
       registrations.delete(token);
     };
   };
-  const context = {
+  const context: {
+    read: typeof read;
+    registerRead: typeof registerRead;
+    readGeneration: number;
+    snapshot: AccessSnapshot | null;
+  } = {
     read,
     registerRead,
     readGeneration: 0,
     snapshot: {
-      branch: { id: "fictional-venue" as string | undefined },
+      branch: { id: "fictional-venue" },
+      user: { id: "fictional-staff", role: "ADMIN" },
       revision: 1,
     },
   };
@@ -134,6 +145,16 @@ function harness(prototype = false) {
     DOMException,
     setTimeout: clock.schedule,
     clearTimeout: clock.cancel,
+    useMemo: (create: () => unknown, deps: unknown[]) => {
+      const index = cursor++;
+      const previous = slots[index];
+      if (
+        !previous ||
+        deps.some((value, at) => !Object.is(value, previous.deps?.[at]))
+      )
+        slots[index] = { value: create(), deps };
+      return slots[index].value;
+    },
     useState: (initial: unknown) => {
       const index = cursor++;
       if (!slots[index]) slots[index] = { value: initial };
@@ -315,9 +336,9 @@ test("explicit retry dispatches immediately and does not repeat the debounce del
 
 test("changed freshness dispatches the pending latest text immediately and cancels its timer", async () => {
   const updates = [
-    (h: ReturnType<typeof harness>) => h.context.snapshot.revision++,
+    (h: ReturnType<typeof harness>) => h.context.snapshot!.revision++,
     (h: ReturnType<typeof harness>) =>
-      (h.context.snapshot.branch.id = "another-fictional-venue"),
+      (h.context.snapshot!.branch.id = "another-fictional-venue"),
     (h: ReturnType<typeof harness>) => h.context.readGeneration++,
     (h: ReturnType<typeof harness>) => {
       const previous = h.context.read;
@@ -399,10 +420,10 @@ test("disabled and missing-venue intervals never make the first newly eligible r
   await h.flush();
   assert.equal(h.requests.length, 2);
   assert.equal(h.clock.pending.size, 0);
-  h.context.snapshot.branch.id = undefined;
+  h.context.snapshot!.branch.id = undefined;
   h.render({ resource: "players", query: "without venue" });
   await h.flush();
-  h.context.snapshot.branch.id = "fictional-venue";
+  h.context.snapshot!.branch.id = "fictional-venue";
   h.render({ resource: "players", query: "eligible again" });
   await h.flush();
   assert.equal(h.requests.length, 3);
@@ -440,5 +461,226 @@ test("prototype searches preserve local behavior without live reads, timers or r
   assert.equal(h.requests.length, 0);
   assert.equal(h.registrations.size, 0);
   assert.equal(h.clock.pending.size, 0);
+  h.unmount();
+});
+
+const accessChanges = [
+  {
+    name: "venue",
+    change: (h: ReturnType<typeof harness>) => {
+      h.context.snapshot!.branch.id = "other-fictional-venue";
+    },
+  },
+  {
+    name: "staff account",
+    change: (h: ReturnType<typeof harness>) => {
+      h.context.snapshot!.user.id = "other-fictional-staff";
+    },
+  },
+  {
+    name: "staff role",
+    change: (h: ReturnType<typeof harness>) => {
+      h.context.snapshot!.user.role = "CASHIER";
+    },
+  },
+  {
+    name: "read capability",
+    change: (h: ReturnType<typeof harness>) => {
+      const previous = h.context.read;
+      h.context.read = (...args) => previous(...args);
+    },
+  },
+];
+
+test("same-query rows disappear on the first render of changed access and stay hidden until its read completes", async () => {
+  for (const { name, change } of accessChanges) {
+    const h = harness();
+    h.render({ resource: "players", query: "Keystone" });
+    await h.flush();
+    h.requests[0].receipt.resolve(page("previous-access"));
+    await h.flush();
+    assert.equal(h.output.data?.items[0].id, "previous-access");
+    change(h);
+    const changed = h.render();
+    assert.equal(changed.data, null, name);
+    assert.equal(changed.error, "", name);
+    assert.equal(changed.loading, true, name);
+    await h.flush();
+    assert.equal(h.requests.length, 2, name);
+    assert.equal(h.clock.pending.size, 0, name);
+    assert.equal(h.output.data, null, name);
+    h.requests[1].receipt.resolve(page("current-access"));
+    await h.flush();
+    assert.equal((h.output.data as Page | null)?.items[0].id, "current-access");
+    assert.equal(h.output.loading, false, name);
+    h.unmount();
+  }
+});
+
+test("same-query failures disappear on the first render of changed access", async () => {
+  for (const { name, change } of accessChanges) {
+    const h = harness();
+    h.render();
+    await h.flush();
+    h.requests[0].receipt.reject(new Error("Previous access failed"));
+    await h.flush();
+    assert.equal(h.output.error, "Previous access failed");
+    change(h);
+    const changed = h.render();
+    assert.equal(changed.error, "", name);
+    assert.equal(changed.data, null, name);
+    assert.equal(changed.loading, true, name);
+    await h.flush();
+    assert.equal(h.requests.length, 2, name);
+    h.unmount();
+  }
+});
+
+test("an access change with a text edit dispatches immediately rather than retaining the typing delay", async () => {
+  for (const { name, change } of accessChanges) {
+    const h = harness();
+    h.render({ resource: "players", query: "old" });
+    await h.flush();
+    change(h);
+    h.render({ resource: "players", query: "latest" });
+    await h.flush();
+    assert.equal(h.requests.length, 2, name);
+    assert.equal(h.clock.pending.size, 0, name);
+    assert.equal(h.requests[1].query.query, "latest", name);
+    h.unmount();
+  }
+});
+
+test("disabling and reenabling a same-query read never restores its earlier rows or errors", async () => {
+  for (const outcome of ["success", "failure"]) {
+    const h = harness();
+    h.render();
+    await h.flush();
+    if (outcome === "success") h.requests[0].receipt.resolve(page("earlier"));
+    else h.requests[0].receipt.reject(new Error("Earlier failure"));
+    await h.flush();
+    const disabled = h.render(undefined, false);
+    assert.equal(disabled.data, null, outcome);
+    assert.equal(disabled.error, "", outcome);
+    assert.equal(disabled.loading, false, outcome);
+    await h.flush();
+    assert.equal(h.requests.length, 1, outcome);
+    assert.equal(h.registrations.size, 0, outcome);
+    const enabled = h.render(undefined, true);
+    assert.equal(enabled.data, null, outcome);
+    assert.equal(enabled.error, "", outcome);
+    assert.equal(enabled.loading, true, outcome);
+    await h.flush();
+    assert.equal(h.requests.length, 2, outcome);
+    assert.equal(h.clock.pending.size, 0, outcome);
+    assert.equal(h.output.data, null, outcome);
+    h.requests[1].receipt.resolve(page("fresh"));
+    await h.flush();
+    assert.equal((h.output.data as Page | null)?.items[0].id, "fresh");
+    h.unmount();
+  }
+});
+
+test("missing access hides cached output and prevents requests until a fresh eligible read", async () => {
+  for (const missing of ["snapshot", "venue", "staff", "role"]) {
+    for (const outcome of ["success", "failure"]) {
+      const h = harness();
+      h.render();
+      await h.flush();
+      if (outcome === "success") h.requests[0].receipt.resolve(page("earlier"));
+      else h.requests[0].receipt.reject(new Error("Earlier failure"));
+      await h.flush();
+      const saved = structuredClone(h.context.snapshot);
+      if (missing === "snapshot") h.context.snapshot = null;
+      else if (missing === "venue") h.context.snapshot!.branch.id = undefined;
+      else if (missing === "staff") h.context.snapshot!.user.id = undefined;
+      else h.context.snapshot!.user.role = undefined;
+      const hidden = h.render();
+      assert.equal(hidden.data, null, missing + outcome);
+      assert.equal(hidden.error, "", missing + outcome);
+      assert.equal(hidden.loading, false, missing + outcome);
+      await h.flush();
+      assert.equal(h.requests.length, 1, missing + outcome);
+      assert.equal(h.registrations.size, 0, missing + outcome);
+      h.context.snapshot = saved;
+      const restored = h.render();
+      assert.equal(restored.data, null, missing + outcome);
+      assert.equal(restored.error, "", missing + outcome);
+      assert.equal(restored.loading, true, missing + outcome);
+      await h.flush();
+      assert.equal(h.requests.length, 2, missing + outcome);
+      assert.equal(h.clock.pending.size, 0, missing + outcome);
+      h.unmount();
+    }
+  }
+});
+
+test("late completions from previous access cannot replace current rows or failures", async () => {
+  for (const { name, change } of accessChanges) {
+    for (const outcome of ["success", "failure"]) {
+      const h = harness();
+      h.render();
+      await h.flush();
+      change(h);
+      h.render();
+      await h.flush();
+      assert.equal(h.requests[0].signal.aborted, true, name);
+      assert.equal(h.requests.length, 2, name);
+      h.requests[1].receipt.resolve(page("current"));
+      await h.flush();
+      // These promises deliberately settle even though their signal is aborted.
+      if (outcome === "success") h.requests[0].receipt.resolve(page("old"));
+      else h.requests[0].receipt.reject(new Error("Old access failed"));
+      await h.flush();
+      assert.equal(h.output.data?.items[0].id, "current", name + outcome);
+      assert.equal(h.output.error, "", name + outcome);
+      assert.equal(h.output.loading, false, name + outcome);
+      assert.equal(h.registrations.size, 1, name + outcome);
+      h.unmount();
+    }
+  }
+});
+
+test("equal access in fresh snapshot objects retains rows without an extra request", async () => {
+  const h = harness();
+  h.render();
+  await h.flush();
+  h.requests[0].receipt.resolve(page("still-current"));
+  await h.flush();
+  for (let count = 0; count < 3; count++) {
+    h.context.snapshot = structuredClone(h.context.snapshot);
+    const current = h.render();
+    assert.equal(current.data?.items[0].id, "still-current");
+    assert.equal(current.loading, false);
+    await h.flush();
+    assert.equal(h.requests.length, 1);
+  }
+  h.unmount();
+});
+
+test("same-access revision, refresh generation and retry retain displayed rows while reading immediately", async () => {
+  const h = harness();
+  h.render();
+  await h.flush();
+  h.requests[0].receipt.resolve(page("retained"));
+  await h.flush();
+  const updates = [
+    () => h.context.snapshot!.revision++,
+    () => h.context.readGeneration++,
+    () => h.output.retry(),
+  ];
+  for (const [index, update] of updates.entries()) {
+    update();
+    const current = h.render();
+    assert.equal(current.data?.items[0].id, "retained");
+    await h.flush();
+    assert.equal(h.requests.length, index + 2);
+    assert.equal(h.clock.pending.size, 0);
+    assert.equal(h.output.loading, true);
+    assert.equal(h.output.data?.items[0].id, "retained");
+    h.requests[index + 1].receipt.resolve(page("retained"));
+    await h.flush();
+    assert.equal(h.output.loading, false);
+  }
   h.unmount();
 });
