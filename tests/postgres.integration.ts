@@ -26,6 +26,7 @@ import {
 import { configuredStore } from "./helpers/store";
 import { replaceStore } from "../src/server/storage";
 import { readCsv } from "../src/server/queries";
+import { csvExportBusyDetails } from "../src/server/csv-export-work";
 import {
   claimLoginAttempt,
   clearSuccessfulLoginAttempt,
@@ -1295,6 +1296,165 @@ test("global disable and local demotion protect a shared admin's other venue", a
     ).rows[0].total,
     "0",
   );
+});
+
+test("concurrent CSV requests fail before acquisition and an aborted export keeps its slot through real rollback", async () => {
+  const run = await fixture();
+  await execute(run, tableCommand("Export admission table"));
+  const opened = await execute(run, {
+    kind: "OPEN_DAY",
+    date: "2026-10-29",
+    openingCash: 100_000,
+  });
+  const access = {
+    actorId: run.users.admin,
+    branchId: run.branchId,
+    role: "ADMIN" as const,
+  };
+  const daily = { resource: "report", dayId: opened.store.currentDayId };
+  const period = { resource: "range", from: "2026-10-29", to: "2026-10-29" };
+  const holder = await lockPool.connect();
+  const lock = 7_318_291;
+  let holding = false;
+  let releaseRollback!: () => void;
+  const allowRollback = new Promise<void>((resolve) => {
+    releaseRollback = resolve;
+  });
+  let rollbackStarted!: () => void;
+  const rollingBack = new Promise<void>((resolve) => {
+    rollbackStarted = resolve;
+  });
+  let checkouts = 0;
+  let released = false;
+  const observed = databaseFromPool({
+    query: (sql, values) => firstPool.query(sql, values),
+    async connect() {
+      checkouts++;
+      const client = await firstPool.connect();
+      return {
+        async query(sql: string, values?: unknown[]) {
+          if (sql === "ROLLBACK") {
+            rollbackStarted();
+            await allowRollback;
+          }
+          const result = await client.query(sql, values);
+          if (sql.startsWith("SET TRANSACTION"))
+            await client.query("SELECT pg_advisory_xact_lock($1)", [lock]);
+          return result;
+        },
+        release(destroy?: boolean) {
+          released = true;
+          client.release(destroy);
+        },
+      };
+    },
+  });
+  let refusedTransactions = 0;
+  const refused: Database = {
+    ...secondDb,
+    transaction: (work) => {
+      refusedTransactions++;
+      return secondDb.transaction(work);
+    },
+  };
+  const expectBusy = async () => {
+    for (const query of [daily, period])
+      await assert.rejects(
+        readCsv(refused, run.tokens.admin, query, access),
+        (error) => {
+          assert.deepEqual(csvExportBusyDetails(error), {
+            status: 503,
+            retryAfterSeconds: 1,
+            message:
+              "Another report is being exported. Please try again shortly.",
+          });
+          return true;
+        },
+      );
+    assert.equal(refusedTransactions, 0);
+    assert.equal(checkouts, 1);
+    assert.equal(released, false);
+  };
+  const controller = new AbortController();
+  let finished = false;
+  let exported: Promise<unknown> | undefined;
+  try {
+    const holderPid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0].pid;
+    const exporterPid = await backendPid(firstPool);
+    await holder.query("SELECT pg_advisory_lock($1)", [lock]);
+    holding = true;
+    exported = readCsv(
+      observed,
+      run.tokens.admin,
+      daily,
+      access,
+      controller.signal,
+    ).finally(() => {
+      finished = true;
+    });
+    void exported.catch(() => {});
+    await waitForBlocked(exporterPid, holderPid);
+    await expectBusy();
+    controller.abort(new Error("private export cancellation reason"));
+    await expectBusy();
+    assert.equal(
+      finished,
+      false,
+      "Client abort cannot release active SQL work",
+    );
+    const before = await readSnapshot(secondDb, run.tokens.admin);
+    const saved = await mutate(
+      secondDb,
+      run.tokens.admin,
+      payload(
+        run.branchId,
+        before.revision,
+        tableCommand("Staff save during export"),
+      ),
+    );
+    assert.ok(
+      saved.store.tables.some(
+        (table) => table.name === "Staff save during export",
+      ),
+    );
+    await holder.query("SELECT pg_advisory_unlock($1)", [lock]);
+    holding = false;
+    await rollingBack;
+    await expectBusy();
+    assert.equal(
+      finished,
+      false,
+      "Rollback and release must finish before admission reopens",
+    );
+    releaseRollback();
+    await assert.rejects(exported, (error) => {
+      status(error, 408);
+      assert.equal(
+        (error as Error).message,
+        "Cannot download report. Please try again.",
+      );
+      return true;
+    });
+    assert.equal(released, true);
+    assert.equal(firstPool.waitingCount, 0);
+    const after = await readSnapshot(secondDb, run.tokens.admin);
+    assert.equal(after.revision, saved.revision);
+    assert.deepEqual(after.store, saved.store);
+    for (const query of [daily, period])
+      assert.ok(
+        (
+          await readCsv(firstDb, run.tokens.admin, query, access)
+        ).value.includes('"Branch"'),
+      );
+  } finally {
+    controller.abort();
+    if (holding) await holder.query("SELECT pg_advisory_unlock($1)", [lock]);
+    releaseRollback();
+    await exported?.catch(() => {});
+    holder.release();
+  }
 });
 
 test("a large daily CSV retains one snapshot while another staff member posts a buy-in", async () => {

@@ -504,6 +504,8 @@
     "report_view": "报表视图",
     "date_range": "日期范围",
     "export_daily_csv": "导出日报 CSV",
+    "preparing_csv": "正在准备 CSV…",
+    "another_report_is_being_exported_please_try_again_shortly": "另一份报表正在导出，请稍后重试。",
     "period_summary": "期间汇总",
     "compare_posted_cash_movements_across_business_dates_open_days_are_provisional": "比较不同营业日期的已入账现金流。未结算营业日的数据为暂定值。",
     "export_period_csv": "导出期间 CSV",

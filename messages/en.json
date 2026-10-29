@@ -504,6 +504,8 @@
     "report_view": "Report view",
     "date_range": "Date range",
     "export_daily_csv": "Export daily CSV",
+    "preparing_csv": "Preparing CSV…",
+    "another_report_is_being_exported_please_try_again_shortly": "Another report is being exported. Please try again shortly.",
     "period_summary": "Period summary",
     "compare_posted_cash_movements_across_business_dates_open_days_are_provisional": "Compare posted cash movements across business dates. Open days are provisional.",
     "export_period_csv": "Export period CSV",

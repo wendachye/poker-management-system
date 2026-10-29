@@ -413,15 +413,23 @@ class StaffBrowser {
     return { result, drip, finish, close };
   }
 
-  async csv(route: string, access: ExportAccess) {
-    const response = await fetch(origin + route, {
+  csvResponse(
+    route: string,
+    access: ExportAccess,
+    signal = AbortSignal.timeout(30_000),
+  ) {
+    return fetch(origin + route, {
       headers: {
         Cookie: this.cookie,
         [EXPORT_ACCESS_HEADER]: encodeExportAccess(access),
       },
-      signal: AbortSignal.timeout(30_000),
+      signal,
       redirect: "error",
     });
+  }
+
+  async csv(route: string, access: ExportAccess) {
+    const response = await this.csvResponse(route, access);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.match(response.headers.get("content-type") ?? "", /^text\/csv/);
@@ -1411,6 +1419,147 @@ test(
         const after = await admin.snapshot();
         assert.equal(after.revision, reviewed.revision);
         assert.deepEqual(after.store, reviewed.store);
+      },
+    );
+
+    await t.test(
+      "CSV bursts refuse extra daily and period work while an aborted database export drains",
+      async () => {
+        const before = await admin.snapshot();
+        const access: ExportAccess = {
+          actorId: before.user.id,
+          branchId: before.branch.id,
+          role: before.user.role,
+        };
+        const day = before.store.days.find(
+          (entry) => entry.id === before.store.currentDayId,
+        )!;
+        const daily = "/api/read?resource=report&format=csv&dayId=" + day.id;
+        const period =
+          "/api/read?resource=range&format=csv&from=" +
+          day.date +
+          "&to=" +
+          day.date;
+        const headers = { [EXPORT_ACCESS_HEADER]: encodeExportAccess(access) };
+        // Compile/warm both paths before holding a real database lock.
+        await admin.csv(daily, access);
+        await admin.csv(period, access);
+        const controller = new AbortController();
+        const holder = await fixturePool.connect();
+        let holding = false;
+        let first: Promise<Response> | undefined;
+        const waiting = async () =>
+          (
+            await administrator.query<{ total: number }>(
+              "SELECT count(*)::int AS total FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND query ILIKE '%poker_profiles%' AND pid<>pg_backend_pid()",
+              [ownedName],
+            )
+          ).rows[0].total;
+        const busy = async (route: string) => {
+          const { response, data } = await admin.response(
+            route,
+            "GET",
+            undefined,
+            headers,
+          );
+          assert.equal(response.status, 503);
+          assert.equal(response.headers.get("retry-after"), "1");
+          assert.equal(response.headers.has(EXPORT_ACCESS_HEADER), false);
+          assert.equal(response.headers.has("content-disposition"), false);
+          assert.match(
+            response.headers.get("content-type") ?? "",
+            /^application\/json/,
+          );
+          assert.deepEqual(data, {
+            error:
+              "Another report is being exported. Please try again shortly.",
+          });
+          return response.headers.get("x-request-id");
+        };
+        try {
+          await holder.query("BEGIN");
+          holding = true;
+          await holder.query(
+            "LOCK TABLE poker_profiles IN ACCESS EXCLUSIVE MODE",
+          );
+          first = admin.csvResponse(daily, access, controller.signal);
+          void first.catch(() => {});
+          const deadline = performance.now() + 2000;
+          while ((await waiting()) === 0 && performance.now() < deadline)
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          assert.equal(
+            await waiting(),
+            1,
+            "First export must actually be waiting in PostgreSQL",
+          );
+          const started = performance.now();
+          const references = await Promise.all(
+            Array.from({ length: 12 }, (_, index) =>
+              busy(index % 2 ? daily : period),
+            ),
+          );
+          assert.ok(
+            performance.now() - started < 2000,
+            "Extra exports must refuse without waiting for the database lock",
+          );
+          assert.equal(new Set(references).size, 12);
+          assert.equal(
+            await waiting(),
+            1,
+            "Extra exports must not add database lock waiters",
+          );
+          await admin.json("/api/auth");
+          const health = await fetch(origin + "/api/health", {
+            signal: AbortSignal.timeout(2000),
+          });
+          assert.equal(health.status, 200);
+          await health.arrayBuffer();
+          controller.abort();
+          await assert.rejects(first);
+          await busy(daily);
+          await busy(period);
+          assert.equal(
+            await waiting(),
+            1,
+            "A disconnected client cannot release an active SQL export",
+          );
+        } finally {
+          controller.abort();
+          if (holding) await holder.query("ROLLBACK");
+          holder.release();
+          await first?.then(
+            (response) => response.arrayBuffer(),
+            () => {},
+          );
+        }
+        // No automatic replay: a fresh explicit export succeeds after cleanup.
+        const deadline = performance.now() + 5000;
+        let recovered = false;
+        while (performance.now() < deadline) {
+          const response = await admin.csvResponse(
+            period,
+            access,
+            AbortSignal.timeout(3000),
+          );
+          if (response.status === 200) {
+            assert.deepEqual(
+              decodeExportAccess(response.headers.get(EXPORT_ACCESS_HEADER)),
+              access,
+            );
+            assert.ok(
+              (await response.text()).includes('"Branch","HTTP Sample Venue"'),
+            );
+            recovered = true;
+            break;
+          }
+          assert.equal(response.status, 503);
+          await response.arrayBuffer();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(recovered, true);
+        const after = await admin.snapshot();
+        assert.equal(after.revision, before.revision);
+        assert.deepEqual(after.store, before.store);
       },
     );
 

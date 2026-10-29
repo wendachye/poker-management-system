@@ -28,6 +28,7 @@ import { requireUser } from "./auth";
 import type { Database, SqlConnection } from "./database";
 import { checkedTotal, populateReadModel } from "./aggregates";
 import type { StorageMetadata } from "./storage";
+import { withCsvExportWork } from "./csv-export-work";
 
 const text = z.string().trim().max(200).optional();
 const id = z.string().min(1).max(100).optional();
@@ -928,152 +929,169 @@ export async function readCsv(
   token: string | undefined,
   input: unknown,
   expected: ExportAccess,
+  signal?: AbortSignal,
 ) {
   const query = parseReadQuery(input);
   if (!["report", "range"].includes(query.resource))
     throw new DomainError("Choose a daily or period report.");
-  return db.transaction(async (connection) => {
-    await connection.query(
-      "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-    );
-    const user = await requireUser(connection, token);
-    const access: ExportAccess = {
-      actorId: user.id,
-      branchId: user.branchId,
-      role: user.role,
-    };
-    const reviewedAccess = checkedExportAccess(expected);
-    if (!reviewedAccess)
-      throw new DomainError("Reload the report before exporting.");
-    if (!sameExportAccess(access, reviewedAccess))
-      throw new DomainError(
-        "Staff access or venue changed. Refresh the report before exporting.",
-        409,
+  const checkCancelled = () => {
+    if (signal?.aborted)
+      throw new DomainError("Cannot download report. Please try again.", 408);
+  };
+  checkCancelled();
+  return withCsvExportWork(async () => {
+    checkCancelled();
+    const result = await db.transaction(async (source) => {
+      const connection: SqlConnection = {
+        async query<T>(sql: string, values?: unknown[]) {
+          checkCancelled();
+          // An in-flight query must settle before cancellation can roll back.
+          const result = await source.query<T>(sql, values);
+          checkCancelled();
+          return result;
+        },
+      };
+      await connection.query(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );
-    const completeQuery = {
-      ...query,
-      query: undefined,
-      status: undefined,
-      type: undefined,
-      tag: undefined,
-      staff: undefined,
-      action: undefined,
-      playerId: undefined,
-      id: undefined,
-      page: 0,
-      pageSize: 50,
-    };
-    const first = await readPageWithin(connection, user, completeQuery);
-    let rows: (string | number)[][] = [];
-    let filename = "report.csv";
-    if (query.resource === "range") {
-      const { current, previous } = first.report!;
-      rows = [
-        ["Branch", displayName(first.context.branch.name)],
-        ["Currency", "MYR"],
-        ["Period", current.from, current.to],
-        ["Comparison period", previous.from, previous.to],
-        [
-          "Recorded days",
-          current.days.length,
-          "Comparison recorded days",
-          previous.days.length,
-        ],
-        [
-          "Open days",
-          current.openDays,
-          "Comparison open days",
-          previous.openDays,
-        ],
-        [
-          "Pending requests (excluded from totals)",
-          current.pendingRequests,
-          "Comparison pending",
-          previous.pendingRequests,
-        ],
-        [
-          "Unrecorded dates are not verified zero activity. Totals contain posted entries only.",
-        ],
-        ["Metric", "Selected period", "Previous period", "Change"],
-        ...rangeMetrics.map(([key, label]) => [
-          label,
-          current.totals[key] / 100,
-          previous.days.length ? previous.totals[key] / 100 : "",
-          current.days.length && previous.days.length
-            ? (current.totals[key] - previous.totals[key]) / 100
-            : "",
-        ]),
-        [
-          "Closed-day variance",
-          current.variance === null ? "" : current.variance / 100,
-          previous.variance === null ? "" : previous.variance / 100,
-        ],
-        [],
-        [
-          "Daily balances are individual snapshots and must not be added together.",
-        ],
-        [
-          "Business date",
-          "Status",
-          "Cash received",
-          "Cash payout",
-          "Opening cash",
-          "Expected cash",
-          "Counted cash",
-          "Variance",
-        ],
-        ...current.days.map((day) => [
-          day.date,
-          day.status,
-          day.totals.cashReceived / 100,
-          day.totals.cashPayout / 100,
-          day.openingCash / 100,
-          day.totals.expectedCash / 100,
-          day.totals.countedCash === null ? "" : day.totals.countedCash / 100,
-          day.totals.variance === null ? "" : day.totals.variance / 100,
-        ]),
-      ];
-      filename = `period-report-${query.from}-${query.to}.csv`;
-    } else {
-      const totals = first.totals!,
-        day = first.day!;
-      rows = [
-        ["Branch", displayName(first.context.branch.name)],
-        ["Business date", day.date],
-        ["Currency", "MYR"],
-        ["Metric", "Amount"],
-        ["Opening cash", totals.openingCash / 100],
-        ["Cash received", totals.cashReceived / 100],
-        ["Cash payout", totals.cashPayout / 100],
-        ["Expected cash", totals.expectedCash / 100],
-        [
-          "Counted cash",
-          totals.countedCash === null ? "" : totals.countedCash / 100,
-        ],
-        ["Variance", totals.variance === null ? "" : totals.variance / 100],
-        [],
-        ["Player", "Buy-in", "Cash-out", "Settled P/L", "Status"],
-      ];
-      // Explicit export is separate from routine reads. It stays snapshot-consistent
-      // and bounded; refuse an oversized file rather than returning a partial CSV.
-      if (first.total > 50_000)
+      const user = await requireUser(connection, token);
+      const access: ExportAccess = {
+        actorId: user.id,
+        branchId: user.branchId,
+        role: user.role,
+      };
+      const reviewedAccess = checkedExportAccess(expected);
+      if (!reviewedAccess)
+        throw new DomainError("Reload the report before exporting.");
+      if (!sameExportAccess(access, reviewedAccess))
         throw new DomainError(
-          "This report export is too large. Contact an administrator for a database export.",
+          "Staff access or venue changed. Refresh the report before exporting.",
+          409,
         );
-      let participants = first.items as Pick<
-        Player,
-        "name" | "buyIn" | "cashOut" | "status"
-      >[];
-      if (first.total > 50) {
-        // CSV needs every participant, without rebuilding the operational
-        // context, notification counts and report totals for each 50-row page.
-        const selected = await connection.query<{
-          name: string;
-          status: Player["status"];
-          buyIn: string;
-          cashOut: string;
-        }>(
-          `/* daily_csv_participant_projection */
+      const completeQuery = {
+        ...query,
+        query: undefined,
+        status: undefined,
+        type: undefined,
+        tag: undefined,
+        staff: undefined,
+        action: undefined,
+        playerId: undefined,
+        id: undefined,
+        page: 0,
+        pageSize: 50,
+      };
+      const first = await readPageWithin(connection, user, completeQuery);
+      let rows: (string | number)[][] = [];
+      let filename = "report.csv";
+      if (query.resource === "range") {
+        const { current, previous } = first.report!;
+        rows = [
+          ["Branch", displayName(first.context.branch.name)],
+          ["Currency", "MYR"],
+          ["Period", current.from, current.to],
+          ["Comparison period", previous.from, previous.to],
+          [
+            "Recorded days",
+            current.days.length,
+            "Comparison recorded days",
+            previous.days.length,
+          ],
+          [
+            "Open days",
+            current.openDays,
+            "Comparison open days",
+            previous.openDays,
+          ],
+          [
+            "Pending requests (excluded from totals)",
+            current.pendingRequests,
+            "Comparison pending",
+            previous.pendingRequests,
+          ],
+          [
+            "Unrecorded dates are not verified zero activity. Totals contain posted entries only.",
+          ],
+          ["Metric", "Selected period", "Previous period", "Change"],
+          ...rangeMetrics.map(([key, label]) => [
+            label,
+            current.totals[key] / 100,
+            previous.days.length ? previous.totals[key] / 100 : "",
+            current.days.length && previous.days.length
+              ? (current.totals[key] - previous.totals[key]) / 100
+              : "",
+          ]),
+          [
+            "Closed-day variance",
+            current.variance === null ? "" : current.variance / 100,
+            previous.variance === null ? "" : previous.variance / 100,
+          ],
+          [],
+          [
+            "Daily balances are individual snapshots and must not be added together.",
+          ],
+          [
+            "Business date",
+            "Status",
+            "Cash received",
+            "Cash payout",
+            "Opening cash",
+            "Expected cash",
+            "Counted cash",
+            "Variance",
+          ],
+          ...current.days.map((day) => [
+            day.date,
+            day.status,
+            day.totals.cashReceived / 100,
+            day.totals.cashPayout / 100,
+            day.openingCash / 100,
+            day.totals.expectedCash / 100,
+            day.totals.countedCash === null ? "" : day.totals.countedCash / 100,
+            day.totals.variance === null ? "" : day.totals.variance / 100,
+          ]),
+        ];
+        filename = `period-report-${query.from}-${query.to}.csv`;
+      } else {
+        const totals = first.totals!,
+          day = first.day!;
+        rows = [
+          ["Branch", displayName(first.context.branch.name)],
+          ["Business date", day.date],
+          ["Currency", "MYR"],
+          ["Metric", "Amount"],
+          ["Opening cash", totals.openingCash / 100],
+          ["Cash received", totals.cashReceived / 100],
+          ["Cash payout", totals.cashPayout / 100],
+          ["Expected cash", totals.expectedCash / 100],
+          [
+            "Counted cash",
+            totals.countedCash === null ? "" : totals.countedCash / 100,
+          ],
+          ["Variance", totals.variance === null ? "" : totals.variance / 100],
+          [],
+          ["Player", "Buy-in", "Cash-out", "Settled P/L", "Status"],
+        ];
+        // Explicit export is separate from routine reads. It stays snapshot-consistent
+        // and bounded; refuse an oversized file rather than returning a partial CSV.
+        if (first.total > 50_000)
+          throw new DomainError(
+            "This report export is too large. Contact an administrator for a database export.",
+          );
+        let participants = first.items as Pick<
+          Player,
+          "name" | "buyIn" | "cashOut" | "status"
+        >[];
+        if (first.total > 50) {
+          // CSV needs every participant, without rebuilding the operational
+          // context, notification counts and report totals for each 50-row page.
+          const selected = await connection.query<{
+            name: string;
+            status: Player["status"];
+            buyIn: string;
+            cashOut: string;
+          }>(
+            `/* daily_csv_participant_projection */
           WITH participants AS MATERIALIZED (
             SELECT DISTINCT player_id FROM poker_visits WHERE branch_id=$1 AND day_id=$2
           ) SELECT p.data->>'name' AS name,latest.status,
@@ -1086,53 +1104,56 @@ export async function readCsv(
           LEFT JOIN poker_financial_totals totals ON totals.branch_id=p.branch_id
             AND totals.scope='PLAYER_DAY' AND totals.entity_id=p.id AND totals.day_id=$2
           ORDER BY p.order_no,p.id LIMIT 50001`,
-          [user.branchId, day.id],
-        );
-        if (
-          selected.rows.length !== first.total ||
-          selected.rows.length > 50_000
-        )
-          throw new DomainError(
-            "Cannot download report. Please try again.",
-            503,
+            [user.branchId, day.id],
           );
-        participants = selected.rows.map((player) => {
           if (
-            typeof player.name !== "string" ||
-            !["ACTIVE", "OUT"].includes(player.status)
+            selected.rows.length !== first.total ||
+            selected.rows.length > 50_000
           )
             throw new DomainError(
               "Cannot download report. Please try again.",
               503,
             );
-          return {
-            name: player.name,
-            status: player.status,
-            buyIn: checkedTotal(player.buyIn),
-            cashOut: checkedTotal(player.cashOut),
-          };
-        });
+          participants = selected.rows.map((player) => {
+            if (
+              typeof player.name !== "string" ||
+              !["ACTIVE", "OUT"].includes(player.status)
+            )
+              throw new DomainError(
+                "Cannot download report. Please try again.",
+                503,
+              );
+            return {
+              name: player.name,
+              status: player.status,
+              buyIn: checkedTotal(player.buyIn),
+              cashOut: checkedTotal(player.cashOut),
+            };
+          });
+        }
+        rows.push(
+          ...participants.map((player) => [
+            displayName(player.name),
+            player.buyIn / 100,
+            player.cashOut / 100,
+            player.status === "ACTIVE"
+              ? "Unsettled"
+              : checkedTotal(
+                  (BigInt(player.cashOut) - BigInt(player.buyIn)).toString(),
+                ) / 100,
+            player.status,
+          ]),
+        );
+        filename = `daily-close-${day.date}.csv`;
       }
-      rows.push(
-        ...participants.map((player) => [
-          displayName(player.name),
-          player.buyIn / 100,
-          player.cashOut / 100,
-          player.status === "ACTIVE"
-            ? "Unsettled"
-            : checkedTotal(
-                (BigInt(player.cashOut) - BigInt(player.buyIn)).toString(),
-              ) / 100,
-          player.status,
-        ]),
-      );
-      filename = `daily-close-${day.date}.csv`;
-    }
-    const value = csv(rows);
-    if (Buffer.byteLength(value, "utf8") > 4_000_000)
-      throw new DomainError(
-        "This report export is too large. Contact an administrator for a database export.",
-      );
-    return { value, filename, access };
+      const value = csv(rows);
+      if (Buffer.byteLength(value, "utf8") > 4_000_000)
+        throw new DomainError(
+          "This report export is too large. Contact an administrator for a database export.",
+        );
+      return { value, filename, access };
+    });
+    checkCancelled();
+    return result;
   });
 }

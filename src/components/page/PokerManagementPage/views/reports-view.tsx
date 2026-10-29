@@ -20,7 +20,7 @@ import { Link } from "@/i18n/navigation";
 import { emptyStore, playersForDay, totalsForDay } from "@/domain/selectors";
 import type { Player } from "@/domain/model";
 import {
-  downloadReadCsv,
+  useReadCsvDownload,
   ReadStatus,
   useReadPage,
 } from "../components/use-read-page";
@@ -56,6 +56,7 @@ export function ReportsView() {
   const [opening, setOpening] = useState(false),
     [closing, setClosing] = useState(false);
   const [closingDayId, setClosingDayId] = useState("");
+  const csvDownload = useReadCsvDownload();
   const val = (key: string, fallback = "") =>
       s.draft("report." + key, fallback),
     set = (key: string, v: string) => s.setDraft("report." + key, v);
@@ -161,18 +162,26 @@ export function ReportsView() {
   }
   function download() {
     if (remote.live) {
-      if (!remote.data || remote.loading || remote.error) return;
-      void downloadReadCsv(
-        { resource: "report", dayId: day?.id, date: selectedDate || undefined },
-        "daily-close-" + (day?.date ?? "report") + ".csv",
-        remote.data.context,
-      ).catch((error: unknown) =>
-        s.setError(
-          error instanceof Error
-            ? error.message
-            : "Cannot download report. Please try again.",
-        ),
-      );
+      if (!remote.data || remote.loading || remote.error || csvDownload.busy)
+        return;
+      s.setError("");
+      void csvDownload
+        .download(
+          {
+            resource: "report",
+            dayId: day?.id,
+            date: selectedDate || undefined,
+          },
+          "daily-close-" + (day?.date ?? "report") + ".csv",
+          remote.data.context,
+        )
+        .catch((error: unknown) =>
+          s.setError(
+            error instanceof Error
+              ? error.message
+              : "Cannot download report. Please try again.",
+          ),
+        );
       return;
     }
     const rows: (string | number)[][] = [
@@ -327,13 +336,19 @@ export function ReportsView() {
                       variant="outline"
                       className="h-11 sm:h-9"
                       onClick={download}
+                      aria-busy={csvDownload.busy}
                       disabled={
-                        remote.live &&
-                        (remote.loading || !!remote.error || !remote.data)
+                        csvDownload.busy ||
+                        (remote.live &&
+                          (remote.loading || !!remote.error || !remote.data))
                       }
                     >
                       <Download />
-                      {t("Export daily CSV")}
+                      {t(
+                        csvDownload.busy
+                          ? "Preparing CSV…"
+                          : "Export daily CSV",
+                      )}
                     </Button>
                   </div>
                 }

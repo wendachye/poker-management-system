@@ -8,6 +8,7 @@ import {
 import { readCsv, readPage } from "@/server/queries";
 import { randomUUID } from "node:crypto";
 import { DomainError } from "@/domain/operations";
+import { csvExportBusyDetails } from "@/server/csv-export-work";
 import {
   decodeExportAccess,
   encodeExportAccess,
@@ -33,6 +34,7 @@ export async function GET(request: Request) {
         await sessionToken(),
         input,
         expected,
+        request.signal,
       );
       return new Response(result.value, {
         headers: {
@@ -47,6 +49,12 @@ export async function GET(request: Request) {
     }
     return json(await readPage(database(), await sessionToken(), input));
   } catch (error) {
+    const busy = csvExportBusyDetails(error);
+    if (busy) {
+      const response = json({ error: busy.message }, busy.status);
+      response.headers.set("Retry-After", String(busy.retryAfterSeconds));
+      return response;
+    }
     return failure(error);
   }
 }

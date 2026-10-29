@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReadPage, ReadQuery } from "@/domain/read-model";
 import type { Snapshot } from "@/domain/model";
 import { prototypeEnabled } from "@/prototype/config";
@@ -25,6 +25,33 @@ export async function downloadReadCsv(
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+}
+
+export function useReadCsvDownload() {
+  const inFlight = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const download = useCallback(
+    async (
+      query: ReadQuery,
+      filename: string,
+      context: Pick<Snapshot, "user" | "branch">,
+    ) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      setBusy(true);
+      try {
+        await downloadReadCsv({ ...query }, filename, {
+          user: { ...context.user },
+          branch: { ...context.branch },
+        });
+      } finally {
+        inFlight.current = false;
+        setBusy(false);
+      }
+    },
+    [],
+  );
+  return { busy, download };
 }
 
 export function useReadPage<T>(query: ReadQuery, enabled = true) {

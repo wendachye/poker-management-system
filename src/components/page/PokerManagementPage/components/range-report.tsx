@@ -20,11 +20,12 @@ import {
 import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
 import type { Day, Totals } from "@/domain/model";
-import { downloadReadCsv, ReadStatus, useReadPage } from "./use-read-page";
+import { useReadCsvDownload, ReadStatus, useReadPage } from "./use-read-page";
 
 export function RangeReport({ today }: { today: string }) {
   const s = usePokerManagementContext(),
     t = useText();
+  const csvDownload = useReadCsvDownload();
   const preset = s.draft("range.preset", "week");
   const defaults = reportPreset(preset, today);
   const from =
@@ -78,18 +79,22 @@ export function RangeReport({ today }: { today: string }) {
       );
   function download() {
     if (remote.live) {
-      if (!remote.data || remote.loading || remote.error) return;
-      void downloadReadCsv(
-        { resource: "range", from, to },
-        `period-report-${from}-${to}.csv`,
-        remote.data.context,
-      ).catch((error: unknown) =>
-        s.setError(
-          error instanceof Error
-            ? error.message
-            : "Cannot download report. Please try again.",
-        ),
-      );
+      if (!remote.data || remote.loading || remote.error || csvDownload.busy)
+        return;
+      s.setError("");
+      void csvDownload
+        .download(
+          { resource: "range", from, to },
+          `period-report-${from}-${to}.csv`,
+          remote.data.context,
+        )
+        .catch((error: unknown) =>
+          s.setError(
+            error instanceof Error
+              ? error.message
+              : "Cannot download report. Please try again.",
+          ),
+        );
       return;
     }
     if (!reports) return;
@@ -179,14 +184,16 @@ export function RangeReport({ today }: { today: string }) {
             variant="outline"
             className="h-11 sm:h-9"
             onClick={download}
+            aria-busy={csvDownload.busy}
             disabled={
+              csvDownload.busy ||
               !reports?.current.days.length ||
               (remote.live &&
                 (remote.loading || !!remote.error || !remote.data))
             }
           >
             <Download />
-            {t("Export period CSV")}
+            {t(csvDownload.busy ? "Preparing CSV…" : "Export period CSV")}
           </Button>
         }
       >
