@@ -18,13 +18,22 @@ export async function downloadReadCsv(
   query: ReadQuery,
   filename: string,
   context: Pick<Snapshot, "user" | "branch">,
+  signal?: AbortSignal,
 ) {
-  const value = await readReportCsv(query, context, managementRequest);
+  const checkCancellation = () => {
+    if (signal?.aborted)
+      throw new DOMException("Report download cancelled.", "AbortError");
+  };
+  checkCancellation();
+  const value = await readReportCsv(query, context, managementRequest, signal);
+  checkCancellation();
   const url = URL.createObjectURL(value);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
   try {
+    checkCancellation();
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    checkCancellation();
     link.click();
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -32,25 +41,51 @@ export async function downloadReadCsv(
 }
 
 export function useReadCsvDownload() {
-  const inFlight = useRef(false);
+  const inFlight = useRef<AbortController | null>(null);
+  const mounted = useRef(false);
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    mounted.current = true;
+    // Effect reconnection can preserve React state after cancelling its export.
+    // A new owner's work must not be cleared by this deferred idle reset.
+    void Promise.resolve().then(() => {
+      if (mounted.current && !inFlight.current) setBusy(false);
+    });
+    return () => {
+      mounted.current = false;
+      const controller = inFlight.current;
+      inFlight.current = null;
+      controller?.abort();
+    };
+  }, []);
   const download = useCallback(
     async (
       query: ReadQuery,
       filename: string,
       context: Pick<Snapshot, "user" | "branch">,
     ) => {
-      if (inFlight.current) return;
-      inFlight.current = true;
+      if (!mounted.current || inFlight.current) return;
+      const controller = new AbortController();
+      inFlight.current = controller;
       setBusy(true);
       try {
-        await downloadReadCsv({ ...query }, filename, {
-          user: { ...context.user },
-          branch: { ...context.branch },
-        });
+        await downloadReadCsv(
+          { ...query },
+          filename,
+          {
+            user: { ...context.user },
+            branch: { ...context.branch },
+          },
+          controller.signal,
+        );
+      } catch (error) {
+        // Leaving a view is not an export error on the newly selected screen.
+        if (!controller.signal.aborted) throw error;
       } finally {
-        inFlight.current = false;
-        setBusy(false);
+        if (inFlight.current === controller) {
+          inFlight.current = null;
+          if (mounted.current) setBusy(false);
+        }
       }
     },
     [],

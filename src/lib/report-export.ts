@@ -19,6 +19,7 @@ export async function readReportCsv(
   query: ReadQuery,
   context: Pick<Snapshot, "user" | "branch">,
   request: (path: string, init: RequestInit) => Promise<Response>,
+  callerSignal?: AbortSignal,
 ): Promise<Blob> {
   if (!matchesOperationalAccess(context.user, context))
     throw new Error("Reload the report before exporting.");
@@ -31,13 +32,18 @@ export async function readReportCsv(
     throw new Error("Reload the report before exporting.");
   const params = readQueryParams(query);
   params.set("format", "csv");
-  const signal = AbortSignal.timeout(45000);
+  const deadline = AbortSignal.timeout(45000);
+  const signal = callerSignal
+    ? AbortSignal.any([callerSignal, deadline])
+    : deadline;
   try {
+    signal.throwIfAborted();
     const response = await request("/api/read?" + params, {
       cache: "no-store",
       signal,
       headers: { [EXPORT_ACCESS_HEADER]: encodeExportAccess(access) },
     });
+    signal.throwIfAborted();
     if (!response.ok) await readManagementResponse(response);
     const receipt = decodeExportAccess(
       response.headers.get(EXPORT_ACCESS_HEADER),
@@ -52,12 +58,16 @@ export async function readReportCsv(
       !/^text\/csv(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")
     )
       throw new Error("Cannot download report. Please try again.");
+    signal.throwIfAborted();
     const value = await response.blob();
+    signal.throwIfAborted();
     if (value.size > 4_000_000)
       throw new Error("Cannot download report. Please try again.");
     return value;
   } catch (error) {
-    if (signal.aborted)
+    if (callerSignal?.aborted)
+      throw new DOMException("Report download cancelled.", "AbortError");
+    if (deadline.aborted)
       throw new ManagementResponseError(
         "Report download timed out. Try exporting again.",
         408,

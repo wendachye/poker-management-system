@@ -183,3 +183,137 @@ test("an aborted report read reports a download timeout without financial retry 
       error.message === "Report download timed out. Try exporting again.",
   );
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => {
+    resolve = yes;
+  });
+  return { promise, resolve };
+}
+function cancelled(error: unknown) {
+  assert.ok(error instanceof DOMException);
+  assert.equal(error.name, "AbortError");
+  assert.equal(error.message, "Report download cancelled.");
+  return true;
+}
+
+test("a cancelled caller sends no report request and exposes no private abort reason", async () => {
+  const caller = new AbortController();
+  caller.abort(new Error("private-cancellation-reason"));
+  let requests = 0;
+  await assert.rejects(
+    readReportCsv(
+      { resource: "report" },
+      context,
+      async () => {
+        requests++;
+        return csv();
+      },
+      caller.signal,
+    ),
+    cancelled,
+  );
+  assert.equal(requests, 0);
+});
+
+test("caller cancellation reaches the request and rejects a late ignored response before reading its body", async () => {
+  const caller = new AbortController();
+  const waiting = deferred<Response>();
+  let received: AbortSignal | null | undefined;
+  let bodyReads = 0;
+  const result = readReportCsv(
+    { resource: "report" },
+    context,
+    async (_, init) => {
+      received = init.signal;
+      return waiting.promise;
+    },
+    caller.signal,
+  );
+  assert.ok(received instanceof AbortSignal);
+  caller.abort(new Error("private-cancellation-reason"));
+  assert.equal(received.aborted, true);
+  const response = csv();
+  response.blob = async () => {
+    bodyReads++;
+    return new Blob(["must not be read"]);
+  };
+  waiting.resolve(response);
+  await assert.rejects(result, cancelled);
+  assert.equal(bodyReads, 0);
+});
+
+test("caller cancellation rejects a held CSV body that completes after the view leaves", async () => {
+  const caller = new AbortController();
+  const body = deferred<Blob>();
+  const started = deferred<void>();
+  const response = csv();
+  response.blob = () => {
+    started.resolve();
+    return body.promise;
+  };
+  const result = readReportCsv(
+    { resource: "report" },
+    context,
+    async () => response,
+    caller.signal,
+  );
+  await started.promise;
+  caller.abort();
+  body.resolve(new Blob(["late report"]));
+  await assert.rejects(result, cancelled);
+});
+
+test("an ignored deadline still refuses a late response or late CSV body with the fixed timeout message", async (t) => {
+  for (const phase of ["headers", "body"]) {
+    const deadline = new AbortController();
+    const timeout = t.mock.method(
+      AbortSignal,
+      "timeout",
+      () => deadline.signal,
+    );
+    const waiting = deferred<Response>();
+    const body = deferred<Blob>();
+    const started = deferred<void>();
+    const response = csv();
+    response.blob = () => {
+      started.resolve();
+      return body.promise;
+    };
+    const result = readReportCsv({ resource: "report" }, context, async () =>
+      phase === "headers" ? waiting.promise : response,
+    );
+    if (phase === "body") await started.promise;
+    deadline.abort();
+    waiting.resolve(response);
+    body.resolve(new Blob(["late report"]));
+    await assert.rejects(result, (error: unknown) => {
+      assert.ok(error instanceof ManagementResponseError);
+      assert.equal(error.status, 408);
+      assert.equal(
+        error.message,
+        "Report download timed out. Try exporting again.",
+      );
+      return true;
+    });
+    timeout.mock.restore();
+  }
+});
+
+test("caller cancellation remains a safe AbortError when the deadline has also expired", async (t) => {
+  const caller = new AbortController();
+  const deadline = new AbortController();
+  t.mock.method(AbortSignal, "timeout", () => deadline.signal);
+  const waiting = deferred<Response>();
+  const result = readReportCsv(
+    { resource: "report" },
+    context,
+    async () => waiting.promise,
+    caller.signal,
+  );
+  caller.abort(new Error("private-cancellation-reason"));
+  deadline.abort();
+  waiting.resolve(csv());
+  await assert.rejects(result, cancelled);
+});
