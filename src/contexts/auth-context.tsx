@@ -12,7 +12,16 @@ import type { Branch, Staff } from "@/domain/model";
 import { useRouter } from "next/navigation";
 import { managementJson } from "@/lib/management-request";
 import { ManagementResponseError } from "@/lib/management-response";
-import { authReceipt, okReceipt } from "@/lib/management-contracts";
+import {
+  authReceipt,
+  loginReceipt,
+  okReceipt,
+} from "@/lib/management-contracts";
+import {
+  checkedLoginIdentity,
+  StaffAccountMismatchError,
+  type LoginIdentity,
+} from "@/lib/login-identity";
 import { prototypeEnabled } from "@/prototype/config";
 import {
   clearSignOutIntent,
@@ -27,6 +36,7 @@ const signOutStorageFailed =
   "Your session ended. Allow browser storage and retry to continue.";
 const signOutProtectionFailed =
   "Could not save sign-out protection. Keep this page open, allow browser storage and retry signing out.";
+const loginBusy = "Wait for sign-in to finish before trying again.";
 type Auth = {
   user: Staff | null;
   branches: Branch[];
@@ -54,6 +64,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOutInFlight = useRef(false);
   const authEpoch = useRef(0);
   const intentChecked = useRef(prototypeEnabled);
+  const pendingLogin = useRef<LoginIdentity | null>(null);
+  const loginInFlight = useRef(false);
   const lockForSignOut = useCallback(() => {
     pendingSignOut.current = true;
     authEpoch.current++;
@@ -70,10 +82,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setError("");
     setLoading(true);
   }, []);
-  const refresh = useCallback(async () => {
+  const readAccess = useCallback(async () => {
     if (!prototypeEnabled && (pendingSignOut.current || !intentChecked.current))
       throw new Error(signOutFailed);
     const epoch = authEpoch.current;
+    const expected = pendingLogin.current ? { ...pendingLogin.current } : null;
     try {
       const data = authReceipt(
         await managementJson<unknown>("/api/auth", {
@@ -85,16 +98,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         (pendingSignOut.current || epoch !== authEpoch.current)
       )
         throw new Error(signOutFailed);
-      setUser(data.user);
+      const current =
+        !prototypeEnabled && expected ? loginReceipt(data).user : data.user;
+      if (!prototypeEnabled && expected)
+        checkedLoginIdentity(expected, current);
+      pendingLogin.current = null;
+      setUser(current);
       setBranches(data.branches);
       setError("");
-      return data.user;
+      return current;
     } catch (error) {
       if (
         !prototypeEnabled &&
         (pendingSignOut.current || epoch !== authEpoch.current)
       )
         throw new Error(signOutFailed);
+      if (error instanceof StaffAccountMismatchError) {
+        setUser(null);
+        setBranches([]);
+        setError("");
+        throw error;
+      }
       if (error instanceof ManagementResponseError && error.status === 401) {
         setUser(null);
         setBranches([]);
@@ -124,6 +148,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setLoading(false);
     }
   }, []);
+  const refresh = useCallback(async () => {
+    if (!prototypeEnabled && loginInFlight.current) throw new Error(loginBusy);
+    return readAccess();
+  }, [readAccess]);
   useEffect(() => {
     let disposed = false;
     void Promise.resolve()
@@ -180,26 +208,63 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [refresh]);
   async function login(username: string, password: string) {
+    if (prototypeEnabled) {
+      await managementJson<{ user: Staff }>("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!(await refresh()))
+        throw new Error("Your session has expired. Sign in again.");
+      return;
+    }
     if (!prototypeEnabled && (pendingSignOut.current || !intentChecked.current))
       throw new Error(signOutFailed);
-    const epoch = authEpoch.current;
-    await managementJson<{ user: Staff }>("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    if (
-      !prototypeEnabled &&
-      (pendingSignOut.current || epoch !== authEpoch.current)
-    )
-      throw new Error(signOutFailed);
-    const current = await refresh();
-    if (
-      !prototypeEnabled &&
-      (pendingSignOut.current || epoch !== authEpoch.current)
-    )
-      throw new Error(signOutFailed);
-    if (!current) throw new Error("Your session has expired. Sign in again.");
+    if (loginInFlight.current) throw new Error(loginBusy);
+    loginInFlight.current = true;
+    const epoch = ++authEpoch.current;
+    const requested: LoginIdentity = {
+      username: username.trim().toLowerCase(),
+    };
+    pendingLogin.current = requested;
+    setUser(null);
+    setBranches([]);
+    setError("");
+    let received = false;
+    try {
+      const receipt = await managementJson<unknown>("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      received = true;
+      if (pendingSignOut.current || epoch !== authEpoch.current)
+        throw new Error(signOutFailed);
+      pendingLogin.current = checkedLoginIdentity(
+        requested,
+        loginReceipt(receipt).user,
+      );
+      const current = await readAccess();
+      if (pendingSignOut.current || epoch !== authEpoch.current)
+        throw new Error(signOutFailed);
+      if (!current) throw new Error("Your session has expired. Sign in again.");
+    } catch (error) {
+      if (pendingSignOut.current || epoch !== authEpoch.current)
+        throw new Error(signOutFailed);
+      if (
+        !received &&
+        error instanceof ManagementResponseError &&
+        !error.uncertain &&
+        error.status >= 400 &&
+        error.status < 500
+      )
+        pendingLogin.current = null;
+      throw error;
+    } finally {
+      loginInFlight.current = false;
+      if (!pendingSignOut.current && epoch === authEpoch.current)
+        setLoading(false);
+    }
   }
   async function logout() {
     if (prototypeEnabled) {
@@ -255,6 +320,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function switchBranch(branchId: string) {
     if (!prototypeEnabled && (pendingSignOut.current || !intentChecked.current))
       throw new Error(signOutFailed);
+    if (!prototypeEnabled && loginInFlight.current) throw new Error(loginBusy);
     const epoch = authEpoch.current;
     okReceipt(
       await managementJson<unknown>("/api/branch", {

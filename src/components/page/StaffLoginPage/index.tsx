@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import {
   InputGroup,
@@ -27,6 +27,10 @@ import {
 import { LanguageSwitcher } from "@/components/layout/language-switcher";
 import { ManagementResponseError } from "@/lib/management-response";
 import { checkStaffSession } from "@/lib/session-recovery";
+import {
+  StaffAccountMismatchError,
+  STAFF_ACCOUNT_MISMATCH_MESSAGE,
+} from "@/lib/login-identity";
 
 export function StaffLoginPage({
   unavailable = false,
@@ -50,10 +54,20 @@ export function StaffLoginPage({
     !accountMismatch &&
     (connectionUnavailable || !!auth.error || (unavailable && !!auth.user));
   const hasSession = !!auth.user && !anotherAccount;
+  useEffect(() => {
+    if (accountMismatch && busy === null) usernameInput.current?.focus();
+  }, [accountMismatch, busy]);
 
   function enterSystem() {
     router.replace("/dashboard");
     router.refresh();
+  }
+  function showAccountMismatch() {
+    setPassword("");
+    setConnectionUnavailable(false);
+    setAccountMismatch(true);
+    setAnotherAccount(true);
+    setError(STAFF_ACCOUNT_MISMATCH_MESSAGE);
   }
   async function checkConnection() {
     if (inFlight.current || auth.loading) return;
@@ -72,13 +86,7 @@ export function StaffLoginPage({
         setAnotherAccount(false);
         requestAnimationFrame(() => usernameInput.current?.focus());
       } else if (result.status === "different-account") {
-        setConnectionUnavailable(false);
-        setAccountMismatch(true);
-        setAnotherAccount(true);
-        setError(
-          "The active session is for a different account. Sign in again to use the requested account.",
-        );
-        requestAnimationFrame(() => usernameInput.current?.focus());
+        showAccountMismatch();
       } else {
         setConnectionUnavailable(true);
         setError(result.message);
@@ -188,6 +196,7 @@ export function StaffLoginPage({
                   inFlight.current = true;
                   setBusy("login");
                   setError("");
+                  setAccountMismatch(false);
                   setExpectedUsername(username);
                   try {
                     await auth.login(username, password);
@@ -198,7 +207,9 @@ export function StaffLoginPage({
                         ? error.message
                         : "Sign-in failed.",
                     );
-                    if (
+                    if (error instanceof StaffAccountMismatchError) {
+                      showAccountMismatch();
+                    } else if (
                       error instanceof ManagementResponseError &&
                       error.uncertain
                     ) {

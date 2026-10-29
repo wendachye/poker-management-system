@@ -229,6 +229,22 @@ Local verification on 29 October 2026 passed 573 isolated tests, 32 native Postg
 
 Eighteen operations cases and two prototype cases passed at 1280px and 390px, with twenty hashed screenshots, no application page/console errors, no development transport warnings in the final run and no horizontal overflow. Browser cases covered delayed, lost and malformed replies, marker-removal failures, quota-only write failures, changed shared-cookie accounts, late verified auth reads, exact checkpoint preservation and English/Chinese feedback. Actual browser Back/reload was exercised; persisted `pagehide`/`pageshow` handlers were also triggered synthetically, which does not establish native Back/Forward-cache eligibility on every browser. Both builds, built HTTP smoke checks, TypeScript, ESLint and formatting passed. Evidence is retained under the ignored `.local/signout-privacy-2026-10-29` directory. Only disposable fictional fixtures were used; persistent local venue records were not changed.
 
+## Confirming the requested staff account
+
+A production sign-in first validates the credential response as a complete, bounded staff identity. Its normalized username must match the submitted username; its staff ID and username are then pinned until access is confirmed. The follow-up authentication read checks both fields before committing or returning an identity. Another tab can replace the shared cookie between those two requests; a mismatched account is now refused on the sign-in page instead of entering the dashboard. The same staff account can still use its latest authorized venue and role.
+
+Starting an explicit sign-in clears the previous displayed identity and invalidates older authentication reads. A synchronous provider guard rejects duplicate credential submissions and blocks public refresh/location-switch callbacks during that exchange. The login form keeps its existing busy state; ordinary access refreshes do not acquire a new page-wide loading state or discard operational drafts. Existing pending-sign-out and cached-document protections remain in force.
+
+If a credential response is uncertain or malformed, the requested username remains an in-memory expectation. If the credential receipt was valid but its follow-up read failed, the exact pinned staff ID also remains attached to subsequent read-only recovery checks. Mismatches retain that expectation; they cannot silently resume another account or replay credentials. A new explicit sign-in can replace the expectation. Known rejected credential requests release the guard so staff can correct their input. Neither passwords nor these account expectations are written to browser storage, URLs or financial checkpoints.
+
+Both immediate and recovery mismatches clear the password, retain the requested username, focus the form and show the same localized message asking staff to sign in to the intended account. They do not offer session continuation under the mismatched identity. A matching verified read completes the attempt and releases its temporary expectation. The separate prototype retains its persona behavior.
+
+The temporary expectation belongs to the current sign-in flow; it does not create a separate browser-tab session. A new document establishes access from the current shared cookie, and server authorization plus reviewed actor/venue checks remain authoritative for operational requests.
+
+Local verification on 29 October 2026 passed 589 isolated tests, 32 native PostgreSQL checks and 21 HTTP checks. Actual provider callbacks at published baseline `6ee2d8d` accepted and committed another account after a successful credential response; the new callbacks rejected it before state commit. A valid credential receipt followed by an unavailable read and a reused username with a different staff ID was also rejected during recovery. Real HTTP receipts confirmed username normalization, accepted an authorized venue change for the same staff member, refused a different shared-cookie account and left business records unchanged.
+
+Fourteen operations cases and two prototype cases passed at 1280px and 390px, with sixteen hashed screenshots and no application page/console errors, development transport warnings or horizontal overflow in the final run. Browser checks covered real shared-cookie races, repeated attempts, retained identity across recovery, malformed/wrong credential receipts, one-POST read-only recovery, duplicate-click protection, same-account role/venue updates and bootstrap access checks. The mismatch form also now applies focus after rendering, avoiding a timing-dependent missed focus when recovery reveals it. Passwords cleared, financial checkpoints stayed byte-identical, and no credentials were written to storage. Both builds, built HTTP smoke checks, TypeScript, ESLint and formatting passed. Evidence is retained under the ignored `.local/login-binding-2026-10-29` directory. Only disposable fictional fixtures were used; cloud staging remains deferred.
+
 ## Verify changes
 
 Run the existing suite, typecheck, lint and both operations/demo builds. The real PostgreSQL and full HTTP workflow suites are intentionally separate:
@@ -245,7 +261,6 @@ Before a hosted pilot, run the integration suite against the intended PostgreSQL
 
 ## Next implementation work
 
-1. Bind successful sign-in confirmation to the requested staff account when a shared-cookie change occurs between the credential POST and its follow-up access read. The manual uncertain-login recovery already checks the requested username; the ordinary successful-login path still needs that separate check.
 1. Configure verified host/WAF source protection, auth monitoring and controlled operator access; application login limits and operator safeguards are implemented.
 1. Repeat the implemented v1–v5 upgrade and financial recovery rehearsal against the selected hosted PostgreSQL release, actual application privileges and provider connection path.
 1. Deploy a separate authenticated staging application against the provisioned database, agree recovery targets, configure backup/PITR and monitoring, then demonstrate a timed hosted restore.

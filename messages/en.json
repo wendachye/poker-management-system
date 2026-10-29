@@ -1145,6 +1145,7 @@
     "staff_access_or_venue_changed_refresh_the_report_before_exporting": "Staff access or venue changed. Refresh the report before exporting.",
     "report_download_timed_out_try_exporting_again": "Report download timed out. Try exporting again.",
     "request_upload_timed_out_please_try_again": "Request upload timed out. Please try again.",
-    "request_upload_was_cancelled_please_try_again": "Request upload was cancelled. Please try again."
+    "request_upload_was_cancelled_please_try_again": "Request upload was cancelled. Please try again.",
+    "wait_for_sign_in_to_finish_before_trying_again": "Wait for sign-in to finish before trying again."
   }
 }

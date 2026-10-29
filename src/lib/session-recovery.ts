@@ -1,5 +1,6 @@
 import type { Staff } from "../domain/model";
 import { ManagementResponseError } from "./management-response";
+import { StaffAccountMismatchError } from "./login-identity";
 
 export type StaffSessionCheck =
   | { status: "authenticated"; user: Staff }
@@ -47,6 +48,8 @@ export async function checkStaffSession(
       : { status: "unavailable", message: fallback };
   } catch (error) {
     try {
+      if (error instanceof StaffAccountMismatchError)
+        return { status: "different-account" };
       if (error instanceof ManagementResponseError) {
         const status = error.status;
         const uncertain = error.uncertain;

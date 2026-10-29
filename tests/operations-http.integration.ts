@@ -38,6 +38,11 @@ import {
   EXPORT_ACCESS_HEADER,
   type ExportAccess,
 } from "../src/lib/export-access";
+import { authReceipt, loginReceipt } from "../src/lib/management-contracts";
+import {
+  checkedLoginIdentity,
+  StaffAccountMismatchError,
+} from "../src/lib/login-identity";
 
 // This suite deliberately does not load .env or use DATABASE_URL. The caller
 // must supply a disposable PostgreSQL cluster; existing venue roles and schemas
@@ -709,6 +714,56 @@ test(
           (await cashier.snapshot()).store.settings?.smallBlind,
           500,
         );
+      },
+    );
+
+    await t.test(
+      "login receipts bind the requested staff account while accepting its latest venue",
+      async () => {
+        const before = await admin.snapshot();
+        const browser = new StaffBrowser();
+        try {
+          const submitted = await browser.response("/api/auth", "POST", {
+            username: "  HTTP.ADMIN  ",
+            password,
+          });
+          assert.equal(submitted.response.status, 200);
+          const receipt = loginReceipt(submitted.data);
+          const expected = checkedLoginIdentity(
+            { username: "  HTTP.ADMIN  " },
+            receipt.user,
+          );
+          assert.equal(expected.actorId, before.user.id);
+          const first = authReceipt(await browser.json("/api/auth"));
+          assert.deepEqual(
+            checkedLoginIdentity(expected, first.user),
+            expected,
+          );
+          const otherVenue =
+            first.user.branchId === "http-venue" ? "http-other" : "http-venue";
+          await browser.json("/api/branch", "POST", { branchId: otherVenue });
+          const moved = authReceipt(await browser.json("/api/auth"));
+          assert.notEqual(moved.user.branchId, first.user.branchId);
+          assert.deepEqual(
+            checkedLoginIdentity(expected, moved.user),
+            expected,
+          );
+          // Another tab's login replaces the browser's shared cookie between
+          // the successful credential receipt and a later access confirmation.
+          await browser.signIn("http.manager");
+          const replaced = authReceipt(await browser.json("/api/auth"));
+          assert.equal(replaced.user.username, "http.manager");
+          assert.throws(
+            () => checkedLoginIdentity(expected, replaced.user),
+            StaffAccountMismatchError,
+          );
+        } finally {
+          await browser.json("/api/auth", "DELETE", {});
+          await browser.json("/api/auth", "GET", undefined, 401);
+        }
+        const after = await admin.snapshot();
+        assert.equal(after.revision, before.revision);
+        assert.deepEqual(after.store, before.store);
       },
     );
 

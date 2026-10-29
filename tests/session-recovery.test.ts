@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Role, Staff } from "../src/domain/model";
 import { ManagementResponseError } from "../src/lib/management-response";
+import { StaffAccountMismatchError } from "../src/lib/login-identity";
 import { checkStaffSession } from "../src/lib/session-recovery";
 
 const staff: Staff = Object.freeze({
@@ -214,4 +215,49 @@ test("an uncertain account switch cannot resume a different staff account", asyn
     status: "signed-out",
   });
   assert.equal(reads, 2);
+});
+
+test("a provider-bound account mismatch returns only a different-account result", async () => {
+  let reads = 0;
+  const mismatch = new StaffAccountMismatchError();
+  Object.defineProperty(mismatch, "message", {
+    get() {
+      throw new Error("private-other-staff-identity");
+    },
+  });
+  const refresh = async () => {
+    reads++;
+    throw mismatch;
+  };
+  for (const expected of [undefined, "requested.cashier"]) {
+    const result = await checkStaffSession(refresh, expected);
+    assert.deepEqual(result, { status: "different-account" });
+    assert.doesNotMatch(JSON.stringify(result), /private|requested/);
+  }
+  assert.equal(reads, 2);
+});
+
+test("a repeated mismatch can recover through a later verified read without credential or draft mutation", async () => {
+  const protectedState = Object.freeze({
+    draft: Object.freeze({ amount: "500", player: "Fictional player" }),
+    operationId: "b4f62930-965d-43f3-8fea-d5cd31390317",
+    cookie: "fictional-existing-cookie",
+  });
+  const before = structuredClone(protectedState);
+  const methods: string[] = [];
+  const refresh = async () => {
+    methods.push("GET");
+    if (methods.length <= 2) throw new StaffAccountMismatchError();
+    return staff;
+  };
+  for (let attempt = 0; attempt < 2; attempt++)
+    assert.deepEqual(await checkStaffSession(refresh, staff.username), {
+      status: "different-account",
+    });
+  assert.deepEqual(await checkStaffSession(refresh, staff.username), {
+    status: "authenticated",
+    user: staff,
+  });
+  assert.deepEqual(methods, ["GET", "GET", "GET"]);
+  assert.deepEqual(protectedState, before);
 });

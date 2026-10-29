@@ -1145,6 +1145,7 @@
     "staff_access_or_venue_changed_refresh_the_report_before_exporting": "员工权限或场地已更改。请刷新报表后再导出。",
     "report_download_timed_out_try_exporting_again": "报表下载超时，请重新导出。",
     "request_upload_timed_out_please_try_again": "请求上传超时，请重试。",
-    "request_upload_was_cancelled_please_try_again": "请求上传已取消，请重试。"
+    "request_upload_was_cancelled_please_try_again": "请求上传已取消，请重试。",
+    "wait_for_sign_in_to_finish_before_trying_again": "请等待登录完成后再重试。"
   }
 }

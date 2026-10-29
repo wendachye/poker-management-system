@@ -90,6 +90,26 @@ export function authReceipt(value: unknown): {
   return value as { user: Staff; branches: Branch[] };
 }
 
+/** A credential response must establish a complete, bounded staff identity. */
+export function loginReceipt(value: unknown): { user: Staff } {
+  if (!record(value) || !staff(value.user)) invalidReceipt();
+  const user = value.user as Staff;
+  if (
+    [user.id, user.username, user.branchId].some(
+      (part) => !part.trim() || part.length > 100,
+    )
+  )
+    invalidReceipt();
+  return {
+    user: {
+      id: user.id,
+      username: user.username,
+      branchId: user.branchId,
+      role: user.role,
+    },
+  };
+}
+
 export function staffReceipt(value: unknown): {
   branchId: string;
   accounts: StaffAccount[];

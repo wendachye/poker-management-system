@@ -3,7 +3,16 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
 import type { Branch, Staff } from "../src/domain/model";
-import { authReceipt, okReceipt } from "../src/lib/management-contracts";
+import {
+  authReceipt,
+  loginReceipt,
+  okReceipt,
+} from "../src/lib/management-contracts";
+import {
+  checkedLoginIdentity,
+  StaffAccountMismatchError,
+  STAFF_ACCOUNT_MISMATCH_MESSAGE,
+} from "../src/lib/login-identity";
 import { ManagementResponseError } from "../src/lib/management-response";
 import {
   clearSignOutIntent,
@@ -44,6 +53,7 @@ const constants = tree.statements.filter(
           "signOutFailed",
           "signOutStorageFailed",
           "signOutProtectionFailed",
+          "loginBusy",
         ].includes(declaration.name.text),
     ),
 );
@@ -182,7 +192,10 @@ function harness(
           : { user: staff, branches: [branch] };
     },
     authReceipt,
+    loginReceipt,
     okReceipt,
+    checkedLoginIdentity,
+    StaffAccountMismatchError,
     ManagementResponseError,
     clearSignOutIntent,
     readSignOutIntent,
@@ -336,7 +349,7 @@ test("logout hides identity synchronously before DELETE and double clicks send o
     1,
   );
   await assert.rejects(value.refresh(), { message: failed });
-  await assert.rejects(value.login("fictional", "fictional"), {
+  await assert.rejects(value.login(staff.username, "fictional"), {
     message: failed,
   });
   await assert.rejects(value.switchBranch("fictional-next"), {
@@ -546,7 +559,7 @@ test("login cannot finish when signout starts between refreshed access and its c
   });
   await value.mount();
   armed = true;
-  await assert.rejects(value.login("fictional", "fictional"), {
+  await assert.rejects(value.login(staff.username, "fictional"), {
     message: failed,
   });
   assert.ok(logout);
@@ -714,4 +727,294 @@ test("prototype logout keeps the persona behavior and never touches production i
   assert.equal(value.state.signingOut, false);
   assert.equal(value.values.get(SIGN_OUT_INTENT_KEY), "1");
   assert.equal(value.values.get(financialKey), "untouched-checkpoint");
+});
+
+test("a successful login pins requested account identity and permits its latest role and venue", async () => {
+  const latest = {
+    ...staff,
+    role: "CASHIER",
+    branchId: "fictional-latest-venue",
+  } as Staff;
+  let reads = 0;
+  const value = harness({
+    request: async (_path, init) => {
+      if (init?.method === "POST") return { user: { ...staff } };
+      const user = ++reads === 1 ? staff : latest;
+      return {
+        user,
+        branches: [{ ...branch, id: user.branchId, role: user.role }],
+      };
+    },
+  });
+  await value.mount();
+  await value.login(` ${staff.username.toUpperCase()} `, "fictional-password");
+  assert.deepEqual(value.state.user, latest);
+  assert.deepEqual(value.state.branches, [
+    { ...branch, id: latest.branchId, role: latest.role },
+  ]);
+  assert.equal(value.state.error, "");
+  assert.equal(value.requests.filter((row) => row.method === "POST").length, 1);
+  assert.equal(value.values.get(financialKey), "untouched-checkpoint");
+  assert.equal(value.values.has(SIGN_OUT_INTENT_KEY), false);
+});
+
+test("a credential receipt for another username is rejected before any followup GET or state commit", async () => {
+  const other = {
+    ...staff,
+    id: "fictional-login-b",
+    username: "fictional.other",
+  };
+  const value = harness({
+    request: async (_path, init) =>
+      init?.method === "POST"
+        ? { user: other }
+        : { user: staff, branches: [branch] },
+  });
+  await value.mount();
+  const before = value.stateChanges.length;
+  await assert.rejects(
+    value.login(staff.username, "fictional-password"),
+    (error) => {
+      assert.ok(error instanceof StaffAccountMismatchError);
+      assert.equal(error.message, STAFF_ACCOUNT_MISMATCH_MESSAGE);
+      return true;
+    },
+  );
+  assert.deepEqual(
+    value.requests.map((row) => row.method),
+    ["GET", "POST"],
+  );
+  assert.equal(value.state.user, null);
+  assert.deepEqual(value.state.branches, []);
+  assert.equal(value.state.error, "");
+  assert.equal(
+    value.stateChanges
+      .slice(before)
+      .some((event) => event.name === "user" && event.value !== null),
+    false,
+  );
+});
+
+test("successful POST followed by a different account GET never commits that account, including recovery", async () => {
+  for (const other of [
+    { ...staff, id: "fictional-login-b", username: "fictional.other" },
+    { ...staff, id: "fictional-reused-username-id" },
+  ]) {
+    let candidate: Staff = staff;
+    const value = harness({
+      request: async (_path, init) =>
+        init?.method === "POST"
+          ? { user: { ...staff } }
+          : { user: candidate, branches: [branch] },
+    });
+    await value.mount();
+    const before = value.stateChanges.length;
+    candidate = other;
+    await assert.rejects(
+      value.login(staff.username, "fictional-password"),
+      StaffAccountMismatchError,
+    );
+    assert.equal(value.state.user, null);
+    assert.equal(value.state.error, "");
+    await assert.rejects(value.refresh(), StaffAccountMismatchError);
+    assert.equal(
+      value.stateChanges
+        .slice(before)
+        .some((event) => event.name === "user" && event.value !== null),
+      false,
+    );
+    candidate = staff;
+    assert.deepEqual(await value.refresh(), staff);
+    assert.deepEqual(value.state.user, staff);
+    assert.equal(
+      value.requests.filter((row) => row.method === "POST").length,
+      1,
+    );
+  }
+});
+
+test("a validated POST keeps its pinned id across unavailable and malformed followup reads", async () => {
+  for (const unavailable of [
+    new ManagementResponseError("Fictional unavailable", 503, null),
+    {},
+    { user: { ...staff, username: "  " }, branches: [branch] },
+    { user: { ...staff, id: "x".repeat(101) }, branches: [branch] },
+  ]) {
+    let reads = 0;
+    let candidate: Staff = { ...staff, id: "fictional-reused-username-id" };
+    const value = harness({
+      request: async (_path, init) => {
+        if (init?.method === "POST") return { user: staff };
+        if (++reads === 1) return { user: staff, branches: [branch] };
+        if (reads === 2) {
+          if (unavailable instanceof Error) throw unavailable;
+          return unavailable;
+        }
+        return { user: candidate, branches: [branch] };
+      },
+    });
+    await value.mount();
+    await assert.rejects(
+      value.login(staff.username, "fictional-password"),
+      ManagementResponseError,
+    );
+    assert.equal(value.state.user, null);
+    await assert.rejects(value.refresh(), StaffAccountMismatchError);
+    candidate = staff;
+    assert.deepEqual(await value.refresh(), staff);
+    assert.equal(
+      value.requests.filter((row) => row.method === "POST").length,
+      1,
+    );
+  }
+});
+
+test("uncertain and malformed credential outcomes retain the requested username for read-only recovery", async () => {
+  for (const outcome of [
+    new ManagementResponseError("Fictional response loss", 0, null, true),
+    undefined,
+    {},
+    { user: {} },
+  ]) {
+    let candidate: Staff = staff;
+    const value = harness({
+      request: async (_path, init) => {
+        if (init?.method === "POST") {
+          if (outcome instanceof Error) throw outcome;
+          return outcome;
+        }
+        return { user: candidate, branches: [branch] };
+      },
+    });
+    await value.mount();
+    await assert.rejects(
+      value.login(staff.username, "fictional-password"),
+      ManagementResponseError,
+    );
+    candidate = {
+      ...staff,
+      id: "fictional-login-b",
+      username: "fictional.other",
+    };
+    await assert.rejects(value.refresh(), StaffAccountMismatchError);
+    assert.equal(value.state.user, null);
+    candidate = staff;
+    assert.deepEqual(await value.refresh(), staff);
+    assert.equal(
+      value.requests.filter((row) => row.method === "POST").length,
+      1,
+    );
+    assert.deepEqual(
+      [...value.values],
+      [[financialKey, "untouched-checkpoint"]],
+    );
+  }
+});
+
+test("duplicate provider login and public reads are refused while credentials are in flight", async () => {
+  const post = deferred<unknown>();
+  const value = harness({
+    request: async (_path, init) =>
+      init?.method === "POST"
+        ? post.promise
+        : { user: staff, branches: [branch] },
+  });
+  await value.mount();
+  const first = value.login(staff.username, "fictional-password");
+  assert.equal(value.state.user, null);
+  assert.deepEqual(value.state.branches, []);
+  const busy = "Wait for sign-in to finish before trying again.";
+  await assert.rejects(value.login("fictional.other", "fictional-password"), {
+    message: busy,
+  });
+  await assert.rejects(value.refresh(), { message: busy });
+  await assert.rejects(value.switchBranch("fictional-next"), { message: busy });
+  assert.deepEqual(
+    value.requests.map((row) => row.method),
+    ["GET", "POST"],
+  );
+  post.resolve({ user: staff });
+  await first;
+  assert.deepEqual(value.state.user, staff);
+});
+
+test("a login epoch invalidates the older bootstrap GET before it can overwrite the verified account", async () => {
+  const bootstrap = deferred<unknown>();
+  let reads = 0;
+  const value = harness({
+    request: async (_path, init) =>
+      init?.method === "POST"
+        ? { user: staff }
+        : ++reads === 1
+          ? bootstrap.promise
+          : { user: staff, branches: [branch] },
+  });
+  await value.mount();
+  await value.login(staff.username, "fictional-password");
+  const changes = value.stateChanges.length;
+  bootstrap.resolve({
+    user: {
+      ...staff,
+      id: "fictional-bootstrap-old",
+      username: "fictional.old",
+    },
+    branches: [branch],
+  });
+  await flush();
+  assert.equal(value.stateChanges.length, changes);
+  assert.deepEqual(value.state.user, staff);
+  assert.equal(value.state.loading, false);
+});
+
+test("known rejected credentials release the login guard and a new explicit login replaces the expectation", async () => {
+  let candidate: Staff = staff;
+  let rejectCredentials = true;
+  const value = harness({
+    request: async (_path, init) => {
+      if (init?.method === "POST") {
+        if (rejectCredentials)
+          throw new ManagementResponseError(
+            "Fictional rejected credentials",
+            401,
+            null,
+          );
+        return { user: candidate };
+      }
+      return { user: candidate, branches: [branch] };
+    },
+  });
+  await value.mount();
+  await assert.rejects(
+    value.login("fictional.rejected", "fictional-password"),
+    ManagementResponseError,
+  );
+  candidate = {
+    ...staff,
+    id: "fictional-login-b",
+    username: "fictional.other",
+  };
+  assert.deepEqual(await value.refresh(), candidate);
+  rejectCredentials = false;
+  await value.login(candidate.username, "fictional-password");
+  assert.deepEqual(value.state.user, candidate);
+});
+
+test("prototype credential behavior remains independent of production account binding", async () => {
+  const other = {
+    ...staff,
+    id: "fictional-demo-persona",
+    username: "fictional.demo",
+  };
+  const value = harness({
+    prototype: true,
+    request: async (_path, init) =>
+      init?.method === "POST" ? {} : { user: other, branches: [branch] },
+  });
+  await value.login("fictional.requested", "fictional-password");
+  assert.deepEqual(value.state.user, other);
+  assert.deepEqual(
+    value.requests.map((row) => row.method),
+    ["POST", "GET"],
+  );
+  assert.equal(value.state.signingOut, false);
 });
