@@ -1,6 +1,7 @@
 import { StaffLoginPage } from "@/components/page/StaffLoginPage";
 import { prototypeEnabled } from "@/prototype/config";
 import { PrototypeEntry } from "@/prototype/prototype-entry";
+import { StaffAccessBoundary } from "@/components/auth/staff-access-boundary";
 
 export default async function LoginPage({
   searchParams,
@@ -10,9 +11,11 @@ export default async function LoginPage({
   if (prototypeEnabled) return <PrototypeEntry />;
   const unavailable = (await searchParams).unavailable === "1";
   return (
-    <StaffLoginPage
-      key={unavailable ? "unavailable" : "login"}
-      unavailable={unavailable}
-    />
+    <StaffAccessBoundary>
+      <StaffLoginPage
+        key={unavailable ? "unavailable" : "login"}
+        unavailable={unavailable}
+      />
+    </StaffAccessBoundary>
   );
 }

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import path from "node:path";
@@ -461,6 +461,92 @@ class StaffBrowser {
     );
   }
 }
+
+test(
+  "a temporary server-layout outage preserves the session for a read-only recovery",
+  { timeout: 60_000 },
+  async () => {
+    const browser = new StaffBrowser();
+    const before = await browser.signIn("http.admin");
+    const diagnostic: {
+      status: number | null;
+      hasMeta: boolean;
+      hasFlightRedirect: boolean;
+      hash: string | null;
+      bytes: number;
+    } = {
+      status: null,
+      hasMeta: false,
+      hasFlightRedirect: false,
+      hash: null,
+      bytes: 0,
+    };
+    try {
+      const holder = await fixturePool.connect();
+      let locked = false;
+      try {
+        await holder.query("BEGIN");
+        locked = true;
+        await holder.query("LOCK TABLE poker_users IN ACCESS EXCLUSIVE MODE");
+        const unavailable = await browser.document("/en/tables");
+        const html = await unavailable.text();
+        diagnostic.status = unavailable.status;
+        diagnostic.hasMeta =
+          html
+            .match(/<meta\b[^>]*>/gi)
+            ?.some(
+              (tag) =>
+                /\bid="__next-page-redirect"/.test(tag) &&
+                /\bhttp-equiv="refresh"/i.test(tag),
+            ) ?? false;
+        diagnostic.hasFlightRedirect = html.includes("NEXT_REDIRECT");
+        diagnostic.hash = createHash("sha256").update(html).digest("hex");
+        diagnostic.bytes = Buffer.byteLength(html);
+        assert.equal(unavailable.status, 307);
+        const destination = unavailable.headers.get("location");
+        assert.ok(destination);
+        const target = new URL(destination, origin);
+        assert.equal(target.origin, origin);
+        assert.equal(target.pathname, "/en/login");
+        assert.equal(target.searchParams.get("unavailable"), "1");
+        assert.doesNotMatch(
+          html,
+          /HTTP Sample Venue|HTTP Other Venue|Pagination player/,
+        );
+        assert.equal(
+          unavailable.headers
+            .getSetCookie()
+            .some((cookie) => cookie.startsWith("poker_session=")),
+          false,
+        );
+      } finally {
+        if (locked) await holder.query("ROLLBACK");
+        holder.release();
+      }
+      const after = await browser.json<{ user: Snapshot["user"] }>("/api/auth");
+      assert.deepEqual(after.user, before.user);
+      const loginPage = await browser.document("/en/login?unavailable=1");
+      assert.equal(loginPage.status, 200);
+      assert.equal(
+        loginPage.headers
+          .getSetCookie()
+          .some((cookie) => cookie.startsWith("poker_session=")),
+        false,
+      );
+      await loginPage.arrayBuffer();
+    } catch (error) {
+      // Keep diagnostics useful without retaining HTML, private headers or data.
+      await writeFile(
+        path.join(workDirectory, "layout-outage-diagnostic.json"),
+        JSON.stringify(diagnostic, null, 2) + "\n",
+      );
+      throw error;
+    } finally {
+      await browser.json("/api/auth", "DELETE", {});
+      await browser.json("/api/auth", "GET", undefined, 401);
+    }
+  },
+);
 
 test(
   "staff use real HTTP routes and isolated PostgreSQL for a complete operational day",
@@ -1084,6 +1170,64 @@ test(
         await cashier.json("/api/auth", "DELETE", {});
         await cashier.json("/api/auth", "GET", undefined, 401);
         await cashier.json("/api/state", "GET", undefined, 401);
+      },
+    );
+
+    await t.test(
+      "a failed database sign-out preserves an unconfirmed session until explicit retry revokes it",
+      async () => {
+        const staff = new StaffBrowser();
+        await staff.signIn("http.manager");
+        const before = await staff.snapshot();
+        const holder = await fixturePool.connect();
+        let holding = false;
+        try {
+          await holder.query("BEGIN");
+          holding = true;
+          const sessions = await holder.query(
+            "SELECT token_hash FROM poker_sessions WHERE user_id=$1 FOR UPDATE",
+            [before.user.id],
+          );
+          assert.ok(sessions.rowCount! > 0);
+          const response = await staff.response("/api/auth", "DELETE", {});
+          assert.equal(response.response.status, 503);
+          assert.equal(
+            response.response.headers.get("cache-control"),
+            "no-store",
+          );
+          assert.equal(response.response.headers.getSetCookie().length, 0);
+          assert.deepEqual(response.data, {
+            error:
+              "The service is unavailable. Check the database configuration or contact your administrator.",
+          });
+          // A failed response is not proof of revocation. The browser's privacy
+          // barrier must remain even though this server-side read still succeeds.
+          await staff.json("/api/auth");
+          const health = await fetch(origin + "/api/health");
+          assert.equal(health.status, 200);
+          await health.arrayBuffer();
+        } finally {
+          if (holding) await holder.query("ROLLBACK");
+          holder.release();
+        }
+        const unchanged = await staff.snapshot();
+        assert.equal(unchanged.revision, before.revision);
+        assert.deepEqual(unchanged.store, before.store);
+        const ended = await staff.response("/api/auth", "DELETE", {});
+        assert.equal(ended.response.status, 200);
+        assert.deepEqual(ended.data, { ok: true });
+        assert.ok(
+          ended.response.headers
+            .getSetCookie()
+            .some((cookie) => cookie.startsWith("poker_session=")),
+        );
+        await staff.json("/api/auth", "GET", undefined, 401);
+        await staff.json("/api/state", "GET", undefined, 401);
+        await staff.json("/api/auth", "DELETE", {});
+        await staff.signIn("http.manager");
+        const resumed = await staff.snapshot();
+        assert.equal(resumed.revision, before.revision);
+        assert.deepEqual(resumed.store, before.store);
       },
     );
 
@@ -1965,48 +2109,6 @@ test(
           ).length,
           1,
         );
-      },
-    );
-
-    await t.test(
-      "a temporary server-layout outage preserves the session for a read-only recovery",
-      async () => {
-        const before = await admin.json<{ user: Snapshot["user"] }>(
-          "/api/auth",
-        );
-        const holder = await fixturePool.connect();
-        let locked = false;
-        try {
-          await holder.query("BEGIN");
-          locked = true;
-          await holder.query("LOCK TABLE poker_users IN ACCESS EXCLUSIVE MODE");
-          const unavailable = await admin.document("/en/tables");
-          assert.equal(unavailable.status, 307);
-          const target = new URL(unavailable.headers.get("location")!, origin);
-          assert.equal(target.pathname, "/en/login");
-          assert.equal(target.searchParams.get("unavailable"), "1");
-          assert.equal(
-            unavailable.headers
-              .getSetCookie()
-              .some((cookie) => cookie.startsWith("poker_session=")),
-            false,
-          );
-          await unavailable.arrayBuffer();
-        } finally {
-          if (locked) await holder.query("ROLLBACK");
-          holder.release();
-        }
-        const after = await admin.json<{ user: Snapshot["user"] }>("/api/auth");
-        assert.deepEqual(after.user, before.user);
-        const loginPage = await admin.document("/en/login?unavailable=1");
-        assert.equal(loginPage.status, 200);
-        assert.equal(
-          loginPage.headers
-            .getSetCookie()
-            .some((cookie) => cookie.startsWith("poker_session=")),
-          false,
-        );
-        await loginPage.arrayBuffer();
       },
     );
 
