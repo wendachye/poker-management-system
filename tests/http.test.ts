@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { DomainError } from "../src/domain/operations";
 import { body, verifyOrigin } from "../src/server/http";
 
@@ -53,6 +53,68 @@ function domainError(status: number, message: string) {
     assert.equal(error.status, status);
     assert.equal(error.message, message);
     return true;
+  };
+}
+
+const uploadTimedOut = "Request upload timed out. Please try again.";
+const uploadCancelled = "Request upload was cancelled. Please try again.";
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+function uploadClock(t: TestContext) {
+  let current = 0;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(performance, "now", () => current);
+  const scheduled = t.mock.method(globalThis, "setTimeout");
+  const cleared = t.mock.method(globalThis, "clearTimeout");
+  t.after(() => {
+    t.mock.restoreAll();
+    t.mock.timers.reset();
+  });
+  return {
+    advance(milliseconds: number) {
+      current += milliseconds;
+      t.mock.timers.tick(milliseconds);
+    },
+    setMonotonicTime(milliseconds: number) {
+      current = milliseconds;
+    },
+    scheduled,
+    cleared,
+  };
+}
+
+function openBody(
+  initial = "{}",
+  signal?: AbortSignal,
+  cancel?: () => void | Promise<void>,
+  headers: Record<string, string> = {},
+) {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let cancellations = 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(value) {
+        controller = value;
+        if (initial) value.enqueue(encoder.encode(initial));
+      },
+      cancel() {
+        cancellations++;
+        return cancel?.();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const init: RequestInit & { duplex: "half" } = {
+    method: "POST",
+    headers: { origin, "content-type": "application/json", ...headers },
+    body: stream,
+    signal,
+    duplex: "half",
+  };
+  return {
+    request: new Request(`${origin}/api/state`, init),
+    controller,
+    cancellations: () => cancellations,
   };
 }
 
@@ -219,4 +281,235 @@ test("origin verification continues to reject cross-origin requests", () => {
     () => verifyOrigin(request("{}", { origin: "https://untrusted.test" })),
     domainError(403, "Request origin is not allowed."),
   );
+});
+
+test("a stalled small body expires at one total ten-second upload deadline", async (t) => {
+  const clock = uploadClock(t);
+  const source = openBody();
+  let settled = false;
+  const result = assert
+    .rejects(body(source.request), domainError(408, uploadTimedOut))
+    .then(() => {
+      settled = true;
+    });
+  await flush();
+  clock.advance(9999);
+  await flush();
+  assert.equal(settled, false);
+  assert.equal(source.request.body?.locked, true);
+  clock.advance(1);
+  await result;
+  assert.equal(source.cancellations(), 1);
+  assert.equal(source.request.body?.locked, false);
+  assert.equal(clock.scheduled.mock.callCount(), 1);
+  assert.equal(clock.cleared.mock.callCount(), 1);
+});
+
+test("drip-fed chunks cannot renew the total upload budget", async (t) => {
+  const clock = uploadClock(t);
+  const source = openBody('{"value":"');
+  const result = assert.rejects(
+    body(source.request),
+    domainError(408, uploadTimedOut),
+  );
+  await flush();
+  for (let index = 0; index < 3; index++) {
+    clock.advance(3000);
+    source.controller.enqueue(encoder.encode("x"));
+    await flush();
+  }
+  assert.equal(source.cancellations(), 0);
+  clock.advance(1000);
+  await result;
+  assert.equal(source.cancellations(), 1);
+  assert.equal(source.request.body?.locked, false);
+  assert.equal(clock.scheduled.mock.callCount(), 1);
+});
+
+test("a pre-aborted request is rejected without reading or retaining a timer", async (t) => {
+  const clock = uploadClock(t);
+  const abort = new AbortController();
+  abort.abort(new Error("private-cancellation-reason"));
+  const source = openBody("{}", abort.signal);
+  const listener = t.mock.method(source.request.signal, "addEventListener");
+  await assert.rejects(body(source.request), domainError(408, uploadCancelled));
+  assert.equal(source.cancellations(), 1);
+  assert.equal(source.request.body?.locked, false);
+  assert.equal(clock.scheduled.mock.callCount(), 0);
+  assert.equal(listener.mock.callCount(), 0);
+});
+
+test("an in-flight abort rejects safely even when cancellation resolves the read as EOF", async (t) => {
+  const clock = uploadClock(t);
+  const abort = new AbortController();
+  const source = openBody("{}", abort.signal);
+  const added = t.mock.method(source.request.signal, "addEventListener");
+  const removed = t.mock.method(source.request.signal, "removeEventListener");
+  const result = assert.rejects(
+    body(source.request),
+    domainError(408, uploadCancelled),
+  );
+  await flush();
+  abort.abort("private-abort-detail");
+  await result;
+  assert.equal(source.cancellations(), 1);
+  assert.equal(source.request.body?.locked, false);
+  assert.equal(clock.cleared.mock.callCount(), 1);
+  assert.equal(removed.mock.callCount(), 1);
+  assert.equal(
+    removed.mock.calls[0].arguments[1],
+    added.mock.calls[0].arguments[1],
+  );
+});
+
+test("overdue EOF is rejected by the monotonic deadline even before its timer runs", async (t) => {
+  const clock = uploadClock(t);
+  const source = openBody();
+  const result = assert.rejects(
+    body(source.request),
+    domainError(408, uploadTimedOut),
+  );
+  await flush();
+  // Do not advance fake timers: this models the timer being delayed by other work.
+  clock.setMonotonicTime(10000);
+  source.controller.close();
+  await result;
+  assert.equal(source.request.body?.locked, false);
+  assert.equal(clock.cleared.mock.callCount(), 1);
+});
+
+test("rapid empty chunks cannot starve the absolute deadline", async (t) => {
+  const clock = uploadClock(t);
+  let pulls = 0;
+  let cancellations = 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        clock.setMonotonicTime(++pulls * 2500);
+        controller.enqueue(new Uint8Array());
+      },
+      cancel() {
+        cancellations++;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const init: RequestInit & { duplex: "half" } = {
+    method: "POST",
+    headers: { origin, "content-type": "application/json" },
+    body: stream,
+    duplex: "half",
+  };
+  const rapid = new Request(`${origin}/api/state`, init);
+  await assert.rejects(body(rapid), domainError(408, uploadTimedOut));
+  assert.equal(pulls, 4);
+  assert.equal(cancellations, 1);
+  assert.equal(rapid.body?.locked, false);
+});
+
+for (const cancellation of ["rejects", "never finishes"])
+  test(`upload expiry does not wait for a source whose cancellation ${cancellation}`, async (t) => {
+    const clock = uploadClock(t);
+    const source = openBody("{}", undefined, () =>
+      cancellation === "rejects"
+        ? Promise.reject(new Error("private-cancel-error"))
+        : new Promise<void>(() => {}),
+    );
+    const result = assert.rejects(
+      body(source.request),
+      domainError(408, uploadTimedOut),
+    );
+    await flush();
+    clock.advance(10000);
+    await result;
+    await flush();
+    assert.equal(source.cancellations(), 1);
+    assert.equal(source.request.body?.locked, false);
+    assert.equal(clock.cleared.mock.callCount(), 1);
+  });
+
+test("success, invalid JSON, failed streams and oversized uploads clean up their resources", async (t) => {
+  const clock = uploadClock(t);
+  for (const outcome of ["success", "JSON", "stream", "oversize"] as const) {
+    const abort = new AbortController();
+    const source = openBody(
+      outcome === "oversize"
+        ? "x".repeat(16001)
+        : outcome === "JSON"
+          ? "{"
+          : "{}",
+      abort.signal,
+    );
+    const added = t.mock.method(source.request.signal, "addEventListener");
+    const removed = t.mock.method(source.request.signal, "removeEventListener");
+    if (outcome === "stream")
+      source.controller.error(new Error("private-stream-error"));
+    else source.controller.close();
+    if (outcome === "success") assert.deepEqual(await body(source.request), {});
+    else
+      await assert.rejects(
+        body(source.request),
+        domainError(
+          outcome === "oversize" ? 413 : 400,
+          outcome === "oversize"
+            ? "Request is too large."
+            : outcome === "JSON"
+              ? "Invalid JSON."
+              : "Could not read request body.",
+        ),
+      );
+    assert.equal(source.request.body?.locked, false);
+    assert.equal(added.mock.callCount(), 1);
+    assert.equal(removed.mock.callCount(), 1);
+    assert.equal(
+      removed.mock.calls[0].arguments[1],
+      added.mock.calls[0].arguments[1],
+    );
+    abort.abort("must-not-affect-a-finished-request");
+  }
+  assert.equal(clock.scheduled.mock.callCount(), 4);
+  assert.equal(clock.cleared.mock.callCount(), 4);
+  clock.advance(20000);
+  await flush();
+});
+
+test("ordinary upload can finish within the budget and leaves no later timeout or abort work", async (t) => {
+  const clock = uploadClock(t);
+  const abort = new AbortController();
+  const source = openBody('{"name":"玩家"}', abort.signal);
+  const result = body(source.request);
+  await flush();
+  clock.advance(9999);
+  source.controller.close();
+  assert.deepEqual(await result, { name: "玩家" });
+  assert.equal(source.request.body?.locked, false);
+  assert.equal(source.cancellations(), 0);
+  assert.equal(clock.cleared.mock.callCount(), 1);
+  abort.abort("too-late-private-reason");
+  clock.advance(10001);
+  await flush();
+  assert.equal(source.cancellations(), 0);
+});
+
+test("fast header failures cancel without awaiting an uncooperative source", async () => {
+  for (const [headers, status, message] of [
+    [
+      { origin: "https://untrusted.test" },
+      403,
+      "Request origin is not allowed.",
+    ],
+    [{ "content-type": "text/plain" }, 415, "JSON is required."],
+    [{ "content-length": "two" }, 400, "Invalid Content-Length."],
+    [{ "content-length": "16001" }, 413, "Request is too large."],
+  ] as const) {
+    const source = openBody(
+      "{}",
+      undefined,
+      () => new Promise<void>(() => {}),
+      headers,
+    );
+    await assert.rejects(body(source.request), domainError(status, message));
+    assert.equal(source.cancellations(), 1);
+    assert.equal(source.request.body?.locked, false);
+  }
 });

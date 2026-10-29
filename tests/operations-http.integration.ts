@@ -6,6 +6,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import path from "node:path";
+import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { after, before, test } from "node:test";
 import { Pool } from "pg";
 import type { Command } from "../src/domain/commands";
@@ -347,6 +348,69 @@ class StaffBrowser {
       redirect: "manual",
       signal: AbortSignal.timeout(20000),
     });
+  }
+
+  partialUpload(route: string, fragment: string) {
+    const started = performance.now();
+    let close!: () => void;
+    let drip!: () => void;
+    let finish!: () => void;
+    const result = new Promise<{
+      status: number;
+      headers: IncomingHttpHeaders;
+      data: JsonObject;
+      elapsedMs: number;
+    }>((resolve, reject) => {
+      const client = httpRequest(origin + route, {
+        method: "POST",
+        headers: {
+          ...(this.cookie ? { Cookie: this.cookie } : {}),
+          Origin: origin,
+          "Content-Type": "application/json",
+          "Transfer-Encoding": "chunked",
+        },
+      });
+      const watchdog = setTimeout(() => {
+        client.destroy(
+          new Error("The stalled-upload test exceeded its budget."),
+        );
+      }, 18_000);
+      close = () => {
+        clearTimeout(watchdog);
+        client.destroy();
+      };
+      drip = () => client.write(" ");
+      finish = () => client.end();
+      client.once("error", (error) => {
+        clearTimeout(watchdog);
+        reject(error);
+      });
+      client.once("response", (response) => {
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          text += chunk;
+        });
+        response.once("error", reject);
+        response.once("end", () => {
+          clearTimeout(watchdog);
+          try {
+            resolve({
+              status: response.statusCode!,
+              headers: response.headers,
+              data: JSON.parse(text) as JsonObject,
+              elapsedMs: performance.now() - started,
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+      client.write(fragment);
+    });
+    // Preserve the rejection for the test while a concurrent normal request runs.
+    void result.catch(() => {});
+    return { result, drip, finish, close };
   }
 
   async csv(route: string, access: ExportAccess) {
@@ -1794,6 +1858,113 @@ test(
           false,
         );
         await loginPage.arrayBuffer();
+      },
+    );
+
+    await t.test(
+      "stalled and dripping uploads time out before writes or login work while other staff continue",
+      async () => {
+        const before = await admin.snapshot();
+        const operationId = randomUUID();
+        const payload = JSON.stringify({
+          actorId: before.user.id,
+          branchId: before.branch.id,
+          revision: before.revision,
+          operationId,
+          command: {
+            kind: "TABLE",
+            name: "Never saved stalled upload",
+            dealer: "",
+            status: "OPEN",
+          },
+        });
+        const authState = async () => ({
+          sessions: (
+            await fixturePool.query<{ count: string }>(
+              "SELECT count(*) FROM poker_sessions",
+            )
+          ).rows[0].count,
+          budget: (
+            await fixturePool.query(
+              "SELECT attempts,window_start FROM poker_login_budget WHERE id=1",
+            )
+          ).rows,
+          attempts: (
+            await fixturePool.query(
+              "SELECT username,attempts,window_start FROM poker_login_attempts ORDER BY username",
+            )
+          ).rows,
+        });
+        const previousAuth = await authState();
+        const stateUpload = admin.partialUpload("/api/state", payload);
+        const authUpload = new StaffBrowser().partialUpload(
+          "/api/auth",
+          JSON.stringify({ username: "http.admin", password }),
+        );
+        // Continue sending bytes so an idle-per-chunk timer cannot pass this test.
+        const dripping = setInterval(() => stateUpload.drip(), 2000);
+        try {
+          const normal = await admin.execute({
+            kind: "TABLE",
+            name: "Available during slow uploads",
+            dealer: "",
+            status: "OPEN",
+          });
+          assert.ok(
+            normal.store.tables.some(
+              (table) => table.name === "Available during slow uploads",
+            ),
+          );
+          const health = await fetch(origin + "/api/health");
+          assert.equal(health.status, 200);
+          await health.arrayBuffer();
+          const responses = await Promise.all([
+            stateUpload.result,
+            authUpload.result,
+          ]);
+          for (const response of responses) {
+            assert.equal(response.status, 408);
+            assert.deepEqual(response.data, {
+              error: "Request upload timed out. Please try again.",
+            });
+            assert.equal(response.headers["cache-control"], "no-store");
+            assert.match(
+              String(response.headers["x-request-id"]),
+              /^[a-f0-9-]{36}$/,
+            );
+            assert.ok(response.elapsedMs >= 9000);
+            assert.ok(response.elapsedMs < 18_000);
+          }
+          clearInterval(dripping);
+          // A late EOF must not resume the rejected command or credential work.
+          stateUpload.finish();
+          authUpload.finish();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const after = await admin.snapshot();
+          assert.equal(after.revision, normal.revision);
+          assert.deepEqual(after.store.transactions, before.store.transactions);
+          assert.deepEqual(after.store.approvals, before.store.approvals);
+          assert.equal(
+            after.store.tables.some(
+              (table) => table.name === "Never saved stalled upload",
+            ),
+            false,
+          );
+          assert.equal(
+            (
+              await fixturePool.query<{ count: string }>(
+                "SELECT count(*) FROM poker_operations WHERE operation_id=$1",
+                [operationId],
+              )
+            ).rows[0].count,
+            "0",
+          );
+          assert.deepEqual(await authState(), previousAuth);
+        } finally {
+          clearInterval(dripping);
+          stateUpload.close();
+          authUpload.close();
+        }
       },
     );
 

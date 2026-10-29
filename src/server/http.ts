@@ -8,6 +8,7 @@ import { validateProductionConfig } from "./production-config";
 import { logOperationalEvent } from "./operational-events";
 
 const MAX_BODY_BYTES = 16000;
+const BODY_UPLOAD_TIMEOUT_MS = 10000;
 // Match the media type exactly, while allowing well-formed token/quoted parameters.
 const JSON_CONTENT_TYPE =
   /^application\/json(?:[ \t]*;[ \t]*[!#$%&'*+.^_`|~0-9a-z-]+[ \t]*=[ \t]*(?:[!#$%&'*+.^_`|~0-9a-z-]+|"(?:[^"\\\r\n]|\\[^\r\n])*"))*[ \t]*$/i;
@@ -51,50 +52,107 @@ export function verifyOrigin(request: Request) {
     throw new DomainError("JSON is required.", 415);
 }
 export async function body(request: Request) {
-  verifyOrigin(request);
-  const declaredLength = request.headers.get("content-length");
-  if (declaredLength !== null) {
-    if (!/^\d+$/.test(declaredLength))
-      throw new DomainError("Invalid Content-Length.");
-    if (Number(declaredLength) > MAX_BODY_BYTES) {
-      // Do not wait for a remote sender to finish cancellation before rejecting.
-      void request.body?.cancel().catch(() => {});
-      throw new DomainError("Request is too large.", 413);
-    }
-  }
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const reader = request.body?.getReader();
-  if (reader) {
+  const deadline = performance.now() + BODY_UPLOAD_TIMEOUT_MS;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let listening = false;
+  let cancelled = false;
+  let stopError: DomainError | undefined;
+  let rejectStop: ((error: DomainError) => void) | undefined;
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > MAX_BODY_BYTES) {
-          void reader.cancel().catch(() => {});
-          throw new DomainError("Request is too large.", 413);
-        }
-        chunks.push(value);
-      }
-    } catch (error) {
-      if (error instanceof DomainError) throw error;
-      throw new DomainError("Could not read request body.");
-    } finally {
-      reader.releaseLock();
-    }
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+      // A remote source may reject or never finish cancellation.
+      const cancellation = reader ? reader.cancel() : request.body?.cancel();
+      void cancellation?.catch(() => {});
+    } catch {}
+  };
+  const stop = (message: string) => {
+    if (stopError) return;
+    stopError = new DomainError(message, 408);
+    rejectStop?.(stopError);
+    cancel();
+  };
+  const onAbort = () => stop("Request upload was cancelled. Please try again.");
+  const checkDeadline = () => {
+    if (request.signal.aborted) onAbort();
+    if (!stopError && performance.now() >= deadline)
+      stop("Request upload timed out. Please try again.");
+    if (stopError) throw stopError;
+  };
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return JSON.parse(text);
-  } catch {
-    throw new DomainError("Invalid JSON.");
+    verifyOrigin(request);
+    checkDeadline();
+    const declaredLength = request.headers.get("content-length");
+    if (declaredLength !== null) {
+      if (!/^\d+$/.test(declaredLength))
+        throw new DomainError("Invalid Content-Length.");
+      if (Number(declaredLength) > MAX_BODY_BYTES)
+        throw new DomainError("Request is too large.", 413);
+    }
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    reader = request.body?.getReader();
+    if (reader) {
+      const stopped = new Promise<never>((_, reject) => {
+        rejectStop = reject;
+      });
+      // Stop may occur between reads; keep its rejection observed in every case.
+      void stopped.catch(() => {});
+      request.signal.addEventListener("abort", onAbort, { once: true });
+      listening = true;
+      checkDeadline();
+      timer = setTimeout(
+        () => stop("Request upload timed out. Please try again."),
+        Math.max(0, deadline - performance.now()),
+      );
+      try {
+        const sourceReader = reader;
+        const readChunks = async () => {
+          while (true) {
+            checkDeadline();
+            const { done, value } = await sourceReader.read();
+            // Cancellation can resolve a pending read as EOF before the race settles.
+            // The recorded stop must win, including when a busy loop delays timers.
+            checkDeadline();
+            if (done) break;
+            size += value.byteLength;
+            if (size > MAX_BODY_BYTES)
+              throw new DomainError("Request is too large.", 413);
+            if (value.byteLength) chunks.push(value);
+          }
+        };
+        // One race avoids retaining another stop-promise handler per chunk.
+        await Promise.race([readChunks(), stopped]);
+        checkDeadline();
+      } catch (error) {
+        if (stopError) throw stopError;
+        if (error instanceof DomainError) throw error;
+        throw new DomainError("Could not read request body.");
+      }
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return JSON.parse(text);
+    } catch {
+      throw new DomainError("Invalid JSON.");
+    }
+  } catch (error) {
+    cancel();
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (listening) request.signal.removeEventListener("abort", onAbort);
+    try {
+      reader?.releaseLock();
+    } catch {}
   }
 }
 export function failure(error: unknown, requestId: string = randomUUID()) {
