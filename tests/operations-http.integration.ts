@@ -347,11 +347,11 @@ class StaffBrowser {
     return this.json<Snapshot>("/api/state");
   }
 
-  document(route: string) {
+  document(route: string, signal = AbortSignal.timeout(20000)) {
     return fetch(origin + route, {
       headers: this.cookie ? { Cookie: this.cookie } : {},
       redirect: "manual",
-      signal: AbortSignal.timeout(20000),
+      signal,
     });
   }
 
@@ -1618,6 +1618,101 @@ test(
         const after = await admin.snapshot();
         assert.equal(after.revision, reviewed.revision);
         assert.deepEqual(after.store, reviewed.store);
+      },
+    );
+
+    await t.test(
+      "an abandoned JSON lookup rolls back after authentication instead of starting blocked profile reads",
+      async () => {
+        const route = "/api/read?resource=players&pageSize=1";
+        const baseline = await admin.json<ReadPage<Player>>(route);
+        assert.ok(baseline.total > 0);
+        const before = await admin.snapshot();
+        const holder = await fixturePool.connect();
+        const controller = new AbortController();
+        let holding = false;
+        let reading: Promise<Response> | undefined;
+        let readerPid: number | undefined;
+        try {
+          await holder.query("BEGIN");
+          holding = true;
+          // The profile lock survives rolling back the later auth lock. Without
+          // signal propagation the abandoned request would block on profiles.
+          await holder.query(
+            "LOCK TABLE poker_profiles IN ACCESS EXCLUSIVE MODE",
+          );
+          await holder.query("SAVEPOINT held_auth");
+          await holder.query("LOCK TABLE poker_users IN ACCESS EXCLUSIVE MODE");
+          reading = admin.document(route, controller.signal);
+          void reading.catch(() => {});
+          const until = performance.now() + 2000;
+          while (performance.now() < until) {
+            const waiting = await administrator.query<{ pid: number }>(
+              "SELECT pid FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND query ILIKE '%FROM poker_sessions s%'",
+              [ownedName],
+            );
+            readerPid = waiting.rows[0]?.pid;
+            if (readerPid) break;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          assert.ok(
+            readerPid,
+            "The JSON request must actually wait on its auth SQL",
+          );
+          controller.abort();
+          await assert.rejects(reading);
+          // Let the server observe the closed socket while auth is still held.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          await holder.query("ROLLBACK TO SAVEPOINT held_auth");
+          let rolledBack = false;
+          const deadline = performance.now() + 2000;
+          while (performance.now() < deadline) {
+            const state = await administrator.query<{
+              state: string;
+              in_transaction: boolean;
+              query: string;
+            }>(
+              "SELECT state,xact_start IS NOT NULL AS in_transaction,query FROM pg_stat_activity WHERE pid=$1",
+              [readerPid],
+            );
+            const current = state.rows[0];
+            if (
+              current?.state === "idle" &&
+              !current.in_transaction &&
+              current.query === "ROLLBACK"
+            ) {
+              rolledBack = true;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          assert.equal(
+            rolledBack,
+            true,
+            "Cancellation must end the transaction before following on to the held profile table",
+          );
+          const profileWaiters = await administrator.query<{ total: number }>(
+            "SELECT count(*)::int AS total FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock' AND query ILIKE '%poker_profiles%'",
+            [ownedName],
+          );
+          assert.equal(profileWaiters.rows[0].total, 0);
+          await admin.json("/api/auth");
+          const health = await fetch(origin + "/api/health");
+          assert.equal(health.status, 200);
+          await health.arrayBuffer();
+        } finally {
+          controller.abort();
+          if (holding) await holder.query("ROLLBACK");
+          holder.release();
+          await reading?.then(
+            (response) => response.arrayBuffer(),
+            () => {},
+          );
+        }
+        assert.deepEqual(await admin.json<ReadPage<Player>>(route), baseline);
+        const after = await admin.snapshot();
+        assert.equal(after.revision, before.revision);
+        assert.deepEqual(after.store, before.store);
       },
     );
 

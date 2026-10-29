@@ -47,7 +47,9 @@ export async function GET(request: Request) {
         },
       });
     }
-    return json(await readPage(database(), await sessionToken(), input));
+    return json(
+      await readPage(database(), await sessionToken(), input, request.signal),
+    );
   } catch (error) {
     const busy = csvExportBusyDetails(error);
     if (busy) {

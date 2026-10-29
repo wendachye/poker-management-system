@@ -903,13 +903,37 @@ async function readPageWithin(
   throw new DomainError("Unknown record list.");
 }
 
+function readCancellation(signal: AbortSignal | undefined, message: string) {
+  const check = () => {
+    if (signal?.aborted) throw new DomainError(message, 408);
+  };
+  return {
+    check,
+    connection(source: SqlConnection): SqlConnection {
+      return {
+        async query<T>(sql: string, values?: unknown[]) {
+          check();
+          // Let actual SQL settle before rollback or connection release.
+          const result = await source.query<T>(sql, values);
+          check();
+          return result;
+        },
+      };
+    },
+  };
+}
+
 export async function readPage(
   db: Database,
   token: string | undefined,
   input: unknown,
+  signal?: AbortSignal,
 ): Promise<ReadPage> {
   const query = parseReadQuery(input);
-  return db.transaction(async (connection) => {
+  const cancellation = readCancellation(signal, "Cannot load records.");
+  cancellation.check();
+  const result = await db.transaction(async (source) => {
+    const connection = cancellation.connection(source);
     await connection.query(
       "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
@@ -919,6 +943,8 @@ export async function readPage(
       query,
     );
   });
+  cancellation.check();
+  return result;
 }
 
 function csv(rows: (string | number)[][]) {
@@ -934,23 +960,16 @@ export async function readCsv(
   const query = parseReadQuery(input);
   if (!["report", "range"].includes(query.resource))
     throw new DomainError("Choose a daily or period report.");
-  const checkCancelled = () => {
-    if (signal?.aborted)
-      throw new DomainError("Cannot download report. Please try again.", 408);
-  };
+  const cancellation = readCancellation(
+    signal,
+    "Cannot download report. Please try again.",
+  );
+  const checkCancelled = cancellation.check;
   checkCancelled();
   return withCsvExportWork(async () => {
     checkCancelled();
     const result = await db.transaction(async (source) => {
-      const connection: SqlConnection = {
-        async query<T>(sql: string, values?: unknown[]) {
-          checkCancelled();
-          // An in-flight query must settle before cancellation can roll back.
-          const result = await source.query<T>(sql, values);
-          checkCancelled();
-          return result;
-        },
-      };
+      const connection = cancellation.connection(source);
       await connection.query(
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
       );

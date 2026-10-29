@@ -25,7 +25,7 @@ import {
 } from "../src/server/operation-recovery";
 import { configuredStore } from "./helpers/store";
 import { replaceStore } from "../src/server/storage";
-import { readCsv } from "../src/server/queries";
+import { readCsv, readPage } from "../src/server/queries";
 import { csvExportBusyDetails } from "../src/server/csv-export-work";
 import {
   claimLoginAttempt,
@@ -1296,6 +1296,206 @@ test("global disable and local demotion protect a shared admin's other venue", a
     ).rows[0].total,
     "0",
   );
+});
+
+test("a cancelled JSON read drains queued checkout without application SQL and leaves staff saves available", async () => {
+  const run = await fixture();
+  const held = await firstPool.connect();
+  const statements: string[] = [];
+  let released = false;
+  const observed = databaseFromPool({
+    query: (sql, values) => firstPool.query(sql, values),
+    async connect() {
+      const client = await firstPool.connect();
+      return {
+        query(sql: string, values?: unknown[]) {
+          statements.push(sql);
+          return client.query(sql, values);
+        },
+        release(destroy?: boolean) {
+          released = true;
+          client.release(destroy);
+        },
+      };
+    },
+  });
+  const controller = new AbortController();
+  let finished = false;
+  const reading = readPage(
+    observed,
+    run.tokens.admin,
+    { resource: "players" },
+    controller.signal,
+  ).finally(() => {
+    finished = true;
+  });
+  void reading.catch(() => {});
+  let heldOpen = true;
+  try {
+    const deadline = Date.now() + 2000;
+    while (firstPool.waitingCount === 0 && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(firstPool.waitingCount, 1);
+    controller.abort(new Error("private cancelled lookup"));
+    assert.equal(
+      finished,
+      false,
+      "A queued checkout must actually settle before returning",
+    );
+    const before = await readSnapshot(secondDb, run.tokens.admin);
+    const saved = await mutate(
+      secondDb,
+      run.tokens.admin,
+      payload(
+        run.branchId,
+        before.revision,
+        tableCommand("Available while lookup checkout waits"),
+      ),
+    );
+    held.release();
+    heldOpen = false;
+    await assert.rejects(reading, (error) => {
+      status(error, 408);
+      assert.equal((error as Error).message, "Cannot load records.");
+      return true;
+    });
+    assert.deepEqual(statements, ["BEGIN", "ROLLBACK"]);
+    assert.equal(released, true);
+    assert.equal(firstPool.waitingCount, 0);
+    const page = await readPage(firstDb, run.tokens.admin, {
+      resource: "players",
+    });
+    assert.equal(page.context.branch.id, run.branchId);
+    assert.equal(page.context.revision, saved.revision);
+    assert.equal(page.total, 0);
+    assert.equal(
+      page.context.store.tables[0].name,
+      "Available while lookup checkout waits",
+    );
+    assert.deepEqual(
+      (await readSnapshot(secondDb, run.tokens.admin)).store,
+      saved.store,
+    );
+  } finally {
+    controller.abort();
+    if (heldOpen) held.release();
+    await reading.catch(() => {});
+  }
+});
+
+test("a cancelled JSON authentication query drains real SQL and rollback before releasing its connection", async () => {
+  const run = await fixture();
+  const holder = await lockPool.connect();
+  const lock = 7_318_292;
+  const statements: string[] = [];
+  let releaseRollback!: () => void;
+  const allowRollback = new Promise<void>((resolve) => {
+    releaseRollback = resolve;
+  });
+  let rollbackStarted!: () => void;
+  const rollingBack = new Promise<void>((resolve) => {
+    rollbackStarted = resolve;
+  });
+  let released = false;
+  let blocked = false;
+  const observed = databaseFromPool({
+    query: (sql, values) => firstPool.query(sql, values),
+    async connect() {
+      const client = await firstPool.connect();
+      return {
+        async query(sql: string, values?: unknown[]) {
+          statements.push(sql);
+          if (sql === "ROLLBACK") {
+            rollbackStarted();
+            await allowRollback;
+          }
+          const result = await client.query(sql, values);
+          if (sql.includes("FROM poker_sessions s")) {
+            blocked = true;
+            await client.query("SELECT pg_advisory_xact_lock($1)", [lock]);
+          }
+          return result;
+        },
+        release(destroy?: boolean) {
+          released = true;
+          client.release(destroy);
+        },
+      };
+    },
+  });
+  const controller = new AbortController();
+  let reading: Promise<unknown> | undefined;
+  let finished = false;
+  let holding = false;
+  try {
+    const holderPid = (
+      await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")
+    ).rows[0].pid;
+    const readerPid = await backendPid(firstPool);
+    await holder.query("SELECT pg_advisory_lock($1)", [lock]);
+    holding = true;
+    reading = readPage(
+      observed,
+      run.tokens.admin,
+      { resource: "players" },
+      controller.signal,
+    ).finally(() => {
+      finished = true;
+    });
+    void reading.catch(() => {});
+    await waitForBlocked(readerPid, holderPid);
+    assert.equal(blocked, true);
+    controller.abort("private auth-read cancellation reason");
+    const before = await readSnapshot(secondDb, run.tokens.admin);
+    const saved = await mutate(
+      secondDb,
+      run.tokens.admin,
+      payload(
+        run.branchId,
+        before.revision,
+        tableCommand("Staff save during cancelled lookup"),
+      ),
+    );
+    assert.equal(finished, false);
+    assert.equal(released, false);
+    await holder.query("SELECT pg_advisory_unlock($1)", [lock]);
+    holding = false;
+    await rollingBack;
+    assert.equal(finished, false);
+    assert.equal(released, false);
+    assert.equal(
+      statements.length,
+      4,
+      "Only BEGIN, SET, authentication and ROLLBACK may run",
+    );
+    assert.equal(statements[3], "ROLLBACK");
+    releaseRollback();
+    await assert.rejects(reading, (error) => {
+      status(error, 408);
+      assert.equal((error as Error).message, "Cannot load records.");
+      return true;
+    });
+    assert.equal(released, true);
+    const page = await readPage(firstDb, run.tokens.admin, {
+      resource: "players",
+    });
+    assert.equal(page.total, 0);
+    assert.equal(
+      page.context.store.tables[0].name,
+      "Staff save during cancelled lookup",
+    );
+    assert.equal(page.context.revision, saved.revision);
+    assert.deepEqual(
+      (await readSnapshot(secondDb, run.tokens.admin)).store,
+      saved.store,
+    );
+  } finally {
+    controller.abort();
+    if (holding) await holder.query("SELECT pg_advisory_unlock($1)", [lock]);
+    releaseRollback();
+    await reading?.catch(() => {});
+    holder.release();
+  }
 });
 
 test("concurrent CSV requests fail before acquisition and an aborted export keeps its slot through real rollback", async () => {
