@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { Pool } from "pg";
-import { DomainError } from "../src/domain/operations";
+import { applyCommand, DomainError } from "../src/domain/operations";
+import type { Staff } from "../src/domain/model";
 import type { Command } from "../src/domain/commands";
 import {
   changeBranch,
@@ -24,6 +25,7 @@ import {
 } from "../src/server/operation-recovery";
 import { configuredStore } from "./helpers/store";
 import { replaceStore } from "../src/server/storage";
+import { readCsv } from "../src/server/queries";
 import {
   claimLoginAttempt,
   clearSuccessfulLoginAttempt,
@@ -1292,6 +1294,170 @@ test("global disable and local demotion protect a shared admin's other venue", a
       )
     ).rows[0].total,
     "0",
+  );
+});
+
+test("a large daily CSV retains one snapshot while another staff member posts a buy-in", async () => {
+  const run = await fixture();
+  const actors = Object.fromEntries(
+    Object.entries(run.users).map(([key, id]) => [
+      key,
+      {
+        id,
+        username: id,
+        branchId: run.branchId,
+        role:
+          key === "admin" ? "ADMIN" : key === "manager" ? "MANAGER" : "CASHIER",
+      },
+    ]),
+  ) as Record<keyof Fixture["users"], Staff>;
+  let store = configuredStore();
+  let tick = Date.parse("2026-10-29T00:00:00Z");
+  const apply = (command: Command, actor = actors.admin) => {
+    store = applyCommand(store, command, actor, new Date(tick++).toISOString());
+  };
+  apply(tableCommand("CSV snapshot table"));
+  const tableId = store.tables[0].id;
+  apply({ kind: "OPEN_DAY", date: "2026-10-29", openingCash: 1_000_000 });
+  for (let index = 0; index < 61; index++) {
+    const name = "CSV snapshot participant " + String(index).padStart(3, "0");
+    apply(
+      {
+        kind: "CHECK_IN",
+        name,
+        phone: "+1202558" + String(index).padStart(4, "0"),
+        type: "CASH",
+        creditLimit: 0,
+        tags: [],
+        tableId,
+        seat: 1,
+      },
+      actors.cashier,
+    );
+    const playerId = store.profiles.find(
+      (profile) => profile.name === name,
+    )!.id;
+    apply(
+      { kind: "REQUEST", type: "Buy-in", playerId, amount: 50_000, note: "" },
+      actors.cashier,
+    );
+    apply({
+      kind: "DECIDE",
+      approvalId: store.approvals[0].id,
+      decision: "APPROVED",
+    });
+    if (index < 60) {
+      apply(
+        {
+          kind: "REQUEST",
+          type: "Cash-out",
+          playerId,
+          amount: 50_000,
+          note: "",
+        },
+        actors.cashier,
+      );
+      apply({
+        kind: "DECIDE",
+        approvalId: store.approvals[0].id,
+        decision: "APPROVED",
+      });
+    }
+  }
+  await firstDb.transaction((connection) =>
+    replaceStore(connection, run.branchId, store),
+  );
+  const query = { resource: "report", dayId: store.currentDayId };
+  const access = {
+    actorId: actors.admin.id,
+    branchId: run.branchId,
+    role: actors.admin.role,
+  };
+  const baseline = await readCsv(firstDb, run.tokens.admin, query, access);
+  assert.ok(baseline.value.includes('"Cash received","30500"'));
+  assert.equal(
+    baseline.value
+      .split("\n")
+      .filter((line) => line.startsWith('"CSV snapshot participant ')).length,
+    61,
+  );
+  let interleaved = false;
+  let queries = 0;
+  const observed: Database = {
+    ...firstDb,
+    transaction: (work) =>
+      firstDb.transaction((connection) =>
+        work({
+          async query<T>(sql: string, values?: unknown[]) {
+            queries++;
+            if (sql.includes("daily_csv_participant_projection")) {
+              assert.equal(interleaved, false);
+              interleaved = true;
+              const before = await readSnapshot(secondDb, run.tokens.cashier);
+              const checkedIn = await mutate(
+                secondDb,
+                run.tokens.cashier,
+                payload(run.branchId, before.revision, {
+                  kind: "CHECK_IN",
+                  name: "After export snapshot",
+                  phone: "+12025589999",
+                  type: "CASH",
+                  creditLimit: 0,
+                  tags: [],
+                  tableId,
+                  seat: 2,
+                }),
+              );
+              const playerId = checkedIn.store.profiles.find(
+                (profile) => profile.name === "After export snapshot",
+              )!.id;
+              const requested = await mutate(
+                secondDb,
+                run.tokens.cashier,
+                payload(run.branchId, checkedIn.revision, {
+                  kind: "REQUEST",
+                  type: "Buy-in",
+                  playerId,
+                  amount: 70_000,
+                  note: "Concurrent CSV test",
+                }),
+              );
+              const request = requested.store.approvals.find(
+                (entry) =>
+                  entry.playerId === playerId && entry.status === "PENDING",
+              )!;
+              await mutate(
+                secondDb,
+                run.tokens.admin,
+                payload(run.branchId, requested.revision, {
+                  kind: "DECIDE",
+                  approvalId: request.id,
+                  decision: "APPROVED",
+                }),
+              );
+            }
+            return connection.query<T>(sql, values);
+          },
+        }),
+      ),
+  };
+  const exported = await readCsv(observed, run.tokens.admin, query, access);
+  assert.equal(interleaved, true);
+  assert.ok(
+    queries <= 22,
+    `Expected at most22 SQL queries, received ${queries}.`,
+  );
+  assert.equal(exported.value, baseline.value);
+  assert.deepEqual(exported.access, access);
+  assert.equal(exported.value.includes("After export snapshot"), false);
+  const current = await readCsv(firstDb, run.tokens.admin, query, access);
+  assert.ok(current.value.includes("After export snapshot"));
+  assert.ok(current.value.includes('"Cash received","31200"'));
+  assert.equal(
+    current.value
+      .split("\n")
+      .filter((line) => line.startsWith('"CSV snapshot participant ')).length,
+    61,
   );
 });
 

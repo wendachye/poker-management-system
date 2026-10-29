@@ -1060,26 +1060,72 @@ export async function readCsv(
         throw new DomainError(
           "This report export is too large. Contact an administrator for a database export.",
         );
-      for (let page = 0; page < Math.ceil(first.total / 50); page++) {
-        const result =
-          page === 0
-            ? first
-            : await readPageWithin(connection, user, {
-                ...completeQuery,
-                page,
-              });
-        rows.push(
-          ...(result.items as Player[]).map((player) => [
-            displayName(player.name),
-            player.buyIn / 100,
-            player.cashOut / 100,
-            player.status === "ACTIVE"
-              ? "Unsettled"
-              : (player.cashOut - player.buyIn) / 100,
-            player.status,
-          ]),
+      let participants = first.items as Pick<
+        Player,
+        "name" | "buyIn" | "cashOut" | "status"
+      >[];
+      if (first.total > 50) {
+        // CSV needs every participant, without rebuilding the operational
+        // context, notification counts and report totals for each 50-row page.
+        const selected = await connection.query<{
+          name: string;
+          status: Player["status"];
+          buyIn: string;
+          cashOut: string;
+        }>(
+          `/* daily_csv_participant_projection */
+          WITH participants AS MATERIALIZED (
+            SELECT DISTINCT player_id FROM poker_visits WHERE branch_id=$1 AND day_id=$2
+          ) SELECT p.data->>'name' AS name,latest.status,
+            COALESCE(totals.buy_in,0)::text AS "buyIn",COALESCE(totals.cash_out,0)::text AS "cashOut"
+          FROM participants participant JOIN poker_profiles p ON p.branch_id=$1 AND p.id=participant.player_id
+          JOIN LATERAL (
+            SELECT status FROM poker_visits WHERE branch_id=$1 AND player_id=p.id AND day_id=$2
+            ORDER BY order_no DESC,id DESC LIMIT 1
+          ) latest ON true
+          LEFT JOIN poker_financial_totals totals ON totals.branch_id=p.branch_id
+            AND totals.scope='PLAYER_DAY' AND totals.entity_id=p.id AND totals.day_id=$2
+          ORDER BY p.order_no,p.id LIMIT 50001`,
+          [user.branchId, day.id],
         );
+        if (
+          selected.rows.length !== first.total ||
+          selected.rows.length > 50_000
+        )
+          throw new DomainError(
+            "Cannot download report. Please try again.",
+            503,
+          );
+        participants = selected.rows.map((player) => {
+          if (
+            typeof player.name !== "string" ||
+            !["ACTIVE", "OUT"].includes(player.status)
+          )
+            throw new DomainError(
+              "Cannot download report. Please try again.",
+              503,
+            );
+          return {
+            name: player.name,
+            status: player.status,
+            buyIn: checkedTotal(player.buyIn),
+            cashOut: checkedTotal(player.cashOut),
+          };
+        });
       }
+      rows.push(
+        ...participants.map((player) => [
+          displayName(player.name),
+          player.buyIn / 100,
+          player.cashOut / 100,
+          player.status === "ACTIVE"
+            ? "Unsettled"
+            : checkedTotal(
+                (BigInt(player.cashOut) - BigInt(player.buyIn)).toString(),
+              ) / 100,
+          player.status,
+        ]),
+      );
       filename = `daily-close-${day.date}.csv`;
     }
     const value = csv(rows);

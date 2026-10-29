@@ -11,7 +11,13 @@ import {
   parseReadQuery,
 } from "../src/server/queries";
 import { checkedTotal, dayTotals } from "../src/server/aggregates";
-import type { Role, Staff, Transaction } from "../src/domain/model";
+import type {
+  Player,
+  Role,
+  Staff,
+  Store,
+  Transaction,
+} from "../src/domain/model";
 import { debt, playersForDay, totalsForDay } from "../src/domain/selectors";
 import { compareReports } from "../src/domain/reporting";
 import { dashboardSummary } from "../src/domain/dashboard-summary";
@@ -20,6 +26,10 @@ import { DomainError } from "../src/domain/operations";
 import { ledgerImpact } from "../src/domain/ledger-impact";
 import type { ExportAccess } from "../src/lib/export-access";
 import type { Database } from "../src/server/database";
+import { applyCommand } from "../src/domain/operations";
+import type { Command } from "../src/domain/commands";
+import { displayName } from "../src/lib/display-name";
+import { csv as moneyCsv } from "../src/domain/money";
 
 test("read inputs and aggregate conversions reject invalid or unbounded requests", () => {
   for (const input of [
@@ -129,6 +139,153 @@ async function fixture() {
 }
 function sameMoney(actual: unknown, expected: unknown) {
   assert.deepEqual(actual, expected);
+}
+
+const projectionMarker = "daily_csv_participant_projection";
+
+async function denseCsvFixture() {
+  const base = await fixture();
+  let store = base.store;
+  for (let index = store.profiles.length; index < 401; index++)
+    store.profiles.push({
+      id: "dense-profile-" + String(index).padStart(4, "0"),
+      name: "Dense export player " + index,
+      phone: "+1202557" + String(index).padStart(4, "0"),
+      type: index % 2 ? "CREDIT" : "CASH",
+      creditLimit: 100000,
+      tags: [],
+    });
+  for (const day of store.days)
+    for (const [index, profile] of store.profiles.entries())
+      if (
+        !store.sessions.some(
+          (visit) => visit.playerId === profile.id && visit.dayId === day.id,
+        )
+      )
+        store.sessions.push({
+          id: "dense-visit-" + day.id + "-" + profile.id,
+          playerId: profile.id,
+          dayId: day.id,
+          tableId: store.tables[2].id,
+          seat: (index % 9) + 1,
+          status: "OUT",
+          sessionStart: day.date + "T01:00:00Z",
+          sessionEnd: day.date + "T01:30:00Z",
+        });
+  store.settings = { ...store.settings!, minBuyIn: 1, buyInStep: 0 };
+  let timestamp = Date.parse("2026-10-28T06:00:00Z");
+  const run = (command: Command, actor = base.actors.admin) => {
+    store = applyCommand(
+      store,
+      command,
+      actor,
+      new Date((timestamp += 1000)).toISOString(),
+    );
+  };
+  const post = (command: Command) => {
+    run(command, base.actors.cashier);
+    const approvalId = store.approvals[0].id;
+    run({ kind: "DECIDE", approvalId, decision: "APPROVED" });
+    if (
+      store.approvals.find((request) => request.id === approvalId)?.status ===
+      "PENDING"
+    )
+      run(
+        { kind: "DECIDE", approvalId, decision: "APPROVED" },
+        base.actors.manager,
+      );
+  };
+  for (const [seat, index] of [200, 201, 202].entries()) {
+    const profile = store.profiles[index];
+    run(
+      {
+        kind: "CHECK_IN",
+        playerId: profile.id,
+        name: profile.name,
+        phone: profile.phone,
+        type: profile.type,
+        creditLimit: profile.creditLimit,
+        tags: [],
+        tableId: store.tables[2].id,
+        seat: seat + 1,
+      },
+      base.actors.manager,
+    );
+    post({
+      kind: "REQUEST",
+      type: "Buy-in",
+      playerId: profile.id,
+      amount: index === 200 ? 20001 : index === 201 ? 23457 : 34567,
+      note: "Exact-sen export fixture",
+    });
+    if (index === 202) continue;
+    post({
+      kind: "REQUEST",
+      type: "Cash-out",
+      playerId: profile.id,
+      amount: index === 200 ? 31003 : 34569,
+      note: "Export settlement",
+    });
+    if (index === 200) {
+      post({
+        kind: "CORRECT",
+        transactionId: store.transactions[0].id,
+        reason: "Reverse the incorrect export fixture payout",
+      });
+      post({
+        kind: "REQUEST",
+        type: "Cash-out",
+        playerId: profile.id,
+        amount: 21003,
+        note: "Corrected exact-sen payout",
+      });
+    }
+  }
+  store.profiles.at(-1)!.name = "=2+3";
+  await importStore(base.db, "local", store);
+  return { ...base, store };
+}
+
+async function completeJsonReport(db: Database, token: string, date: string) {
+  const first = await readPage(db, token, {
+    resource: "report",
+    date,
+    pageSize: 50,
+  });
+  const players = first.items as Player[];
+  for (let page = 1; page < Math.ceil(first.total / 50); page++)
+    players.push(
+      ...((
+        await readPage(db, token, {
+          resource: "report",
+          date,
+          pageSize: 50,
+          page,
+        })
+      ).items as Player[]),
+    );
+  return players;
+}
+
+function playerCsv(players: Player[]) {
+  return moneyCsv(
+    players.map((player) => [
+      displayName(player.name),
+      player.buyIn / 100,
+      player.cashOut / 100,
+      player.status === "ACTIVE"
+        ? "Unsettled"
+        : (player.cashOut - player.buyIn) / 100,
+      player.status,
+    ]),
+  );
+}
+
+function csvPlayerSection(value: string) {
+  const header = '"Player","Buy-in","Cash-out","Settled P/L","Status"\r\n';
+  const position = value.indexOf(header);
+  assert.ok(position >= 0);
+  return value.slice(position + header.length);
 }
 test("indexed paginated reads preserve complete money, search, context and export semantics", async (t) => {
   const { db, engine, store, actors, token, dealer } = await fixture();
@@ -870,6 +1027,277 @@ test("indexed paginated reads preserve complete money, search, context and expor
           assert.deepEqual(empty.items, []);
           assert.equal(empty.pageSize, 20);
         }
+      },
+    );
+  } finally {
+    await engine.close();
+  }
+});
+
+test("complete daily CSV uses one bounded participant projection without repeating operational context", async (t) => {
+  const { db, engine, store, token, actors } = await denseCsvFixture();
+  const expectedAccess: ExportAccess = {
+    actorId: actors.admin.id,
+    branchId: "local",
+    role: "ADMIN",
+  };
+  const statements: string[] = [];
+  const observed: Database = {
+    ...db,
+    transaction: (work) =>
+      db.transaction((connection) =>
+        work({
+          query<T>(sql: string, values?: unknown[]) {
+            statements.push(sql);
+            return connection.query<T>(sql, values);
+          },
+        }),
+      ),
+  };
+  try {
+    await t.test(
+      "50, 51, 101 and 401 historical participants preserve every row in order",
+      async () => {
+        const historical = store.days[0];
+        for (const count of [50, 51, 101, 401]) {
+          const subset: Store = structuredClone(store);
+          const allowed = new Set(
+            subset.profiles.slice(0, count).map((profile) => profile.id),
+          );
+          subset.sessions = subset.sessions.filter(
+            (visit) =>
+              visit.dayId !== historical.id || allowed.has(visit.playerId),
+          );
+          await importStore(db, "local", subset);
+          statements.length = 0;
+          const result = await readCsv(
+            observed,
+            token,
+            {
+              resource: "report",
+              date: historical.date,
+              query: "matches-no-visible-rows",
+              page: 999999,
+              pageSize: 1,
+            },
+            expectedAccess,
+          );
+          const queryCount = statements.length;
+          assert.ok(
+            queryCount <= 22,
+            `${count} participants used ${queryCount} statements`,
+          );
+          assert.equal(
+            statements.filter((sql) =>
+              sql.includes("SELECT s.revision,s.data,b.name,b.timezone"),
+            ).length,
+            1,
+          );
+          assert.equal(
+            statements.filter((sql) => sql.includes(projectionMarker)).length,
+            count > 50 ? 1 : 0,
+          );
+          const reference = await completeJsonReport(
+            db,
+            token,
+            historical.date,
+          );
+          assert.equal(reference.length, count);
+          assert.equal(csvPlayerSection(result.value), playerCsv(reference));
+          assert.deepEqual(result.access, expectedAccess);
+        }
+      },
+    );
+    await t.test(
+      "current cash, credit, reversals, repeated visits and active results match JSON reads",
+      async () => {
+        await importStore(db, "local", store);
+        await db.query(
+          "UPDATE poker_profiles SET order_no=0 WHERE branch_id='local' AND id=ANY($1::text[])",
+          [store.profiles.slice(-2).map((profile) => profile.id)],
+        );
+        const day = store.days.find((day) => day.id === store.currentDayId)!;
+        const result = await readCsv(
+          db,
+          token,
+          { resource: "report", dayId: day.id },
+          expectedAccess,
+        );
+        const reference = await completeJsonReport(db, token, day.date);
+        assert.equal(reference.length, 401);
+        assert.equal(csvPlayerSection(result.value), playerCsv(reference));
+        for (const [index, buyIn, cashOut, status] of [
+          [200, 20001, 21003, "OUT"],
+          [201, 23457, 34569, "OUT"],
+          [202, 34567, 0, "ACTIVE"],
+        ] as const) {
+          const player = reference.find(
+            (player) => player.id === store.profiles[index].id,
+          )!;
+          assert.equal(player.buyIn, buyIn);
+          assert.equal(player.cashOut, cashOut);
+          assert.equal(player.status, status);
+          assert.ok(
+            store.sessions.filter(
+              (visit) => visit.playerId === player.id && visit.dayId === day.id,
+            ).length >= 2,
+          );
+        }
+        assert.ok(
+          result.value.includes(
+            '"Dense export player 202","345.67","0","Unsettled","ACTIVE"',
+          ),
+        );
+        assert.ok(result.value.includes('"\t=2+3"'));
+        const orderedTies = store.profiles
+          .slice(-2)
+          .map((profile) => profile.id)
+          .sort();
+        assert.deepEqual(
+          reference.slice(0, 2).map((player) => player.id),
+          orderedTies,
+        );
+        assert.equal(
+          result.value.includes(
+            '"Cash received","' +
+              totalsForDay(store, day.id).cashReceived / 100 +
+              '"',
+          ),
+          true,
+        );
+      },
+    );
+    await t.test(
+      "inconsistent participant projection fails closed instead of returning a partial file",
+      async () => {
+        const inconsistent: Database = {
+          ...db,
+          transaction: (work) =>
+            db.transaction((connection) =>
+              work({
+                async query<T>(sql: string, values?: unknown[]) {
+                  const result = await connection.query<T>(sql, values);
+                  return sql.includes(projectionMarker)
+                    ? { rows: result.rows.slice(1) }
+                    : result;
+                },
+              }),
+            ),
+        };
+        await assert.rejects(
+          readCsv(
+            inconsistent,
+            token,
+            { resource: "report", dayId: store.currentDayId },
+            expectedAccess,
+          ),
+          (error: unknown) =>
+            error instanceof DomainError &&
+            error.status === 503 &&
+            error.message === "Cannot download report. Please try again.",
+        );
+      },
+    );
+    await t.test(
+      "unsafe or nonfinite totals outside the first page cannot be silently exported",
+      async () => {
+        const playerId = store.profiles[398].id;
+        for (const amount of ["9007199254740992", "NaN"]) {
+          await db.query(
+            "INSERT INTO poker_financial_totals(branch_id,scope,entity_id,day_id,buy_in) VALUES('local','PLAYER_DAY',$1,$2,$3::numeric) ON CONFLICT(branch_id,scope,entity_id,day_id) DO UPDATE SET buy_in=EXCLUDED.buy_in",
+            [playerId, store.currentDayId, amount],
+          );
+          await assert.rejects(
+            readCsv(
+              db,
+              token,
+              { resource: "report", dayId: store.currentDayId },
+              expectedAccess,
+            ),
+            (error: unknown) =>
+              error instanceof DomainError && error.status === 503,
+          );
+        }
+        await db.query(
+          "DELETE FROM poker_financial_totals WHERE branch_id='local' AND scope='PLAYER_DAY' AND entity_id=$1 AND day_id=$2",
+          [playerId, store.currentDayId],
+        );
+      },
+    );
+    await t.test(
+      "an over-limit participant count is rejected before loading the full projection",
+      async () => {
+        let projections = 0;
+        const overLimit: Database = {
+          ...db,
+          transaction: (work) =>
+            db.transaction((connection) =>
+              work({
+                async query<T>(sql: string, values?: unknown[]) {
+                  if (sql.includes(projectionMarker)) projections++;
+                  if (
+                    sql.startsWith(
+                      "SELECT count(*)::text AS total FROM poker_profiles p",
+                    )
+                  )
+                    return { rows: [{ total: "50001" }] as unknown as T[] };
+                  return connection.query<T>(sql, values);
+                },
+              }),
+            ),
+        };
+        await assert.rejects(
+          readCsv(
+            overLimit,
+            token,
+            { resource: "report", dayId: store.currentDayId },
+            expectedAccess,
+          ),
+          (error: unknown) =>
+            error instanceof DomainError &&
+            /export is too large/.test(error.message),
+        );
+        assert.equal(projections, 0);
+      },
+    );
+    await t.test(
+      "the complete CSV byte cap still rejects oversized data instead of truncating",
+      async () => {
+        // A fault-injected projection tests the final output guard without a
+        // huge fixture or weakening PostgreSQL's indexed-name size limit.
+        const oversized: Database = {
+          ...db,
+          transaction: (work) =>
+            db.transaction((connection) =>
+              work({
+                async query<T>(sql: string, values?: unknown[]) {
+                  const result = await connection.query<T>(sql, values);
+                  if (!sql.includes(projectionMarker)) return result;
+                  return {
+                    rows: result.rows.map((row, index) =>
+                      index === 0
+                        ? ({
+                            ...(row as Record<string, unknown>),
+                            name: "Q".repeat(4_000_001),
+                          } as T)
+                        : row,
+                    ),
+                  };
+                },
+              }),
+            ),
+        };
+        await assert.rejects(
+          readCsv(
+            oversized,
+            token,
+            { resource: "report", dayId: store.currentDayId },
+            expectedAccess,
+          ),
+          (error: unknown) =>
+            error instanceof DomainError &&
+            /export is too large/.test(error.message),
+        );
       },
     );
   } finally {
