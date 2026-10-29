@@ -19,6 +19,11 @@ import { emptyStore, playersForDay, totalsForDay } from "../domain/selectors";
 import { DomainError } from "../domain/operations";
 import { csv as moneyCsv } from "../domain/money";
 import { displayName } from "../lib/display-name";
+import {
+  checkedExportAccess,
+  sameExportAccess,
+  type ExportAccess,
+} from "../lib/export-access";
 import { requireUser } from "./auth";
 import type { Database, SqlConnection } from "./database";
 import { checkedTotal, populateReadModel } from "./aggregates";
@@ -922,6 +927,7 @@ export async function readCsv(
   db: Database,
   token: string | undefined,
   input: unknown,
+  expected: ExportAccess,
 ) {
   const query = parseReadQuery(input);
   if (!["report", "range"].includes(query.resource))
@@ -931,6 +937,19 @@ export async function readCsv(
       "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
     );
     const user = await requireUser(connection, token);
+    const access: ExportAccess = {
+      actorId: user.id,
+      branchId: user.branchId,
+      role: user.role,
+    };
+    const reviewedAccess = checkedExportAccess(expected);
+    if (!reviewedAccess)
+      throw new DomainError("Reload the report before exporting.");
+    if (!sameExportAccess(access, reviewedAccess))
+      throw new DomainError(
+        "Staff access or venue changed. Refresh the report before exporting.",
+        409,
+      );
     const completeQuery = {
       ...query,
       query: undefined,
@@ -1068,6 +1087,6 @@ export async function readCsv(
       throw new DomainError(
         "This report export is too large. Contact an administrator for a database export.",
       );
-    return { value, filename };
+    return { value, filename, access };
   });
 }

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { testDatabase } from "./helpers/database";
 import { buildSampleStore } from "../scripts/sample-data";
-import { hashPassword, login } from "../src/server/auth";
+import { changeBranch, hashPassword, login } from "../src/server/auth";
 import { importStore } from "../src/server/storage";
 import {
   readCsv,
@@ -18,6 +18,8 @@ import { dashboardSummary } from "../src/domain/dashboard-summary";
 import { approvalNotifications } from "../src/domain/approval-notifications";
 import { DomainError } from "../src/domain/operations";
 import { ledgerImpact } from "../src/domain/ledger-impact";
+import type { ExportAccess } from "../src/lib/export-access";
+import type { Database } from "../src/server/database";
 
 test("read inputs and aggregate conversions reject invalid or unbounded requests", () => {
   for (const input of [
@@ -130,6 +132,11 @@ function sameMoney(actual: unknown, expected: unknown) {
 }
 test("indexed paginated reads preserve complete money, search, context and export semantics", async (t) => {
   const { db, engine, store, actors, token, dealer } = await fixture();
+  const exportAccess: ExportAccess = {
+    actorId: actors.admin.id,
+    branchId: actors.admin.branchId,
+    role: actors.admin.role,
+  };
   try {
     await t.test(
       "bootstrap omits lifetime history but retains exact totals, balances and notification counts",
@@ -527,6 +534,86 @@ test("indexed paginated reads preserve complete money, search, context and expor
       },
     );
     await t.test(
+      "CSV access is required and bound before any operational report reads",
+      async () => {
+        const statements: string[] = [];
+        const observedDb: Database = {
+          ...db,
+          transaction: (work) =>
+            db.transaction((connection) =>
+              work({
+                query<T>(sql: string, values?: unknown[]) {
+                  statements.push(sql);
+                  return connection.query<T>(sql, values);
+                },
+              }),
+            ),
+        };
+        const report = { resource: "report", date: store.days[0].date };
+        async function denied(
+          expected: unknown,
+          status: number,
+          message: string,
+          authenticatedToken = token,
+        ) {
+          statements.length = 0;
+          await assert.rejects(
+            readCsv(
+              observedDb,
+              authenticatedToken,
+              report,
+              expected as ExportAccess,
+            ),
+            (error: unknown) => {
+              assert.ok(error instanceof DomainError);
+              assert.equal(error.status, status);
+              assert.equal(error.message, message);
+              return true;
+            },
+          );
+          assert.match(statements[0], /REPEATABLE READ READ ONLY/);
+          if (authenticatedToken === token)
+            assert.ok(statements.some((sql) => sql.includes("poker_sessions")));
+          assert.equal(
+            statements.some((sql) =>
+              /\b(?:poker_branch_state|poker_profiles|poker_visits|poker_days|poker_ledger|poker_approvals|poker_audit)\b/.test(
+                sql,
+              ),
+            ),
+            false,
+            "identity must be bound before accessing operational records",
+          );
+        }
+        for (const malformed of [
+          undefined,
+          null,
+          {},
+          { ...exportAccess, actorId: "" },
+          { ...exportAccess, branchId: " " },
+          { ...exportAccess, role: "OWNER" },
+          { ...exportAccess, extra: "not-allowed" },
+        ])
+          await denied(malformed, 400, "Reload the report before exporting.");
+        for (const mismatch of [
+          { ...exportAccess, actorId: actors.manager.id },
+          { ...exportAccess, branchId: "other" },
+          { ...exportAccess, role: "MANAGER" },
+          { ...exportAccess, actorId: exportAccess.actorId + " " },
+        ])
+          await denied(
+            mismatch,
+            409,
+            "Staff access or venue changed. Refresh the report before exporting.",
+          );
+        await denied(
+          undefined,
+          401,
+          "Your session has expired. Sign in again.",
+          "forged",
+        );
+      },
+    );
+    await t.test(
       "historical daily reports and complete CSV remain independent of visible page filters",
       async () => {
         const day = store.days[0];
@@ -544,12 +631,24 @@ test("indexed paginated reads preserve complete money, search, context and expor
           ),
         );
         assert.equal(result.total, expected.length);
-        const exported = await readCsv(db, token, {
-          resource: "report",
-          date: day.date,
-          pageSize: 1,
-          query: "no rows should match",
-        });
+        const exported = await readCsv(
+          db,
+          token,
+          {
+            resource: "report",
+            date: day.date,
+            pageSize: 1,
+            page: 999999,
+            query: "no rows should match",
+            status: "OUT",
+            type: "CASH",
+            tag: "VIP",
+            staff: "nobody",
+            action: "nothing",
+          },
+          exportAccess,
+        );
+        assert.deepEqual(exported.access, exportAccess);
         assert.ok(exported.value.includes('"Player","Buy-in","Cash-out"'));
         for (const player of expected)
           assert.ok(
@@ -566,14 +665,78 @@ test("indexed paginated reads preserve complete money, search, context and expor
         });
         sameMoney(range.report, compareReports(store, from, to));
         assert.equal(range.items.length, 1);
-        const csv = await readCsv(db, token, {
-          resource: "range",
-          from,
-          to,
-          query: "nothing",
-          pageSize: 1,
-        });
-        assert.ok(csv.value.includes(store.days.at(-1)!.date));
+        const csv = await readCsv(
+          db,
+          token,
+          {
+            resource: "range",
+            from,
+            to,
+            query: "nothing",
+            pageSize: 1,
+            status: "CLOSED",
+          },
+          exportAccess,
+        );
+        assert.deepEqual(csv.access, exportAccess);
+        for (const day of store.days) assert.ok(csv.value.includes(day.date));
+      },
+    );
+    await t.test(
+      "CSV venue switching rejects stale access and cannot select another venue's day",
+      async () => {
+        const switched = await login(
+          db,
+          "admin",
+          "paginated-read-sample-password",
+        );
+        await changeBranch(db, switched, "other");
+        const day = store.days[0];
+        await assert.rejects(
+          readCsv(
+            db,
+            switched,
+            { resource: "report", dayId: day.id },
+            exportAccess,
+          ),
+          (error: unknown) => {
+            assert.ok(error instanceof DomainError);
+            assert.equal(error.status, 409);
+            assert.equal(
+              error.message,
+              "Staff access or venue changed. Refresh the report before exporting.",
+            );
+            return true;
+          },
+        );
+        const otherAccess = { ...exportAccess, branchId: "other" };
+        await assert.rejects(
+          readCsv(
+            db,
+            switched,
+            { resource: "report", dayId: day.id },
+            otherAccess,
+          ),
+          (error: unknown) =>
+            error instanceof DomainError && error.status === 404,
+        );
+        const empty = await readCsv(
+          db,
+          switched,
+          {
+            resource: "range",
+            from: day.date,
+            to: store.days.at(-1)!.date,
+          },
+          otherAccess,
+        );
+        assert.deepEqual(empty.access, otherAccess);
+        assert.ok(empty.value.includes('"Branch","other"'));
+        assert.ok(
+          empty.value.includes(
+            '"Recorded days","0","Comparison recorded days","0"',
+          ),
+        );
       },
     );
     await t.test(

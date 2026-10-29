@@ -162,6 +162,7 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const mobileOpener = React.useRef<HTMLElement | null>(null)
 
   if (collapsible === "none") {
     return (
@@ -193,6 +194,20 @@ function Sidebar({
             } as React.CSSProperties
           }
           side={side}
+          onOpenAutoFocus={() => {
+            mobileOpener.current =
+              document.activeElement instanceof HTMLElement
+                ? document.activeElement
+                : null
+          }}
+          onCloseAutoFocus={(event) => {
+            const opener = mobileOpener.current
+            mobileOpener.current = null
+            if (opener?.isConnected) {
+              event.preventDefault()
+              opener.focus({ preventScroll: true })
+            }
+          }}
         >
           <SheetHeader className="sr-only">
             <SheetTitle>Sidebar</SheetTitle>
@@ -514,7 +529,8 @@ function SidebarMenuButton({
     />
   )
 
-  if (!tooltip) {
+  // A hidden Radix tooltip still captures Escape above the mobile sheet.
+  if (!tooltip || isMobile || state !== "collapsed") {
     return button
   }
 
@@ -530,7 +546,6 @@ function SidebarMenuButton({
       <TooltipContent
         side="right"
         align="center"
-        hidden={state !== "collapsed" || isMobile}
         {...tooltip}
       />
     </Tooltip>

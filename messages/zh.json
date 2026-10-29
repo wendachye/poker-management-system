@@ -1129,6 +1129,9 @@
     "retry_connection": "重新连接",
     "use_another_account": "使用其他账户",
     "cannot_check_staff_access_right_now_please_try_again": "暂时无法检查员工访问权限。请重试。",
-    "the_active_session_is_for_a_different_account_sign_in_again_to_use_the_requested_account": "当前会话属于其他账户。请重新登录所需的账户。"
+    "the_active_session_is_for_a_different_account_sign_in_again_to_use_the_requested_account": "当前会话属于其他账户。请重新登录所需的账户。",
+    "reload_the_report_before_exporting": "请重新加载报表后再导出。",
+    "staff_access_or_venue_changed_refresh_the_report_before_exporting": "员工权限或场地已更改。请刷新报表后再导出。",
+    "report_download_timed_out_try_exporting_again": "报表下载超时，请重新导出。"
   }
 }

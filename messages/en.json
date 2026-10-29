@@ -1129,6 +1129,9 @@
     "retry_connection": "Retry connection",
     "use_another_account": "Use another account",
     "cannot_check_staff_access_right_now_please_try_again": "Cannot check staff access right now. Please try again.",
-    "the_active_session_is_for_a_different_account_sign_in_again_to_use_the_requested_account": "The active session is for a different account. Sign in again to use the requested account."
+    "the_active_session_is_for_a_different_account_sign_in_again_to_use_the_requested_account": "The active session is for a different account. Sign in again to use the requested account.",
+    "reload_the_report_before_exporting": "Reload the report before exporting.",
+    "staff_access_or_venue_changed_refresh_the_report_before_exporting": "Staff access or venue changed. Refresh the report before exporting.",
+    "report_download_timed_out_try_exporting_again": "Report download timed out. Try exporting again."
   }
 }

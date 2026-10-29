@@ -78,9 +78,11 @@ export function RangeReport({ today }: { today: string }) {
       );
   function download() {
     if (remote.live) {
+      if (!remote.data || remote.loading || remote.error) return;
       void downloadReadCsv(
         { resource: "range", from, to },
         `period-report-${from}-${to}.csv`,
+        remote.data.context,
       ).catch((error: unknown) =>
         s.setError(
           error instanceof Error
@@ -177,7 +179,11 @@ export function RangeReport({ today }: { today: string }) {
             variant="outline"
             className="h-11 sm:h-9"
             onClick={download}
-            disabled={!reports?.current.days.length}
+            disabled={
+              !reports?.current.days.length ||
+              (remote.live &&
+                (remote.loading || !!remote.error || !remote.data))
+            }
           >
             <Download />
             {t("Export period CSV")}

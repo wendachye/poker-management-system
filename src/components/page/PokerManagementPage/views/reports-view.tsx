@@ -161,9 +161,11 @@ export function ReportsView() {
   }
   function download() {
     if (remote.live) {
+      if (!remote.data || remote.loading || remote.error) return;
       void downloadReadCsv(
         { resource: "report", dayId: day?.id, date: selectedDate || undefined },
         "daily-close-" + (day?.date ?? "report") + ".csv",
+        remote.data.context,
       ).catch((error: unknown) =>
         s.setError(
           error instanceof Error
@@ -325,7 +327,10 @@ export function ReportsView() {
                       variant="outline"
                       className="h-11 sm:h-9"
                       onClick={download}
-                      disabled={remote.loading || !!remote.error}
+                      disabled={
+                        remote.live &&
+                        (remote.loading || !!remote.error || !remote.data)
+                      }
                     >
                       <Download />
                       {t("Export daily CSV")}

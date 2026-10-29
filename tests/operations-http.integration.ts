@@ -31,6 +31,12 @@ import { hashPassword } from "../src/server/auth";
 import { databaseFromPool } from "../src/server/database";
 import { migrate } from "../src/server/schema";
 import { importStore, readStore } from "../src/server/storage";
+import {
+  decodeExportAccess,
+  encodeExportAccess,
+  EXPORT_ACCESS_HEADER,
+  type ExportAccess,
+} from "../src/lib/export-access";
 
 // This suite deliberately does not load .env or use DATABASE_URL. The caller
 // must supply a disposable PostgreSQL cluster; existing venue roles and schemas
@@ -343,9 +349,12 @@ class StaffBrowser {
     });
   }
 
-  async csv(route: string) {
+  async csv(route: string, access: ExportAccess) {
     const response = await fetch(origin + route, {
-      headers: { Cookie: this.cookie },
+      headers: {
+        Cookie: this.cookie,
+        [EXPORT_ACCESS_HEADER]: encodeExportAccess(access),
+      },
       signal: AbortSignal.timeout(30_000),
       redirect: "error",
     });
@@ -353,6 +362,10 @@ class StaffBrowser {
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.match(response.headers.get("content-type") ?? "", /^text\/csv/);
     assert.ok(response.headers.get("x-request-id"));
+    assert.deepEqual(
+      decodeExportAccess(response.headers.get(EXPORT_ACCESS_HEADER)),
+      access,
+    );
     return response.text();
   }
 
@@ -1188,6 +1201,11 @@ test(
         assert.equal(report.totals?.expectedCash, 1_004_500);
         const exported = await admin.csv(
           "/api/read?resource=report&dayId=page-day&format=csv&pageSize=1&query=no-visible-matches",
+          {
+            actorId: report.context.user.id,
+            branchId: report.context.branch.id,
+            role: report.context.user.role,
+          },
         );
         assert.ok(exported.includes('"Cash received","45"'));
         for (let index = 0; index < 45; index++)
@@ -1216,6 +1234,119 @@ test(
           totalsForDay((await admin.snapshot()).store).expectedCash,
           964_000,
         );
+      },
+    );
+
+    await t.test(
+      "CSV exports require the reviewed staff, role and venue and never silently follow a shared-cookie change",
+      async () => {
+        const reviewed = await admin.snapshot();
+        const access: ExportAccess = {
+          actorId: reviewed.user.id,
+          branchId: reviewed.branch.id,
+          role: reviewed.user.role,
+        };
+        const date = reviewed.store.days.find(
+          (entry) => entry.id === reviewed.store.currentDayId,
+        )!.date;
+        const daily =
+          "/api/read?resource=report&format=csv&dayId=" +
+          reviewed.store.currentDayId;
+        const period =
+          "/api/read?resource=range&format=csv&from=" + date + "&to=" + date;
+        const headers = { [EXPORT_ACCESS_HEADER]: encodeExportAccess(access) };
+        for (const route of [daily, period]) {
+          for (const header of [undefined, "bad%escape", "%7B%7D"]) {
+            const { response } = await admin.response(
+              route,
+              "GET",
+              undefined,
+              header ? { [EXPORT_ACCESS_HEADER]: header } : undefined,
+            );
+            assert.equal(response.status, 400);
+            assert.equal(response.headers.has(EXPORT_ACCESS_HEADER), false);
+            assert.equal(response.headers.has("content-disposition"), false);
+          }
+          for (const incorrect of [
+            { ...access, actorId: "different-staff" },
+            { ...access, role: "CASHIER" as const },
+            { ...access, branchId: "http-other" },
+          ]) {
+            const { response, data } = await admin.response(
+              route,
+              "GET",
+              undefined,
+              { [EXPORT_ACCESS_HEADER]: encodeExportAccess(incorrect) },
+            );
+            assert.equal(response.status, 409);
+            assert.equal(
+              data.error,
+              "Staff access or venue changed. Refresh the report before exporting.",
+            );
+            assert.equal(response.headers.has(EXPORT_ACCESS_HEADER), false);
+            assert.equal(response.headers.has("content-disposition"), false);
+          }
+          assert.ok(
+            (await admin.csv(route, access)).includes(
+              '"Branch","HTTP Sample Venue"',
+            ),
+          );
+          assert.equal(
+            (
+              await new StaffBrowser().response(
+                route,
+                "GET",
+                undefined,
+                headers,
+              )
+            ).response.status,
+            401,
+          );
+        }
+        await admin.json("/api/branch", "POST", { branchId: "http-other" });
+        assert.equal(
+          (await admin.response(period, "GET", undefined, headers)).response
+            .status,
+          409,
+        );
+        const other = await admin.snapshot();
+        assert.ok(
+          (
+            await admin.csv(period, {
+              actorId: other.user.id,
+              branchId: other.branch.id,
+              role: other.user.role,
+            })
+          ).includes('"Branch","HTTP Other Venue"'),
+        );
+        await admin.json("/api/branch", "POST", { branchId: "http-venue" });
+        await admin.signIn("http.manager");
+        assert.equal(
+          (await admin.response(period, "GET", undefined, headers)).response
+            .status,
+          409,
+        );
+        await admin.signIn("http.admin");
+        await admin.json("/api/branch", "POST", { branchId: "http-venue" });
+        try {
+          await fixturePool.query(
+            "UPDATE poker_memberships SET role='MANAGER' WHERE user_id=$1 AND branch_id=$2",
+            [access.actorId, access.branchId],
+          );
+          assert.equal(
+            (await admin.response(period, "GET", undefined, headers)).response
+              .status,
+            409,
+          );
+        } finally {
+          await fixturePool.query(
+            "UPDATE poker_memberships SET role='ADMIN' WHERE user_id=$1 AND branch_id=$2",
+            [access.actorId, access.branchId],
+          );
+        }
+        const after = await admin.snapshot();
+        assert.equal(after.revision, reviewed.revision);
+        assert.deepEqual(after.store, reviewed.store);
       },
     );
 

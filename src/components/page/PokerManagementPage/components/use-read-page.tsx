@@ -1,31 +1,30 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { ReadPage, ReadQuery } from "@/domain/read-model";
+import type { Snapshot } from "@/domain/model";
 import { prototypeEnabled } from "@/prototype/config";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { useText } from "./shared";
 import { managementRequest } from "@/lib/management-request";
-import { readManagementResponse } from "@/lib/management-response";
-import { readQueryParams } from "@/lib/read-page";
+import { readReportCsv } from "@/lib/report-export";
 
-export async function downloadReadCsv(query: ReadQuery, filename: string) {
-  const params = readQueryParams(query);
-  params.set("format", "csv");
-  const response = await managementRequest("/api/read?" + params, {
-    cache: "no-store",
-    signal: AbortSignal.timeout(45000),
-  });
-  if (!response.ok) await readManagementResponse(response);
-  if (!response.headers.get("content-type")?.startsWith("text/csv"))
-    throw new Error("Cannot download report. Please try again.");
-  const url = URL.createObjectURL(await response.blob());
+export async function downloadReadCsv(
+  query: ReadQuery,
+  filename: string,
+  context: Pick<Snapshot, "user" | "branch">,
+) {
+  const value = await readReportCsv(query, context, managementRequest);
+  const url = URL.createObjectURL(value);
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    link.click();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }
 
 export function useReadPage<T>(query: ReadQuery, enabled = true) {
