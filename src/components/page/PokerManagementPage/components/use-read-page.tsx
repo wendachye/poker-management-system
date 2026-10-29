@@ -9,6 +9,10 @@ import { usePokerManagementContext } from "../PokerManagementProvider";
 import { useText } from "./shared";
 import { managementRequest } from "@/lib/management-request";
 import { readReportCsv } from "@/lib/report-export";
+import {
+  readSearchDelay,
+  type ReadSearchRequest,
+} from "@/lib/read-search-delay";
 
 export async function downloadReadCsv(
   query: ReadQuery,
@@ -63,20 +67,37 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
     key: string;
     data: ReadPage<T>;
   } | null>(null);
-  const [error, setError] = useState("");
+  const [failure, setFailure] = useState<{
+    key: string;
+    message: string;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
+  const previousRequest = useRef<ReadSearchRequest | null>(null);
+  const error = failure?.key === key ? failure.message : "";
   const branchId = snapshot?.branch.id;
   const revision = snapshot?.revision;
   useEffect(() => {
+    const parsed = JSON.parse(key) as ReadQuery;
+    const request = {
+      query: parsed,
+      branchId,
+      revision,
+      attempt,
+      readGeneration,
+      enabled,
+      readIdentity: read,
+      registerReadIdentity: registerRead,
+    };
+    const delay = readSearchDelay(previousRequest.current, request);
+    previousRequest.current = request;
     if (prototypeEnabled || !enabled || !branchId) return;
     const controller = new AbortController();
-    const parsed = JSON.parse(key) as ReadQuery;
-    const unregister = registerRead(parsed);
-    void Promise.resolve().then(async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let unregister = () => {};
+    const load = async () => {
       if (controller.signal.aborted) return;
-      setLoading(true);
-      setError("");
       try {
+        unregister = registerRead(parsed);
         const data = await read<T>(parsed, controller.signal);
         if (!controller.signal.aborted) setResult({ key, data });
       } catch (error) {
@@ -84,14 +105,24 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
           !controller.signal.aborted &&
           !(error instanceof DOMException && error.name === "AbortError")
         )
-          setError(
-            error instanceof Error ? error.message : "Cannot load records.",
-          );
+          setFailure({
+            key,
+            message:
+              error instanceof Error ? error.message : "Cannot load records.",
+          });
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
+    };
+    void Promise.resolve().then(() => {
+      if (controller.signal.aborted) return;
+      setLoading(true);
+      setFailure(null);
+      if (delay) timer = setTimeout(() => void load(), delay);
+      else void load();
     });
     return () => {
+      if (timer !== undefined) clearTimeout(timer);
       controller.abort();
       unregister();
     };
