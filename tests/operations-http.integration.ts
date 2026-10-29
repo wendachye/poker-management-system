@@ -469,17 +469,19 @@ class StaffBrowser {
 
 test(
   "a temporary server-layout outage preserves the session for a read-only recovery",
-  { timeout: 60_000 },
-  async () => {
+  { timeout: 180_000 },
+  async (t) => {
     const browser = new StaffBrowser();
     const before = await browser.signIn("http.admin");
     const diagnostic: {
+      phase: "warmup" | "outage" | "recovery";
       status: number | null;
       hasMeta: boolean;
       hasFlightRedirect: boolean;
       hash: string | null;
       bytes: number;
     } = {
+      phase: "warmup",
       status: null,
       hasMeta: false,
       hasFlightRedirect: false,
@@ -487,6 +489,21 @@ test(
       bytes: 0,
     };
     try {
+      // next dev compiles documents on first use. Finish that work before
+      // injecting the outage so compilation cannot consume its 20s deadline.
+      for (const route of ["/en/tables", "/en/login?unavailable=1"]) {
+        const started = performance.now();
+        const ready = await browser.document(
+          route,
+          AbortSignal.timeout(60_000),
+        );
+        assert.equal(ready.status, 200, `Warm-up failed for ${route}.`);
+        await ready.arrayBuffer();
+        t.diagnostic(
+          `Document warm-up ${route}: ${Math.round(performance.now() - started)} ms.`,
+        );
+      }
+      diagnostic.phase = "outage";
       const holder = await fixturePool.connect();
       let locked = false;
       try {
@@ -528,6 +545,7 @@ test(
         if (locked) await holder.query("ROLLBACK");
         holder.release();
       }
+      diagnostic.phase = "recovery";
       const after = await browser.json<{ user: Snapshot["user"] }>("/api/auth");
       assert.deepEqual(after.user, before.user);
       const loginPage = await browser.document("/en/login?unavailable=1");
@@ -541,6 +559,7 @@ test(
       await loginPage.arrayBuffer();
     } catch (error) {
       // Keep diagnostics useful without retaining HTML, private headers or data.
+      t.diagnostic(JSON.stringify(diagnostic));
       await writeFile(
         path.join(workDirectory, "layout-outage-diagnostic.json"),
         JSON.stringify(diagnostic, null, 2) + "\n",
