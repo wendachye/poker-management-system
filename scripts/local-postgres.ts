@@ -10,6 +10,10 @@ import { databasePoolOptions } from "../src/server/database-options";
 import { localOperationsEnvironment } from "./local-environment";
 import { backupNativeSamples } from "./local-postgres-backup";
 import {
+  maintenancePoolOptions,
+  nativeMaintenanceMessage,
+} from "./local-postgres-maintenance";
+import {
   assertNativeResource,
   assertNativeSecrets,
   initializeNativeSamples,
@@ -28,6 +32,7 @@ const root = process.cwd();
 const identity = nativeLocalIdentity(root);
 let web: ChildProcess | undefined;
 let stopping = false;
+let startupMaintenance = false;
 
 function port(raw: string | undefined, fallback: number) {
   const value = raw ?? String(fallback);
@@ -352,19 +357,23 @@ async function main() {
       await new Promise((done) => setTimeout(done, 500));
     }
   }
+  startupMaintenance = true;
+  const bootstrapUrl = databaseUrl(
+    NATIVE_BOOTSTRAP,
+    secrets.bootstrapPassword,
+    databasePort,
+  );
+  let maintenanceConnectionFailure: string | undefined;
+  const onMaintenanceError = (error: unknown) => {
+    maintenanceConnectionFailure =
+      nativeMaintenanceMessage(error) ??
+      "The local PostgreSQL maintenance connection failed. Retry the launcher after checking the owned database.";
+  };
   const bootstrap = new Pool({
-    connectionString: databaseUrl(
-      NATIVE_BOOTSTRAP,
-      secrets.bootstrapPassword,
-      databasePort,
-    ),
-    max: 1,
-    connectionTimeoutMillis: 5000,
+    connectionString: bootstrapUrl,
+    ...maintenancePoolOptions(bootstrapUrl),
   });
-  bootstrap.on("error", () => {
-    console.error("Local PostgreSQL maintenance connection failed.");
-    process.exitCode = 1;
-  });
+  bootstrap.on("error", onMaintenanceError);
   let initialized;
   try {
     initialized = await initializeNativeSamples(
@@ -374,18 +383,22 @@ async function main() {
   } finally {
     await bootstrap.end();
   }
+  if (maintenanceConnectionFailure)
+    throw new Error(maintenanceConnectionFailure);
   const appUrl = databaseUrl(NATIVE_APP, secrets.appPassword, databasePort);
   const runtime = new Pool({
     connectionString: appUrl,
-    max: 1,
-    connectionTimeoutMillis: 5000,
+    ...maintenancePoolOptions(appUrl),
   });
+  runtime.on("error", onMaintenanceError);
   let verified;
   try {
     verified = await verifyNativeSamples(databaseFromPool(runtime));
   } finally {
     await runtime.end();
   }
+  if (maintenanceConnectionFailure)
+    throw new Error(maintenanceConnectionFailure);
   console.log(
     JSON.stringify(
       {
@@ -449,9 +462,10 @@ process.on("SIGINT", () => void stop(0));
 process.on("SIGTERM", () => void stop(0));
 main().catch((error) => {
   console.error(
-    error instanceof Error
-      ? error.message
-      : "Local PostgreSQL launcher failed.",
+    (startupMaintenance ? nativeMaintenanceMessage(error) : null) ??
+      (error instanceof Error
+        ? error.message
+        : "Local PostgreSQL launcher failed."),
   );
   void stop(1);
 });

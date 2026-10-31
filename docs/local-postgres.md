@@ -35,6 +35,14 @@ Generated database passwords are saved privately under `.local/native-postgres/c
 
 Ctrl+C stops only this launcher's web process tree. The sample PostgreSQL container and its data remain available. Start the same command again to resume. `--database-only` starts/verifies the owned database and exits without starting the web app. No cloud services are contacted. The first Docker image download needs internet access if `postgres:18-alpine` is not cached.
 
+### Bounded startup and verification
+
+The bootstrap and verification connections use one connection per pool, a five-second connection/acquisition limit, five-second lock waits, sixty-second statements, a sixty-five-second client query limit and a fifteen-second idle-transaction limit. These are maintenance budgets for migrations and full-history checks; they are per query or transaction-idle interval, not a total launcher deadline. Routine application and backup connection budgets retain their existing configuration.
+
+The maintenance limits are fixed and ignore routine `DATABASE_*` overrides. Nonempty `PGOPTIONS` and URL timeout/startup overrides are refused before maintenance SQL. Normal startup may already have created or started its owned Docker resources and saved private configuration before this check. The explicit PostgreSQL options preserve each role's configured search path.
+
+If another startup or maintenance operation holds a lock, the launcher stops with retry guidance. Failed initialization rolls back before its connection is released. Verification failures close their pool, and an idle connection failure prevents the launcher from announcing database readiness or starting Next.js. Let the other operation finish or review database activity, then retry the same command. Preserve the existing Docker volume and private configuration; a timeout does not request a reset. Backup mode retains its existing error handling and does not initialize samples.
+
 ## Save and verify a native local backup
 
 While the owned sample PostgreSQL container is already running:

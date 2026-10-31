@@ -35,6 +35,12 @@ import {
   manageOperatorAccount,
   type OperatorAccountCommand,
 } from "../src/server/operator-accounts";
+import { maintenancePoolOptions } from "../scripts/local-postgres-maintenance";
+import {
+  initializeNativeSamples,
+  verifyNativeSamples,
+  type NativeLocalSecrets,
+} from "../scripts/local-postgres-setup";
 
 function testDatabaseUrl(value: string | undefined) {
   const message =
@@ -74,21 +80,7 @@ function quotedSchema(schema: string) {
   return `"${schema}"`;
 }
 
-function poolFor(schema: string, budgets: Record<string, string> = {}) {
-  assert.ok(schema === "pg_catalog" || ownedSchemas.has(schema));
-  const pool = new Pool({
-    connectionString: target.connectionString,
-    ...databasePoolOptions({
-      DATABASE_URL: target.connectionString,
-      DATABASE_POOL_MAX: "1",
-      DATABASE_STATEMENT_TIMEOUT_MS: "15000",
-      DATABASE_LOCK_TIMEOUT_MS: "10000",
-      DATABASE_IDLE_TRANSACTION_TIMEOUT_MS: "30000",
-      ...budgets,
-    }),
-    options: `-c search_path=${schema}`,
-    application_name: `poker-integration-${schema}`,
-  });
+function trackPool(pool: Pool) {
   // Unexpected idle-connection errors fail the test rather than terminating Node.
   pool.on("error", (error) => {
     const code =
@@ -99,6 +91,37 @@ function poolFor(schema: string, budgets: Record<string, string> = {}) {
   });
   pools.push(pool);
   return pool;
+}
+
+function poolFor(schema: string, budgets: Record<string, string> = {}) {
+  assert.ok(schema === "pg_catalog" || ownedSchemas.has(schema));
+  return trackPool(
+    new Pool({
+      connectionString: target.connectionString,
+      ...databasePoolOptions({
+        DATABASE_URL: target.connectionString,
+        DATABASE_POOL_MAX: "1",
+        DATABASE_STATEMENT_TIMEOUT_MS: "15000",
+        DATABASE_LOCK_TIMEOUT_MS: "10000",
+        DATABASE_IDLE_TRANSACTION_TIMEOUT_MS: "30000",
+        ...budgets,
+      }),
+      options: `-c search_path=${schema}`,
+      application_name: `poker-integration-${schema}`,
+    }),
+  );
+}
+
+function maintenancePoolForSource() {
+  const options = maintenancePoolOptions(target.connectionString);
+  return trackPool(
+    new Pool({
+      connectionString: target.connectionString,
+      ...options,
+      options: `${options.options} -c search_path=${sourceSchema}`,
+      application_name: `poker-maintenance-integration-${sourceSchema}`,
+    }),
+  );
 }
 
 const administrator = poolFor("pg_catalog");
@@ -963,6 +986,166 @@ test("server statement timeouts cancel work and allow a subsequent transaction",
   );
   assert.equal(next.rows[0].value, 42);
 });
+
+/** The fallback releases only this test's holder. If the maintenance timeout
+ * regresses, assertions fail safely instead of waiting for its full statement
+ * budget. The same rollback promise is observed and drained in finally.
+ */
+async function withMaintenanceBarrier(sql: string, work: () => Promise<void>) {
+  const holder = await lockPool.connect();
+  let fallback: ReturnType<typeof setTimeout> | undefined;
+  let releasing: Promise<unknown> | undefined;
+  const release = () => (releasing ??= holder.query("ROLLBACK"));
+  try {
+    await holder.query("BEGIN");
+    await holder.query(sql);
+    fallback = setTimeout(() => {
+      void release().catch(() => {});
+    }, 7000);
+    await work();
+  } finally {
+    clearTimeout(fallback);
+    try {
+      await release();
+    } finally {
+      holder.release();
+    }
+  }
+}
+
+async function assertMaintenanceIdle(pid: number) {
+  const state = (
+    await administrator.query<{ state: string; xact_start: Date | null }>(
+      "SELECT state,xact_start FROM pg_stat_activity WHERE pid=$1",
+      [pid],
+    )
+  ).rows[0];
+  assert.equal(state.state, "idle");
+  assert.equal(state.xact_start, null);
+}
+
+test(
+  "native maintenance budgets stop an initializer lock wait before any native role or schema work",
+  { timeout: 20_000 },
+  async () => {
+    await fixture();
+    const before = await createBackup(firstDb);
+    const pool = maintenancePoolForSource();
+    const db = databaseFromPool(pool);
+    assert.equal(
+      (await db.query<{ statement_timeout: string }>("SHOW statement_timeout"))
+        .rows[0].statement_timeout,
+      "1min",
+    );
+    assert.equal(
+      (await db.query<{ lock_timeout: string }>("SHOW lock_timeout")).rows[0]
+        .lock_timeout,
+      "5s",
+    );
+    assert.equal(
+      (
+        await db.query<{ idle_in_transaction_session_timeout: string }>(
+          "SHOW idle_in_transaction_session_timeout",
+        )
+      ).rows[0].idle_in_transaction_session_timeout,
+      "15s",
+    );
+    const pid = await backendPid(pool);
+    const advisorySql = "SELECT pg_advisory_xact_lock(1886350181, 8)";
+    const identitySql =
+      "SELECT current_database() AS database,current_setting('server_version_num') AS version";
+    let advisorySucceeded = false;
+    const guarded: Database = {
+      async query() {
+        throw new Error("Initializer must use the guarded transaction.");
+      },
+      transaction: (work) =>
+        db.transaction((connection) =>
+          work({
+            async query<T>(sql: string, values?: unknown[]) {
+              assert.ok(
+                sql === identitySql || sql === advisorySql,
+                "Only the initializer identity and advisory-lock probes may execute in this fixture.",
+              );
+              const result = await connection.query<T>(sql, values);
+              if (sql === advisorySql) {
+                advisorySucceeded = true;
+                throw new Error(
+                  "Stop after the advisory lock; native role and schema setup is forbidden in this fixture.",
+                );
+              }
+              return result;
+            },
+          }),
+        ),
+    };
+    const secrets: NativeLocalSecrets = {
+      version: 1,
+      workspace: randomBytes(6).toString("hex"),
+      bootstrapPassword: randomBytes(32).toString("hex"),
+      ownerPassword: randomBytes(32).toString("hex"),
+      appPassword: randomBytes(32).toString("hex"),
+    };
+    await withMaintenanceBarrier(advisorySql, async () => {
+      const started = performance.now();
+      await assert.rejects(
+        initializeNativeSamples(guarded, secrets, new Date(), target.database),
+        sqlState("55P03"),
+      );
+      assert.ok(
+        performance.now() - started >= 4000,
+        "The real five-second server lock budget must be exercised.",
+      );
+      assert.equal(advisorySucceeded, false);
+      await assertMaintenanceIdle(pid);
+      assert.equal(
+        (await db.query<{ value: number }>("SELECT 42 AS value")).rows[0].value,
+        42,
+      );
+    });
+    const after = await createBackup(firstDb);
+    assert.deepEqual(
+      { ...after.payload, createdAt: "" },
+      { ...before.payload, createdAt: "" },
+    );
+  },
+);
+
+test(
+  "native integrity maintenance times out on a blocked source table and recovers after rollback",
+  { timeout: 20_000 },
+  async () => {
+    await fixture();
+    const before = await createBackup(firstDb);
+    const pool = maintenancePoolForSource();
+    const db = databaseFromPool(pool);
+    const pid = await backendPid(pool);
+    await withMaintenanceBarrier(
+      `LOCK TABLE ${quotedSchema(sourceSchema)}.poker_profiles IN ACCESS EXCLUSIVE MODE`,
+      async () => {
+        const started = performance.now();
+        await assert.rejects(verifyNativeSamples(db), sqlState("55P03"));
+        assert.ok(
+          performance.now() - started >= 4000,
+          "The source-table lock must exercise the real maintenance budget.",
+        );
+        await assertMaintenanceIdle(pid);
+        assert.equal(
+          (await db.query<{ value: number }>("SELECT 42 AS value")).rows[0]
+            .value,
+          42,
+        );
+      },
+    );
+    const verified = await verifyNativeSamples(db);
+    assert.ok(verified.venueCount > 0);
+    const after = await createBackup(firstDb);
+    assert.deepEqual(
+      { ...after.payload, createdAt: "" },
+      { ...before.payload, createdAt: "" },
+    );
+  },
+);
 
 test("a transaction failure rolls every preceding write back", async () => {
   const branchId = `rollback_${randomBytes(6).toString("hex")}`;
