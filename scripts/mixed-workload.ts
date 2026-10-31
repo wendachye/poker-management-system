@@ -10,6 +10,11 @@ import { verifyDatabaseIntegrity } from "../src/server/integrity";
 import { readPage } from "../src/server/queries";
 import { migrate } from "../src/server/schema";
 import {
+  runMixedReader,
+  waitForMixedCycle,
+  type MixedReaderCoverage,
+} from "./mixed-workload-schedule";
+import {
   errorCategory,
   invariant,
   mixedOptions,
@@ -59,6 +64,14 @@ async function main() {
   let failure: unknown;
   let cleanupFailure = false;
   const measurements: Measurement[] = [];
+  const readerCoverage: {
+    venue: string;
+    staff: string;
+    coverage: MixedReaderCoverage;
+  }[] = [];
+  let financialStartedMs = 0;
+  let financialFinishedMs = 0;
+  let readerFailure: unknown;
   try {
     const server = (
       await admin.query<{ name: string; version: string }>(
@@ -99,40 +112,100 @@ async function main() {
     const runner = mixedRunner(db, measurements);
     const workloadStarted = performance.now();
     readers = venues.flatMap((venue) =>
-      venue.workers
-        .slice(5)
-        .map((worker) =>
-          runner.readWorker(
-            venue,
-            worker,
-            options.readRoundsPerReader,
-            options.readPauseMs,
-            stopReaders.signal,
-          ),
-        ),
+      venue.workers.slice(5).map((worker) => {
+        const coverage: MixedReaderCoverage = {
+          startedMs: 0,
+          finishedMs: 0,
+          completedRounds: 0,
+          stopReason: "failed",
+        };
+        readerCoverage.push({
+          venue: venue.id,
+          staff: worker.staff.id,
+          coverage,
+        });
+        return runMixedReader(
+          {
+            roundLimit: options.readRoundsPerReader,
+            pauseMs: options.readPauseMs,
+            sustained: options.durationSeconds > 0,
+            coverage,
+          },
+          stopReaders.signal,
+          (round) => runner.readRound(venue, worker, round),
+        ).catch((error: unknown) => {
+          readerFailure ??= error;
+          stopReaders.abort();
+          throw error;
+        });
+      }),
     );
     // Observe rejection immediately while the writes are still running.
     const allReaders = Promise.allSettled(readers);
+    financialStartedMs = performance.now();
     const writes = await Promise.allSettled(
-      venues.map(async (venue) => {
-        await runner.send(venue, 0, {
-          kind: "OPEN_DAY",
-          date: "2026-01-02",
-          openingCash: 1_000_000,
-        });
-        for (let cycle = 0; cycle < options.cycles; cycle++) {
-          const lanes = await Promise.allSettled([
-            runner.journey(venue, cycle, false),
-            runner.journey(venue, cycle, true),
-          ]);
-          const failed = lanes.find((row) => row.status === "rejected");
-          if (failed?.status === "rejected") throw failed.reason;
-        }
-      }),
+      venues
+        .map(async (venue) => {
+          await runner.send(venue, 0, {
+            kind: "OPEN_DAY",
+            date: "2026-01-02",
+            openingCash: 1_000_000,
+          });
+          for (let cycle = 0; cycle < options.cycles; cycle++) {
+            if (options.durationSeconds)
+              await waitForMixedCycle(
+                financialStartedMs,
+                cycle,
+                options.cycles,
+                options.durationSeconds * 1000,
+                stopReaders.signal,
+              );
+            invariant(
+              !stopReaders.signal.aborted,
+              "financial-phase-not-cancelled",
+            );
+            const lanes = await Promise.allSettled([
+              runner.journey(venue, cycle, false),
+              runner.journey(venue, cycle, true),
+            ]);
+            const failed = lanes.find((row) => row.status === "rejected");
+            if (failed?.status === "rejected") throw failed.reason;
+          }
+        })
+        .map((work) =>
+          work.catch((error: unknown) => {
+            stopReaders.abort();
+            throw error;
+          }),
+        ),
     );
+    financialFinishedMs = performance.now();
+    if (options.durationSeconds) stopReaders.abort();
+    const readResults = await allReaders;
+    const readersDrainedMs = performance.now();
+    if (readerFailure) throw readerFailure;
     const failedWrite = writes.find((row) => row.status === "rejected");
     if (failedWrite?.status === "rejected") throw failedWrite.reason;
-    const mixedWriteDurationMs = performance.now() - workloadStarted;
+    const failedRead = readResults.find((row) => row.status === "rejected");
+    if (failedRead?.status === "rejected") throw failedRead.reason;
+    const mixedWriteDurationMs = financialFinishedMs - workloadStarted;
+    if (options.durationSeconds) {
+      invariant(
+        financialFinishedMs - financialStartedMs >=
+          options.durationSeconds * 1000,
+        "paced-financial-span-complete",
+      );
+      invariant(
+        readerCoverage.every(
+          ({ coverage }) =>
+            coverage.startedMs <= financialStartedMs &&
+            coverage.finishedMs >= financialFinishedMs &&
+            coverage.completedRounds > 0 &&
+            coverage.stopReason === "phase-ended",
+        ),
+        "readers-cover-financial-phase",
+      );
+    }
     const raceFirst = pool(schema, 1),
       raceSecond = pool(schema, 1),
       holder = pool(schema, 1);
@@ -142,9 +215,6 @@ async function main() {
       races.push(
         await runMixedRaces(db, holder, raceFirst, raceSecond, runner, venue),
       );
-    const readResults = await allReaders;
-    const failedRead = readResults.find((row) => row.status === "rejected");
-    if (failedRead?.status === "rejected") throw failedRead.reason;
     const checks = [];
     for (const venue of venues) {
       const check = await verifyMixedVenue(
@@ -216,6 +286,21 @@ async function main() {
         postgresql: server.version,
       },
       options,
+      readerCoverage: readerCoverage.map(({ venue, staff, coverage }) => ({
+        venue,
+        staff,
+        completedRounds: coverage.completedRounds,
+        stopReason: coverage.stopReason,
+        startedRelativeToFinancialMs: Number(
+          (coverage.startedMs - financialStartedMs).toFixed(3),
+        ),
+        finishedRelativeToFinancialMs: Number(
+          (coverage.finishedMs - financialStartedMs).toFixed(3),
+        ),
+        coveredFinancialPhase:
+          coverage.startedMs <= financialStartedMs &&
+          coverage.finishedMs >= financialFinishedMs,
+      })),
       fixtureStatistics: { analyzedOwnedTables: fixtureTables.length },
       resourceCaps: mixedLimits,
       roleMixPerVenue: { admin: 1, manager: 3, cashier: 6 },
@@ -227,6 +312,12 @@ async function main() {
       },
       timing: {
         mixedWriteDurationMs: Number(mixedWriteDurationMs.toFixed(3)),
+        financialDurationMs: Number(
+          (financialFinishedMs - financialStartedMs).toFixed(3),
+        ),
+        readerDrainMs: Number(
+          (readersDrainedMs - financialFinishedMs).toFixed(3),
+        ),
         scenarioWallDurationIncludingIntegrityMs: Number(
           (performance.now() - workloadStarted).toFixed(3),
         ),
@@ -239,7 +330,7 @@ async function main() {
       retries: 0,
       boundaries: [
         "Native authenticated repository and read functions; excludes HTTP/TLS/browser/rendering.",
-        "Closed-loop bounded sample workload, not sustained service throughput or production acceptance.",
+        "Closed-loop bounded sample workload; optional cycle pacing is excluded from action latencies, not arrival-rate throughput or production acceptance.",
         "Ten authenticated identities per venue; two financial lanes plus five polling/search readers; managers/admin perform independent decisions.",
         "Fixture setup, login, full-history integrity checks and teardown are not ordinary action timings.",
         "Deliberate race timings include an observed native row-lock barrier; only named race conflicts count as expected.",
@@ -280,6 +371,7 @@ async function main() {
           error: failure ? errorCategory(failure) : "CLEANUP_FAILED",
           measurements: summarizeMeasurements(measurements),
           idlePoolErrors,
+          readerCoverage,
           cleanup: {
             ownedSchemaRemoved: !schemaCreated,
             allPoolsClosed: !cleanupFailure,

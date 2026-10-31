@@ -18,6 +18,7 @@ import { databasePoolErrorCode } from "../src/server/database-options";
 import { readOperationalSnapshot, readPage } from "../src/server/queries";
 import { mutate } from "../src/server/repository";
 import { readStore, replaceStore } from "../src/server/storage";
+import { MixedScheduleError } from "./mixed-workload-schedule";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 export const mixedLimits = {
@@ -27,13 +28,22 @@ export const mixedLimits = {
   retainedEntriesPerVenue: capacityLimits.retainedEntriesPerVenue,
   cycles: 10,
   readRoundsPerReader: 100,
+  durationSeconds: 900,
+  sustainedReadRoundsPerReader: 4000,
   readersPerVenue: 5,
 } as const;
 export function mixedOptions(env: Environment) {
-  const integer = (key: string, fallback: number, maximum: number) => {
+  const integer = (
+    key: string,
+    fallback: number,
+    maximum: number,
+    minimum = 1,
+  ) => {
     const raw = env[key] ?? String(fallback);
-    if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > maximum)
-      throw new Error(`${key} must be an integer from 1 to ${maximum}.`);
+    if (!/^\d+$/.test(raw) || Number(raw) < minimum || Number(raw) > maximum)
+      throw new Error(
+        `${key} must be an integer from ${minimum} to ${maximum}.`,
+      );
     return Number(raw);
   };
   const venues = integer("MIXED_VENUES", 2, 5);
@@ -45,19 +55,47 @@ export function mixedOptions(env: Environment) {
     CAPACITY_STAFF_PER_VENUE: "10",
     CAPACITY_ENTRY_COUNTS: String(retained),
   });
+  const durationSeconds = integer(
+    "MIXED_DURATION_SECONDS",
+    0,
+    mixedLimits.durationSeconds,
+    0,
+  );
+  const cycles = integer("MIXED_CYCLES", 2, mixedLimits.cycles);
+  if (durationSeconds && cycles < 2)
+    throw new Error("MIXED_CYCLES must be at least 2 for a paced rehearsal.");
+  const readPauseMs = integer(
+    "MIXED_READ_PAUSE_MS",
+    durationSeconds ? 300 : 25,
+    1000,
+    25,
+  );
+  const readRoundsPerReader = integer(
+    "MIXED_READ_ROUNDS",
+    durationSeconds
+      ? Math.ceil((durationSeconds * 1000) / readPauseMs) + 50
+      : 20,
+    durationSeconds
+      ? mixedLimits.sustainedReadRoundsPerReader
+      : mixedLimits.readRoundsPerReader,
+  );
+  if (
+    durationSeconds &&
+    (readRoundsPerReader - 1) * readPauseMs <= durationSeconds * 1000
+  )
+    throw new Error(
+      "MIXED_READ_ROUNDS and MIXED_READ_PAUSE_MS must cover the requested duration.",
+    );
   return {
     venues,
     staffPerVenue: limits.staffPerVenue,
     workers: limits.workers,
     retainedEntriesPerVenue: retained,
-    cycles: integer("MIXED_CYCLES", 2, mixedLimits.cycles),
-    readRoundsPerReader: integer(
-      "MIXED_READ_ROUNDS",
-      20,
-      mixedLimits.readRoundsPerReader,
-    ),
+    cycles,
+    durationSeconds,
+    readRoundsPerReader,
     readersPerVenue: 5,
-    readPauseMs: 25,
+    readPauseMs,
   };
 }
 export type MixedOptions = ReturnType<typeof mixedOptions>;
@@ -70,6 +108,7 @@ export function invariant(value: unknown, check: string): asserts value {
   if (!value) throw new MixedInvariant(check);
 }
 export function errorCategory(error: unknown) {
+  if (error instanceof MixedScheduleError) return error.category;
   if (error instanceof DomainError) return `HTTP_${error.status}`;
   if (error instanceof MixedInvariant) return `INVARIANT_${error.check}`;
   return databasePoolErrorCode(error);
@@ -524,6 +563,60 @@ export function mixedRunner(db: Database, measurements: Measurement[]) {
       "cash-out-releases-visit",
     );
   }
+  async function readRound(venue: Venue, worker: Worker, round: number) {
+    const queries: [string, ReadQuery][] = [
+      [
+        "read:players-phone-search",
+        { resource: "players", query: "120200000", pageSize: 20 },
+      ],
+      [
+        "read:transactions-history-deep",
+        {
+          resource: "transactions",
+          dayId: `${venue.id}_history`,
+          page: 1_000_000,
+          pageSize: 20,
+        },
+      ],
+      ["read:audit-deep", { resource: "audit", page: 1_000_000, pageSize: 20 }],
+      [
+        "read:current-requests",
+        { resource: "requests", status: "PENDING", pageSize: 20 },
+      ],
+      [
+        "read:players-deep",
+        { resource: "players", page: 1_000_000, pageSize: 20 },
+      ],
+    ];
+    if (worker.staff.role === "CASHIER")
+      queries[2] = [
+        "read:requests-history-deep",
+        {
+          resource: "requests",
+          dayId: `${venue.id}_history`,
+          status: "APPROVED",
+          page: 1_000_000,
+          pageSize: 20,
+        },
+      ];
+    if (round % 6 === 0) {
+      const result = await measure("read:compact-state", () =>
+        snapshot(worker),
+      );
+      invariant(result.branch.id === venue.id, "snapshot-venue-isolation");
+    } else {
+      const [label, query] = queries[(round - 1) % queries.length];
+      const page = await measure(label, () =>
+        readPage(db, worker.token, query),
+      );
+      invariant(
+        page.branchId === venue.id &&
+          page.context.branch.id === venue.id &&
+          page.items.length <= 20,
+        "page-venue-and-size",
+      );
+    }
+  }
   async function readWorker(
     venue: Venue,
     worker: Worker,
@@ -532,61 +625,7 @@ export function mixedRunner(db: Database, measurements: Measurement[]) {
     signal: AbortSignal,
   ) {
     for (let round = 0; round < rounds && !signal.aborted; round++) {
-      const queries: [string, ReadQuery][] = [
-        [
-          "read:players-phone-search",
-          { resource: "players", query: "120200000", pageSize: 20 },
-        ],
-        [
-          "read:transactions-history-deep",
-          {
-            resource: "transactions",
-            dayId: `${venue.id}_history`,
-            page: 1_000_000,
-            pageSize: 20,
-          },
-        ],
-        [
-          "read:audit-deep",
-          { resource: "audit", page: 1_000_000, pageSize: 20 },
-        ],
-        [
-          "read:current-requests",
-          { resource: "requests", status: "PENDING", pageSize: 20 },
-        ],
-        [
-          "read:players-deep",
-          { resource: "players", page: 1_000_000, pageSize: 20 },
-        ],
-      ];
-      if (worker.staff.role === "CASHIER")
-        queries[2] = [
-          "read:requests-history-deep",
-          {
-            resource: "requests",
-            dayId: `${venue.id}_history`,
-            status: "APPROVED",
-            page: 1_000_000,
-            pageSize: 20,
-          },
-        ];
-      if (round % 6 === 0) {
-        const result = await measure("read:compact-state", () =>
-          snapshot(worker),
-        );
-        invariant(result.branch.id === venue.id, "snapshot-venue-isolation");
-      } else {
-        const [label, query] = queries[(round - 1) % queries.length];
-        const page = await measure(label, () =>
-          readPage(db, worker.token, query),
-        );
-        invariant(
-          page.branchId === venue.id &&
-            page.context.branch.id === venue.id &&
-            page.items.length <= 20,
-          "page-venue-and-size",
-        );
-      }
+      await readRound(venue, worker, round);
       if (!signal.aborted)
         await new Promise((resolve) => setTimeout(resolve, pauseMs));
     }
@@ -600,6 +639,7 @@ export function mixedRunner(db: Database, measurements: Measurement[]) {
     request,
     decide,
     journey,
+    readRound,
     readWorker,
   };
 }

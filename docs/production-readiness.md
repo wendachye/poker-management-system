@@ -311,8 +311,10 @@ The current native PostgreSQL database now has a separate empty **Local Operatio
 
 ## Next implementation work
 
+The 1 November local follow-up adds supported, bounded duration pacing and per-reader coverage to the mixed-workload command. Its five-minute, five-venue sample run passed 100 cash/credit journeys, 22,039 reads and independent integrity checks, with every reader covering the financial phase. All 653 isolated tests, TypeScript, ESLint and formatting passed. The existing database's thirteen checked table digests matched, and owned rehearsal resources were removed. See [Capacity plan](capacity-plan.md) for reproduction, measurements and the limits of this local tooling evidence. This follow-up does not add new HTTP/browser or hosted acceptance results.
+
 1. Configure verified host/WAF source protection, auth monitoring and controlled operator access; application login limits and operator safeguards are implemented.
 1. Repeat the implemented v1–v5 upgrade and financial recovery rehearsal against the selected hosted PostgreSQL release, actual application privileges and provider connection path.
 1. Deploy a separate authenticated staging application against the provisioned database, agree recovery targets, configure backup/PITR and monitoring, then demonstrate a timed hosted restore.
-1. Extend the measured three-minute local mixed rehearsal into a longer soak at agreed workload and retention targets; verify replica connection budgets, the intended pooler and actual cloud-region latency. The bounded local runs do not establish endurance or hosted acceptance.
+1. Extend the measured five-minute local mixed rehearsal into a longer soak at agreed workload and retention targets; verify replica connection budgets, the intended pooler and actual cloud-region latency. The bounded local runs do not establish endurance or hosted acceptance.
 1. Complete hosted staff acceptance and approve a controlled venue rollout with a recovery owner.

@@ -77,6 +77,16 @@ The largest measured ordinary p95 was 707 ms for credit check-in including its r
 
 The same disposable PostgreSQL service separately passed 34 native integration checks, 22 complete HTTP workflow checks and fourteen recovery-drill phases. The recovery drill restored its own smaller fixture; it did not restore the 100,000-entry benchmark. Browser desktop/mobile results belong to the candidate's separately frozen CSV-release evidence. Raw measurements, source hashes, harness and reports remain under ignored `.local/local-release-rehearsal-2026-10-29`; the added duration pacing is a local harness, not a change to the shipped workload script's hard limits. Only owned test schemas, roles and disposable service resources were removed.
 
+## Repeatable five-minute local rehearsal on 1 November 2026
+
+The supported mixed-workload script now includes the bounded pacing mode described below. Its local candidate passed the default finite control and a five-minute run on a separate PostgreSQL 18.6 container limited to two CPUs and 1 GiB RAM, with five ordinary database connections. The longer profile again used five venues, fifty staff identities, 100,000 retained entries, ten cash/credit lanes and twenty-five readers.
+
+The financial phase lasted 301.053 seconds. All twenty-five readers covered it completely, completing 877–883 rounds each and 22,039 reads in total; none exhausted the 1,050-round cap. One hundred cash/credit journeys passed with no unexpected errors, idle pool errors or blind retries. The largest ordinary p95 was 477.810 ms for cash-out including its reviewed read. Each venue closed at RM6,030 with zero variance, pending requests or active visits. Independent integrity checks verified 100,275 ledger entries, 100,280 requests, 200,780 audit records, 780 committed operation identifiers and financial-summary parity. Fifteen intended conflicts and five cross-venue denials remained separate from ordinary successful actions.
+
+The candidate also passed 653 isolated tests, including twenty-one focused workload checks, TypeScript, ESLint and formatting. Five command preflight controls refused the venue database, remote targets, query overrides, excessive duration and insufficient reader coverage. Read-only hashes of thirteen authoritative/configuration/account tables in the existing local sample database matched before and after the rehearsal. Owned test schemas, container, anonymous volume and temporary test credentials were removed; the existing local app remained healthy.
+
+Source hashes, raw reports and preservation/cleanup evidence are retained under ignored `.local/mixed-duration-2026-11-01`. The default finite control ran while the unit suite was active; the five-minute profile ran after that suite completed. This remains a paced, closed-loop native repository workload, with the same HTTP/browser, restricted-role, physical-device and hosted limits described above. The five-minute run extends the previous three-minute check; it does not establish long-term endurance or a production SLA. No cloud resources were used.
+
 ## Implemented data and interface changes
 
 1. **Bounded routine reads.** The authenticated read module supplies server search, filters, deterministic page ordering and totals for players, requests, transactions, audit records, visits, receipts and reports. Pages default to twenty records and accept at most fifty. Compact operational state includes the records and exact server summaries needed for current work; history arrives through explicit pages instead of every background refresh. Report exports are separate, complete within their explicit size limits and independent of visible list filters.
@@ -91,7 +101,7 @@ Proposed engineering targets are p95 routine reads and saves within one second, 
 
 Acceptance must also prove no duplicate posting, incorrect balances, lost closing history or cross-venue disclosure. A same-venue burst of independent edits must complete without repeated manual re-entry. The actual daily transaction estimate, retained-history policy, maximum financial amounts, recovery targets and any cross-venue player-credit rules must be settled before final production sizing.
 
-Remaining capacity work includes an extended soak beyond the three-minute local mixed rehearsal, deep-page and search performance at agreed real retention volumes, physical mobile-device rendering and gestures, the intended hosted PostgreSQL version and pooler, connection budgets across replicas, actual cloud-region latency, interrupted-request recovery in that environment and a hosted restore drill. The local correctness, browser and bounded workload checks are prerequisites for those checks.
+Remaining capacity work includes an extended soak beyond the five-minute local mixed rehearsal, deep-page and search performance at agreed real retention volumes, physical mobile-device rendering and gestures, the intended hosted PostgreSQL version and pooler, connection budgets across replicas, actual cloud-region latency, interrupted-request recovery in that environment and a hosted restore drill. The local correctness, browser and bounded workload checks are prerequisites for those checks.
 
 ## Reproduce safely
 
@@ -104,3 +114,23 @@ yarn capacity:baseline
 The command does not load `.env`, use `DATABASE_URL` or connect remotely. It creates and removes only its randomly generated test schemas. Defaults reproduce the five-venue/fifty-worker scenarios; `CAPACITY_*` settings allow smaller scenarios within hard resource caps. It is separate from the routine unit suite and must never target venue records.
 
 A zero exit status means the harness completed and its structural checks held. It does not mean the measured latency, conflict recovery or production capacity met acceptance targets.
+
+### Repeatable paced mixed workflows
+
+`npm run capacity:mixed` uses the same disposable-target guard, fictional staff and owned-schema cleanup. Without duration settings it runs the short finite profile: two venues, two cash/credit cycles, twenty rounds per reader and 25 ms reader pauses. It now reports each reader's actual completed rounds and whether it covered the financial phase; finite readers may finish earlier. Readers drain before the separate controlled races, and the finite profile no longer adds a pause after its final read.
+
+For a paced five-minute local rehearsal, first supply `POSTGRES_TEST_DATABASE_URL` for a separate disposable database, then run in PowerShell:
+
+```powershell
+$env:MIXED_VENUES = "5"
+$env:MIXED_RETAINED_ENTRIES = "20000"
+$env:MIXED_CYCLES = "10"
+$env:MIXED_DURATION_SECONDS = "300"
+npm run capacity:mixed
+```
+
+Duration is opt-in and bounded to 1–900 seconds. It spaces the starts of the existing 2–10 financial cycles across that interval; it does not increase the number of journeys or represent a target arrival rate. Setup, the final journey, reader drain, controlled races, integrity checks and cleanup add to total wall time. Deliberate cycle and reader pauses remain outside action latency samples.
+
+Paced readers default to 300 ms pauses and a round cap derived from the duration plus fifty spare rounds, with a hard maximum of 4,000 rounds per reader. `MIXED_READ_PAUSE_MS` accepts 25–1,000 ms; `MIXED_READ_ROUNDS` can lower or override the cap within the mode's limits. Configuration that cannot cover the requested interval is rejected before a pool is opened. A paced reader that still exhausts its cap before staff actions end fails the run. Every paced reader must start before and finish after the financial phase; completed rounds and relative start/end times appear in the report.
+
+A reader or writer failure stops future cycles and polling pauses. Already started reads and financial journeys drain normally before the owned schema and pools are cleaned up; they are never raced against cancellation or blindly retried. The live local venue database, existing accounts and cloud services are outside this command's accepted targets. Passing this bounded run is local correctness evidence, not an endurance or production-capacity guarantee.

@@ -19,6 +19,7 @@ test("mixed workload bounds venue, worker, financial-cycle and retained-history 
     workers: 20,
     retainedEntriesPerVenue: 1000,
     cycles: 2,
+    durationSeconds: 0,
     readRoundsPerReader: 20,
     readersPerVenue: 5,
     readPauseMs: 25,
@@ -43,6 +44,36 @@ test("mixed workload bounds venue, worker, financial-cycle and retained-history 
     ["MIXED_READ_ROUNDS", " "],
   ])
     assert.throws(() => mixedOptions({ [key]: value }), new RegExp(key));
+});
+
+test("paced mixed workloads bound duration, pacing, and reader coverage before opening a database", () => {
+  const paced = mixedOptions({
+    MIXED_DURATION_SECONDS: "300",
+    MIXED_CYCLES: "10",
+  });
+  assert.equal(paced.durationSeconds, 300);
+  assert.equal(paced.readPauseMs, 300);
+  assert.equal(paced.readRoundsPerReader, 1050);
+  assert.equal(
+    mixedOptions({ MIXED_DURATION_SECONDS: "900" }).readRoundsPerReader,
+    3050,
+  );
+  assert.equal(mixedOptions({ MIXED_READ_PAUSE_MS: "1000" }).readPauseMs, 1000);
+  for (const env of [
+    { MIXED_DURATION_SECONDS: "901" },
+    { MIXED_DURATION_SECONDS: "-1" },
+    { MIXED_DURATION_SECONDS: "1.5" },
+    { MIXED_DURATION_SECONDS: " " },
+    { MIXED_DURATION_SECONDS: "5", MIXED_CYCLES: "1" },
+    { MIXED_DURATION_SECONDS: "900", MIXED_READ_PAUSE_MS: "25" },
+    { MIXED_DURATION_SECONDS: "300", MIXED_READ_ROUNDS: "1000" },
+    { MIXED_DURATION_SECONDS: "300", MIXED_READ_ROUNDS: "1001" },
+    { MIXED_DURATION_SECONDS: "300", MIXED_READ_ROUNDS: "4001" },
+    { MIXED_READ_PAUSE_MS: "24" },
+    { MIXED_READ_PAUSE_MS: "1001" },
+    { MIXED_READ_ROUNDS: "101" },
+  ])
+    assert.throws(() => mixedOptions(env), /MIXED_/);
 });
 
 test("mixed retained fixture passes independent complete financial backup validation", () => {
