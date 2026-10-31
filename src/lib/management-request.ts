@@ -3,8 +3,10 @@ import { requestManagementJson } from "./management-response";
 
 /** Only the separately launched prototype replaces API calls with browser state. */
 export async function managementRequest(path: string, init?: RequestInit) {
+  init?.signal?.throwIfAborted();
   if (prototypeEnabled) {
     const { prototypeRequest } = await import("@/prototype/runtime");
+    init?.signal?.throwIfAborted();
     return prototypeRequest(path, init);
   }
   return fetch(path, init);

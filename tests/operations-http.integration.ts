@@ -40,6 +40,10 @@ import {
 } from "../src/lib/export-access";
 import { authReceipt, loginReceipt } from "../src/lib/management-contracts";
 import {
+  ManagementResponseError,
+  requestManagementJson,
+} from "../src/lib/management-response";
+import {
   checkedLoginIdentity,
   StaffAccountMismatchError,
 } from "../src/lib/login-identity";
@@ -288,7 +292,7 @@ async function waitForHealth(status: number, headers?: Record<string, string>) {
 class StaffBrowser {
   private cookie = "";
 
-  async response(
+  async unreadResponse(
     route: string,
     method = "GET",
     value?: unknown,
@@ -322,6 +326,21 @@ class StaffBrowser {
         }
       }
     }
+    return response;
+  }
+
+  async response(
+    route: string,
+    method = "GET",
+    value?: unknown,
+    extraHeaders?: Record<string, string>,
+  ) {
+    const response = await this.unreadResponse(
+      route,
+      method,
+      value,
+      extraHeaders,
+    );
     return { response, data: (await response.json()) as JsonObject };
   }
 
@@ -2049,6 +2068,220 @@ test(
           ).rows.length,
           0,
         );
+      },
+    );
+
+    await t.test(
+      "a committed financial approval with a held receipt times out uncertain and recovers once through HTTP",
+      async () => {
+        const original = await admin.snapshot();
+        const venueId = "http-receipt-timeout";
+        const submitter = new StaffBrowser();
+        const held: { read?: Promise<unknown> } = {};
+        let releaseReceipt: (() => void) | undefined;
+        let fallback: ReturnType<typeof setTimeout> | undefined;
+        let changedVenue = false;
+        try {
+          const accounts = await admin.json<{ accounts: StaffAccount[] }>(
+            "/api/staff",
+          );
+          const requester = accounts.accounts.find(
+            (account) => account.username === "http.cashier",
+          );
+          assert.ok(requester);
+          await admin.execute(
+            {
+              kind: "CREATE_LOCATION",
+              id: venueId,
+              name: "HTTP Receipt Timeout Venue",
+              timezone: "Asia/Kuala_Lumpur",
+            },
+            "/api/locations",
+          );
+          const fixture: Store = {
+            ...emptyStore(),
+            settings: {
+              ...defaultSettings(),
+              setupCompleted: true,
+              venueName: "HTTP Receipt Timeout Venue",
+            },
+            currentDayId: "receipt-timeout-day",
+            days: [
+              {
+                id: "receipt-timeout-day",
+                date: "2026-11-01",
+                status: "OPEN",
+                openedAt: "2026-11-01T00:00:00.000Z",
+                openingCash: 0,
+                closes: [],
+              },
+            ],
+            tables: [
+              {
+                id: "receipt-timeout-table",
+                name: "Fictional receipt table",
+                dealer: "",
+                status: "OPEN",
+              },
+            ],
+            profiles: [
+              {
+                id: "receipt-timeout-player",
+                name: "Fictional receipt player",
+                phone: "+60190005000",
+                type: "CASH",
+                creditLimit: 0,
+                tags: [],
+              },
+            ],
+            sessions: [
+              {
+                id: "receipt-timeout-visit",
+                playerId: "receipt-timeout-player",
+                dayId: "receipt-timeout-day",
+                tableId: "receipt-timeout-table",
+                seat: 1,
+                status: "ACTIVE",
+                sessionStart: "2026-11-01T00:00:00.000Z",
+              },
+            ],
+          };
+          await importStore(databaseFromPool(fixturePool), venueId, fixture);
+          await fixturePool.query(
+            "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,$2,'CASHIER')",
+            [requester.id, venueId],
+          );
+          await admin.json("/api/branch", "POST", { branchId: venueId });
+          changedVenue = true;
+          await submitter.signIn(requester.username);
+          await submitter.json("/api/branch", "POST", { branchId: venueId });
+          const requested = await submitter.execute({
+            kind: "REQUEST",
+            type: "Buy-in",
+            playerId: "receipt-timeout-player",
+            amount: 50_000,
+            note: "Fictional RM500 held-receipt buy-in",
+          });
+          assert.equal(requested.store.approvals.length, 1);
+          const approvalId = requested.store.approvals[0].id;
+          const reviewed = await admin.snapshot();
+          const checkpoint = {
+            branchId: venueId,
+            actorId: reviewed.user.id,
+            operationId: randomUUID(),
+          };
+          const committed = await admin.unreadResponse("/api/state", "POST", {
+            ...checkpoint,
+            revision: reviewed.revision,
+            command: { kind: "DECIDE", approvalId, decision: "APPROVED" },
+          });
+          assert.equal(committed.status, 200);
+          assert.equal(
+            (
+              await fixturePool.query<{ count: string }>(
+                "SELECT count(*) FROM poker_ledger WHERE branch_id=$1 AND approval_id=$2",
+                [venueId, approvalId],
+              )
+            ).rows[0].count,
+            "1",
+          );
+          const nativeJson = committed.json.bind(committed);
+          let released = false;
+          const receiptGate = new Promise<void>((resolve) => {
+            releaseReceipt = () => {
+              released = true;
+              resolve();
+            };
+          });
+          Object.defineProperty(committed, "json", {
+            value: () => {
+              held.read = receiptGate.then(nativeJson);
+              return held.read;
+            },
+          });
+          // Only the adapter delays the already committed real HTTP receipt.
+          // This does not assert that native fetch ignores an AbortSignal.
+          const signals: AbortSignal[] = [];
+          let acceptedLateReceipt = false;
+          const attempt = requestManagementJson<Snapshot>(
+            async (signal) => {
+              signals.push(signal);
+              return committed;
+            },
+            undefined,
+            10,
+          ).then((value) => {
+            acceptedLateReceipt = true;
+            return value;
+          });
+          // A regression must fail promptly rather than leave a held body behind.
+          fallback = setTimeout(() => releaseReceipt?.(), 2000);
+          await assert.rejects(attempt, (error: unknown) => {
+            assert.ok(error instanceof ManagementResponseError);
+            assert.equal(error.status, 408);
+            assert.equal(error.uncertain, true);
+            return true;
+          });
+          assert.ok(
+            held.read,
+            "The delayed JSON body reader must have started",
+          );
+          assert.equal(released, false);
+          assert.equal(signals.length, 1);
+          assert.equal(signals[0].aborted, true);
+          const confirmed = await admin.json<{
+            status: string;
+            operationId: string;
+            actorId: string;
+            branchId: string;
+            snapshot: Snapshot;
+          }>("/api/operations/recover", "POST", checkpoint);
+          assert.equal(confirmed.status, "saved");
+          assert.equal(confirmed.operationId, checkpoint.operationId);
+          assert.equal(confirmed.actorId, checkpoint.actorId);
+          assert.equal(confirmed.branchId, checkpoint.branchId);
+          assert.equal(
+            confirmed.snapshot.store.transactions.find(
+              (entry) => entry.approvalId === approvalId,
+            )?.cashReceived,
+            50_000,
+          );
+          const counts = (
+            await fixturePool.query<{
+              ledger: string;
+              requests: string;
+              operations: string;
+            }>(
+              `SELECT
+               (SELECT count(*) FROM poker_ledger WHERE branch_id=$1) AS ledger,
+               (SELECT count(*) FROM poker_approvals WHERE branch_id=$1) AS requests,
+               (SELECT count(*) FROM poker_operations WHERE branch_id=$1 AND operation_id=$2) AS operations`,
+              [venueId, checkpoint.operationId],
+            )
+          ).rows[0];
+          assert.deepEqual(counts, {
+            ledger: "1",
+            requests: "1",
+            operations: "1",
+          });
+          releaseReceipt?.();
+          await held.read;
+          await attempt.catch(() => {});
+          assert.equal(acceptedLateReceipt, false);
+          assert.equal(
+            signals.length,
+            1,
+            "No automatic adapter retry is allowed",
+          );
+        } finally {
+          clearTimeout(fallback);
+          releaseReceipt?.();
+          await held.read?.catch(() => {});
+          if (changedVenue)
+            await admin.json("/api/branch", "POST", {
+              branchId: original.branch.id,
+            });
+        }
       },
     );
 

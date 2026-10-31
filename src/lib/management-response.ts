@@ -66,27 +66,73 @@ export async function readManagementResponse<T>(
   return data as T;
 }
 
-/** Bound both the connection and response-body read; callers retain save IDs. */
+/** Bound the caller's wait even if an adapter ignores cancellation. A timed-out
+ * write can still commit; callers retain its save ID for exact recovery.
+ */
 export async function requestManagementJson<T>(
   request: (signal: AbortSignal) => Promise<Response>,
   signal?: AbortSignal | null,
   timeoutMs = 45_000,
 ): Promise<T> {
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 2_147_483_647
+  )
+    throw new RangeError(
+      "Use a positive request timeout within the timer limit.",
+    );
+  const expiresAt = performance.now() + timeoutMs;
   const deadline = new AbortController();
-  const timer = setTimeout(() => deadline.abort(), timeoutMs);
   const combined = signal
     ? AbortSignal.any([signal, deadline.signal])
     : deadline.signal;
+  const timeout = () =>
+    new ManagementResponseError(
+      "The request timed out. Retry the last request to confirm its result.",
+      408,
+      null,
+    );
+  const expired = () =>
+    deadline.signal.aborted || performance.now() >= expiresAt;
+  const checkStopped = () => {
+    if (signal?.aborted) throw signal.reason;
+    if (expired()) {
+      deadline.abort();
+      throw timeout();
+    }
+  };
+  let rejectStop: (reason: unknown) => void = () => {};
+  const stopped = new Promise<never>((_, reject) => {
+    rejectStop = reject;
+  });
+  // A synchronous expiry before the race starts must also remain observed.
+  void stopped.catch(() => {});
+  const onStop = () => rejectStop(combined.reason);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await readManagementResponse<T>(await request(combined));
+    combined.addEventListener("abort", onStop, { once: true });
+    checkStopped();
+    timer = setTimeout(
+      () => deadline.abort(),
+      Math.max(0, expiresAt - performance.now()),
+    );
+    const work = (async () => {
+      checkStopped();
+      const response = await request(combined);
+      checkStopped();
+      const data = await readManagementResponse<T>(response);
+      checkStopped();
+      return data;
+    })();
+    // The losing work stays observed by the race. Its late headers/body cannot
+    // confirm a receipt after the caller has already stopped waiting.
+    const data = await Promise.race([work, stopped]);
+    checkStopped();
+    return data;
   } catch (error) {
     if (signal?.aborted) throw signal.reason;
-    if (deadline.signal.aborted)
-      throw new ManagementResponseError(
-        "The request timed out. Retry the last request to confirm its result.",
-        408,
-        null,
-      );
+    if (expired()) throw timeout();
     if (error instanceof ManagementResponseError) throw error;
     throw new ManagementResponseError(
       "Cannot connect to the service. Check your connection and try again.",
@@ -95,6 +141,7 @@ export async function requestManagementJson<T>(
       true,
     );
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
+    combined.removeEventListener("abort", onStop);
   }
 }
