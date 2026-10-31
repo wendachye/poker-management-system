@@ -59,6 +59,24 @@ This remains one short local run with fifty samples per scenario. It excludes lo
 
 Raw reports are retained locally in `.local/indexed-operations-2026-10-28/capacity-indexed.json` and `capacity-comparison.json`; the accompanying error log is empty. The original reports remain in `.local/production-sizing-2026-10-28` rather than being overwritten.
 
+## Three-minute local mixed rehearsal on 29 October 2026
+
+Candidate `5979b91` completed a deliberately paced local rehearsal against PostgreSQL 18.6, limited to two database CPUs and 1 GiB of database memory, with a five-connection ordinary worker pool. Five venues had ten staff identities and 20,000 retained entries each. Ten cash/credit lanes ran one hundred journeys across ten cycles per venue, while twenty-five reader loops stayed active throughout the 181.420-second financial phase. Readers paused 300 ms between bounded rounds; none reached its 600-round cap. Setup, retained-history seeding, deliberate pacing and controlled race barriers are outside the ordinary action latency measurements.
+
+The run completed 12,991 ordinary reads with no unexpected errors, idle pool errors or blind retries. All five venues closed at RM6,030 with zero variance, debt, pending approvals or active visits. Fifteen deliberately conflicting actions were rejected, and five cross-venue reads were denied. Independent integrity checks covered 100,275 ledger entries, 100,280 requests, 200,780 audit records and 780 committed operation identifiers, including financial-summary parity.
+
+| Ordinary action                   | Samples | p50 ms | p95 ms | p99 ms |
+| --------------------------------- | ------: | -----: | -----: | -----: |
+| Compact state                     |   2,595 |     17 |     83 |    206 |
+| Deep transaction history page     |   2,071 |     55 |    225 |    446 |
+| Buy-in, including reviewed read   |     100 |    203 |    524 |    566 |
+| Approval, including reviewed read |     265 |    169 |    513 |    563 |
+| Cash-out, including reviewed read |     110 |    143 |    465 |    598 |
+
+The largest measured ordinary p95 was 707 ms for credit check-in including its reviewed read; all ordinary action p95 values met the descriptive one-second target for this profile. These are native repository/command measurements with serialized compact receipts, not HTTP or browser throughput. Fifty identities do not imply fifty simultaneous database connections. The test is a bounded three-minute paced rehearsal, not an overnight soak or evidence of cloud capacity. RM100,000 turnover does not determine an entry rate; daily volume and retention targets still need operating evidence.
+
+The same disposable PostgreSQL service separately passed 34 native integration checks, 22 complete HTTP workflow checks and fourteen recovery-drill phases. The recovery drill restored its own smaller fixture; it did not restore the 100,000-entry benchmark. Browser desktop/mobile results belong to the candidate's separately frozen CSV-release evidence. Raw measurements, source hashes, harness and reports remain under ignored `.local/local-release-rehearsal-2026-10-29`; the added duration pacing is a local harness, not a change to the shipped workload script's hard limits. Only owned test schemas, roles and disposable service resources were removed.
+
 ## Implemented data and interface changes
 
 1. **Bounded routine reads.** The authenticated read module supplies server search, filters, deterministic page ordering and totals for players, requests, transactions, audit records, visits, receipts and reports. Pages default to twenty records and accept at most fifty. Compact operational state includes the records and exact server summaries needed for current work; history arrives through explicit pages instead of every background refresh. Report exports are separate, complete within their explicit size limits and independent of visible list filters.
@@ -69,11 +87,11 @@ Raw reports are retained locally in `.local/indexed-operations-2026-10-28/capaci
 
 ## Acceptance gates to agree and verify
 
-Proposed engineering targets are p95 routine reads and saves within one second, no unexpected server errors or timeouts, and fewer than five percent of ordinary mixed-workload actions requiring manual conflict review. The independent-table local burst met those latency/error targets, but ordinary mixed-workload, sustained and hosted acceptance remain unverified. Deliberately competing financial actions must still reject unsafe or duplicate outcomes. Every conflict must preserve entered data and offer a clear recovery path.
+Proposed engineering targets are p95 routine reads and saves within one second, no unexpected server errors or timeouts, and fewer than five percent of ordinary mixed-workload actions requiring manual conflict review. The independent-table burst and the bounded three-minute local mixed rehearsal met those descriptive targets for their measured profiles. Longer soaks and hosted acceptance remain unverified. Deliberately competing financial actions must still reject unsafe or duplicate outcomes. Every conflict must preserve entered data and offer a clear recovery path.
 
 Acceptance must also prove no duplicate posting, incorrect balances, lost closing history or cross-venue disclosure. A same-venue burst of independent edits must complete without repeated manual re-entry. The actual daily transaction estimate, retained-history policy, maximum financial amounts, recovery targets and any cross-venue player-credit rules must be settled before final production sizing.
 
-Remaining capacity work includes a longer mixed cash/credit/approval/closing workload, deep-page and search performance at agreed retention volumes, desktop/mobile rendering, the intended PostgreSQL version and pooler, connection budgets across replicas, actual cloud-region latency, interrupted-request recovery and a hosted restore drill. Local correctness tests and the short benchmark are prerequisites for those checks.
+Remaining capacity work includes an extended soak beyond the three-minute local mixed rehearsal, deep-page and search performance at agreed real retention volumes, physical mobile-device rendering and gestures, the intended hosted PostgreSQL version and pooler, connection budgets across replicas, actual cloud-region latency, interrupted-request recovery in that environment and a hosted restore drill. The local correctness, browser and bounded workload checks are prerequisites for those checks.
 
 ## Reproduce safely
 

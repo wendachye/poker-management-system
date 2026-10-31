@@ -303,10 +303,16 @@ All three require `POSTGRES_TEST_DATABASE_URL` pointing to an explicitly disposa
 
 Before a hosted pilot, run the integration suite against the intended PostgreSQL major version and repeat the staff journeys in staging. Do a separate restore drill, record elapsed recovery time and verify balances, approvals, audit history, operation IDs and fresh login after recovery.
 
+## Local practice release candidate
+
+The 29 October 2026 candidate `5979b91` passed both GitHub CI jobs, a bounded three-minute five-venue rehearsal with 100,000 retained entries and fifty staff identities, 34 native PostgreSQL checks, 22 local HTTP workflow checks and fourteen recovery-drill phases. The timed action percentiles exclude HTTP/browser overhead and deliberate pacing; the detailed limits and measurements are in [Capacity plan](capacity-plan.md).
+
+The current native PostgreSQL database now has a separate empty **Local Operations** practice venue with the existing four active staff roles and copied 5/10 and 10/25 practice rules. Setup is complete; no business day or financial activity was created there. The original practice venues' financial records, settings, credentials and existing roles matched before/after checks. An earlier session-row difference is documented separately in the private setup evidence because its original expiry was not captured. Fresh native backups were saved and verified through isolated restores before and after setup. Follow [Local practice pilot](local-pilot.md) for sign-in, training workflows, backup routines and the acceptance record. Named real staff, real operating policy and hosted rollout remain deferred.
+
 ## Next implementation work
 
 1. Configure verified host/WAF source protection, auth monitoring and controlled operator access; application login limits and operator safeguards are implemented.
 1. Repeat the implemented v1–v5 upgrade and financial recovery rehearsal against the selected hosted PostgreSQL release, actual application privileges and provider connection path.
 1. Deploy a separate authenticated staging application against the provisioned database, agree recovery targets, configure backup/PITR and monitoring, then demonstrate a timed hosted restore.
-1. Verify agreed retention and workload targets with longer mixed cash/credit/approval/closing tests, deep-page/search checks, replica connection budgets, the intended pooler and actual cloud-region latency. The bounded local mixed-workload runs do not cover sustained or hosted acceptance gates.
+1. Extend the measured three-minute local mixed rehearsal into a longer soak at agreed workload and retention targets; verify replica connection budgets, the intended pooler and actual cloud-region latency. The bounded local runs do not establish endurance or hosted acceptance.
 1. Complete hosted staff acceptance and approve a controlled venue rollout with a recovery owner.
