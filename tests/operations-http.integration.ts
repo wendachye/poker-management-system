@@ -39,6 +39,7 @@ import {
   type ExportAccess,
 } from "../src/lib/export-access";
 import { authReceipt, loginReceipt } from "../src/lib/management-contracts";
+import { readReportCsv } from "../src/lib/report-export";
 import {
   ManagementResponseError,
   requestManagementJson,
@@ -1543,6 +1544,174 @@ test(
           totalsForDay((await admin.snapshot()).store).expectedCash,
           964_000,
         );
+      },
+    );
+
+    await t.test(
+      "the CSV reader rejects an oversized held body and cancels a stalled body using real authorized HTTP headers",
+      async () => {
+        const original = await admin.snapshot();
+        try {
+          await admin.json("/api/branch", "POST", { branchId: "http-pages" });
+          const reviewed = await admin.snapshot();
+          const query = {
+            resource: "report" as const,
+            dayId: "page-day",
+            pageSize: 1,
+            query: "no-visible-matches",
+          };
+          const access: ExportAccess = {
+            actorId: reviewed.user.id,
+            branchId: reviewed.branch.id,
+            role: reviewed.user.role,
+          };
+          const expected = await admin.csv(
+            "/api/read?resource=report&dayId=page-day&format=csv&pageSize=1&query=no-visible-matches",
+            access,
+          );
+          const authorized = async (route: string, init: RequestInit) => {
+            assert.equal(init.cache, "no-store");
+            const headers = new Headers(init.headers);
+            assert.deepEqual(
+              decodeExportAccess(headers.get(EXPORT_ACCESS_HEADER)),
+              access,
+            );
+            const response = await admin.unreadResponse(
+              route,
+              "GET",
+              undefined,
+              Object.fromEntries(headers),
+            );
+            assert.equal(response.status, 200);
+            assert.deepEqual(
+              decodeExportAccess(response.headers.get(EXPORT_ACCESS_HEADER)),
+              access,
+            );
+            return response;
+          };
+          const complete = await readReportCsv(query, reviewed, authorized);
+          assert.equal(await complete.text(), expected);
+          assert.ok(expected.includes('"Cash received","45"'));
+          for (let index = 0; index < 45; index++)
+            assert.ok(expected.includes('"Pagination player ' + index + '"'));
+
+          // Native HTTP supplies genuine authentication, reviewed-access receipt
+          // and CSV metadata. Only the following response bodies are replaced;
+          // this does not claim the server emits oversized or stalled exports.
+          const adapted = async (
+            route: string,
+            init: RequestInit,
+            stream: ReadableStream<Uint8Array>,
+          ) => {
+            const response = await authorized(route, init);
+            const headers = new Headers(response.headers);
+            await response.body?.cancel();
+            headers.delete("content-length");
+            headers.delete("content-encoding");
+            return new Response(stream, { status: response.status, headers });
+          };
+          let oversizedController:
+            ReadableStreamDefaultController<Uint8Array> | undefined;
+          let oversizedCancelled = 0;
+          let oversizedEofReleased = false;
+          const oversized = new ReadableStream<Uint8Array>({
+            start(controller) {
+              oversizedController = controller;
+              controller.enqueue(new Uint8Array(2_000_000));
+              controller.enqueue(new Uint8Array(2_000_001));
+            },
+            cancel() {
+              oversizedCancelled++;
+            },
+          });
+          const releaseOversized = () => {
+            if (oversizedCancelled || oversizedEofReleased) return;
+            oversizedEofReleased = true;
+            oversizedController?.close();
+          };
+          const oversizedFallback = setTimeout(releaseOversized, 2000);
+          try {
+            await assert.rejects(
+              readReportCsv(query, reviewed, (route, init) =>
+                adapted(route, init, oversized),
+              ),
+              (error: unknown) => {
+                assert.ok(error instanceof Error);
+                assert.equal(
+                  error.message,
+                  "Cannot download report. Please try again.",
+                );
+                return true;
+              },
+            );
+            assert.equal(oversizedCancelled, 1);
+            assert.equal(oversizedEofReleased, false);
+          } finally {
+            clearTimeout(oversizedFallback);
+            releaseOversized();
+          }
+
+          const caller = new AbortController();
+          const started = Promise.withResolvers<void>();
+          let stalledController:
+            ReadableStreamDefaultController<Uint8Array> | undefined;
+          let stalledCancelled = 0;
+          let stalledEofReleased = false;
+          const stalled = new ReadableStream<Uint8Array>(
+            {
+              start(controller) {
+                stalledController = controller;
+              },
+              pull() {
+                started.resolve();
+              },
+              cancel() {
+                stalledCancelled++;
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          const releaseStalled = () => {
+            if (stalledCancelled || stalledEofReleased) return;
+            stalledEofReleased = true;
+            stalledController?.close();
+          };
+          const stalledFallback = setTimeout(() => {
+            releaseStalled();
+            started.resolve();
+          }, 2000);
+          const pending = readReportCsv(
+            query,
+            reviewed,
+            (route, init) => adapted(route, init, stalled),
+            caller.signal,
+          );
+          void pending.catch(() => {});
+          try {
+            await started.promise;
+            assert.equal(stalledEofReleased, false);
+            caller.abort(
+              new DOMException("Fictional view closed", "AbortError"),
+            );
+            await assert.rejects(pending, (error: unknown) => {
+              assert.ok(error instanceof DOMException);
+              assert.equal(error.name, "AbortError");
+              assert.equal(error.message, "Report download cancelled.");
+              return true;
+            });
+            assert.equal(stalledCancelled, 1);
+            assert.equal(stalledEofReleased, false);
+          } finally {
+            clearTimeout(stalledFallback);
+            caller.abort();
+            releaseStalled();
+            await pending.catch(() => {});
+          }
+        } finally {
+          await admin.json("/api/branch", "POST", {
+            branchId: original.branch.id,
+          });
+        }
       },
     );
 

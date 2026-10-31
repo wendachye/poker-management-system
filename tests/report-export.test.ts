@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import type { Snapshot } from "../src/domain/model";
 import {
   decodeExportAccess,
@@ -40,6 +40,65 @@ function csv(header: string | null = encodeExportAccess(access)) {
   });
 }
 
+function controlledCsv(header: string | null = encodeExportAccess(access)) {
+  const started = deferred<void>();
+  const gate = deferred<void>();
+  let pulls = 0;
+  let wasCancelled = false;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        pulls++;
+        started.resolve();
+        await gate.promise;
+        if (!wasCancelled) {
+          controller.enqueue(new TextEncoder().encode("late report"));
+          controller.close();
+        }
+      },
+      cancel() {
+        wasCancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return {
+    response: new Response(stream, {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        ...(header === null ? {} : { [EXPORT_ACCESS_HEADER]: header }),
+      },
+    }),
+    started: started.promise,
+    finish: () => gate.resolve(),
+    pulls: () => pulls,
+  };
+}
+
+function clock(t: TestContext) {
+  let now = 100;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.mock.method(performance, "now", () => now);
+  t.after(() => {
+    t.mock.restoreAll();
+    t.mock.timers.reset();
+  });
+  return (ms: number) => {
+    now += ms;
+    t.mock.timers.tick(ms);
+  };
+}
+
+function timedOut(error: unknown) {
+  assert.ok(error instanceof ManagementResponseError);
+  assert.equal(error.status, 408);
+  assert.equal(
+    error.message,
+    "Report download timed out. Try exporting again.",
+  );
+  return true;
+}
+
 test("daily and period downloads bind the reviewed access in a header before reading CSV", async () => {
   for (const query of [
     { resource: "report" as const, dayId: "fictional-day" },
@@ -71,20 +130,16 @@ test("an unverified or crossed export receipt never reads its report body", asyn
     encodeExportAccess({ ...access, branchId: "another-venue" }),
     encodeExportAccess({ ...access, role: "MANAGER" }),
   ]) {
-    const response = csv(header);
-    let bodyReads = 0;
-    response.blob = async () => {
-      bodyReads++;
-      throw new Error("private-report-body");
-    };
+    const body = controlledCsv(header);
     await assert.rejects(
-      readReportCsv({ resource: "report" }, context, async () => response),
+      readReportCsv({ resource: "report" }, context, async () => body.response),
       (error: unknown) =>
         error instanceof ManagementResponseError &&
         error.status === 409 &&
         error.message === changed,
     );
-    assert.equal(bodyReads, 0);
+    assert.equal(body.pulls(), 0);
+    body.finish();
   }
 });
 
@@ -171,17 +226,22 @@ test("download failures expose safe messages and reject non-CSV or oversized res
 });
 
 test("an aborted report read reports a download timeout without financial retry advice", async (t) => {
-  t.mock.method(AbortSignal, "timeout", () => AbortSignal.abort());
-  await assert.rejects(
-    readReportCsv({ resource: "report" }, context, async (_, init) => {
-      assert.equal(init.signal!.aborted, true);
-      throw init.signal!.reason;
-    }),
-    (error: unknown) =>
-      error instanceof ManagementResponseError &&
-      error.status === 408 &&
-      error.message === "Report download timed out. Try exporting again.",
+  const advance = clock(t);
+  const waiting = deferred<Response>();
+  let received: AbortSignal | null | undefined;
+  const result = readReportCsv(
+    { resource: "report" },
+    context,
+    async (_, init) => {
+      received = init.signal;
+      return waiting.promise;
+    },
   );
+  const rejected = assert.rejects(result, timedOut);
+  advance(45_000);
+  assert.equal(received?.aborted, true);
+  waiting.resolve(csv());
+  await rejected;
 });
 
 function deferred<T>() {
@@ -221,7 +281,6 @@ test("caller cancellation reaches the request and rejects a late ignored respons
   const caller = new AbortController();
   const waiting = deferred<Response>();
   let received: AbortSignal | null | undefined;
-  let bodyReads = 0;
   const result = readReportCsv(
     { resource: "report" },
     context,
@@ -234,77 +293,48 @@ test("caller cancellation reaches the request and rejects a late ignored respons
   assert.ok(received instanceof AbortSignal);
   caller.abort(new Error("private-cancellation-reason"));
   assert.equal(received.aborted, true);
-  const response = csv();
-  response.blob = async () => {
-    bodyReads++;
-    return new Blob(["must not be read"]);
-  };
-  waiting.resolve(response);
+  const body = controlledCsv();
+  waiting.resolve(body.response);
   await assert.rejects(result, cancelled);
-  assert.equal(bodyReads, 0);
+  assert.equal(body.pulls(), 0);
+  body.finish();
 });
 
 test("caller cancellation rejects a held CSV body that completes after the view leaves", async () => {
   const caller = new AbortController();
-  const body = deferred<Blob>();
-  const started = deferred<void>();
-  const response = csv();
-  response.blob = () => {
-    started.resolve();
-    return body.promise;
-  };
+  const body = controlledCsv();
   const result = readReportCsv(
     { resource: "report" },
     context,
-    async () => response,
+    async () => body.response,
     caller.signal,
   );
-  await started.promise;
+  await body.started;
   caller.abort();
-  body.resolve(new Blob(["late report"]));
+  body.finish();
   await assert.rejects(result, cancelled);
 });
 
 test("an ignored deadline still refuses a late response or late CSV body with the fixed timeout message", async (t) => {
+  const advance = clock(t);
   for (const phase of ["headers", "body"]) {
-    const deadline = new AbortController();
-    const timeout = t.mock.method(
-      AbortSignal,
-      "timeout",
-      () => deadline.signal,
-    );
     const waiting = deferred<Response>();
-    const body = deferred<Blob>();
-    const started = deferred<void>();
-    const response = csv();
-    response.blob = () => {
-      started.resolve();
-      return body.promise;
-    };
+    const body = controlledCsv();
     const result = readReportCsv({ resource: "report" }, context, async () =>
-      phase === "headers" ? waiting.promise : response,
+      phase === "headers" ? waiting.promise : body.response,
     );
-    if (phase === "body") await started.promise;
-    deadline.abort();
-    waiting.resolve(response);
-    body.resolve(new Blob(["late report"]));
-    await assert.rejects(result, (error: unknown) => {
-      assert.ok(error instanceof ManagementResponseError);
-      assert.equal(error.status, 408);
-      assert.equal(
-        error.message,
-        "Report download timed out. Try exporting again.",
-      );
-      return true;
-    });
-    timeout.mock.restore();
+    const rejected = assert.rejects(result, timedOut);
+    if (phase === "body") await body.started;
+    advance(45_000);
+    waiting.resolve(body.response);
+    body.finish();
+    await rejected;
   }
 });
 
 test("caller cancellation remains a safe AbortError when the deadline has also expired", async (t) => {
+  const advance = clock(t);
   const caller = new AbortController();
-  const deadline = new AbortController();
-  t.mock.method(AbortSignal, "timeout", () => deadline.signal);
   const waiting = deferred<Response>();
   const result = readReportCsv(
     { resource: "report" },
@@ -312,8 +342,9 @@ test("caller cancellation remains a safe AbortError when the deadline has also e
     async () => waiting.promise,
     caller.signal,
   );
+  const rejected = assert.rejects(result, cancelled);
   caller.abort(new Error("private-cancellation-reason"));
-  deadline.abort();
+  advance(45_000);
   waiting.resolve(csv());
-  await assert.rejects(result, cancelled);
+  await rejected;
 });
