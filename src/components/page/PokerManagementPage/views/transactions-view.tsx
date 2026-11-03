@@ -47,6 +47,7 @@ import {
 } from "../components/shared";
 import { entryTypes as types } from "../components/operation-dialogs";
 import { ListToolbar } from "../components/list-toolbar";
+import { useListBrowsing } from "../components/use-list-browsing";
 import { RecordTable } from "../components/record-list";
 import { RowActions, type RowAction } from "../components/row-actions";
 export function TransactionsView() {
@@ -58,6 +59,10 @@ export function TransactionsView() {
   const val = (key: string, fallback = "") => s.draft("tx." + key, fallback),
     set = (key: string, v: string) => s.setDraft("tx." + key, v);
   const status = val("status", "PENDING") as RequestView;
+  const browsing = useListBrowsing(
+    status === "APPROVED" ? "transactions" : "requests",
+    "tx",
+  );
   const requestFilters = {
     userId: s.user?.id,
     dayId: val("day", s.store.currentDayId ?? ""),
@@ -121,17 +126,20 @@ export function TransactionsView() {
     type: requestFilters.type,
     status,
     page: requestedPage,
+    ...browsing.query,
   });
+  const resultsReady = !remote.live || (!!remote.data && !remote.error);
+  const hasCriteria = activeFilters.length > 0 || !!val("search").trim();
   const requests = remote.live
     ? status === "APPROVED"
       ? []
-      : ((remote.data?.items ?? []) as ApprovalRequest[])
-    : localRequests;
+      : ((resultsReady ? remote.data!.items : []) as ApprovalRequest[])
+    : browsing.sortRows(localRequests);
   const transactions = remote.live
     ? status === "APPROVED"
-      ? ((remote.data?.items ?? []) as Transaction[])
+      ? ((resultsReady ? remote.data!.items : []) as Transaction[])
       : []
-    : localTransactions;
+    : browsing.sortRows(localTransactions);
   const total = remote.live
     ? (remote.data?.total ?? 0)
     : status === "APPROVED"
@@ -141,11 +149,14 @@ export function TransactionsView() {
     ? (remote.data?.page ?? requestedPage)
     : Math.min(
         Number(val("page", "0")),
-        Math.max(0, Math.ceil(transactions.length / 20) - 1),
+        Math.max(0, Math.ceil(total / browsing.pageSize) - 1),
       );
   const visibleTransactions = remote.live
     ? transactions
-    : transactions.slice(page * 20, page * 20 + 20);
+    : transactions.slice(
+        page * browsing.pageSize,
+        (page + 1) * browsing.pageSize,
+      );
   const quickActions: RowAction[] = [
     ...(s.user?.role !== "DEALER"
       ? ([
@@ -385,7 +396,8 @@ export function TransactionsView() {
             }}
             activeFilters={activeFilters}
             onClear={clearFilters}
-            resultCount={total}
+            resultCount={resultsReady ? total : null}
+            loading={remote.loading && !resultsReady}
             primaryFilters={
               <Field label="Business day">
                 <Select
@@ -421,8 +433,9 @@ export function TransactionsView() {
               />
             </Field>
           </ListToolbar>
+          {browsing.controls}
         </div>
-        <ReadStatus state={remote} />
+        <ReadStatus state={remote} showLoading={resultsReady} />
         <Tabs
           value={status}
           onValueChange={(v) => {
@@ -448,40 +461,41 @@ export function TransactionsView() {
                   className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] leading-4 sm:h-9 sm:flex-row sm:gap-1.5 sm:px-3 sm:text-sm"
                 >
                   <span>{t(label)}</span>
-                  <span className="text-[10px] tabular-nums sm:text-xs">
-                    (
-                    {remote.live
-                      ? (remote.data?.counts[value] ?? 0)
-                      : filterRequests(s.store, {
-                          ...requestFilters,
-                          view: value as RequestView,
-                        }).length}
-                    )
-                  </span>
+                  {(!remote.live || resultsReady) && (
+                    <span className="text-[10px] tabular-nums sm:text-xs">
+                      (
+                      {remote.live
+                        ? (remote.data?.counts[value] ?? 0)
+                        : filterRequests(s.store, {
+                            ...requestFilters,
+                            view: value as RequestView,
+                          }).length}
+                      )
+                    </span>
+                  )}
                 </TabsTrigger>
               ))}
             </TabsList>
           </div>
           <TabsContent value="APPROVED" className="space-y-3">
-            {!transactions.length ? (
+            {!resultsReady ? null : !transactions.length ? (
               <EmptyState
                 title={
-                  s.store.transactions.length
+                  hasCriteria
                     ? "No transactions match these filters."
                     : "No approved transactions yet"
                 }
                 description={
-                  s.store.transactions.length
+                  hasCriteria
                     ? "Try another search or clear the filters."
                     : "Approved transactions will appear here. Check the approval queue for pending requests."
                 }
               >
-                {!!s.store.transactions.length &&
-                  (activeFilters.length > 0 || !!val("search").trim()) && (
-                    <Button variant="outline" onClick={clearFilters}>
-                      {t("Clear all")}
-                    </Button>
-                  )}
+                {hasCriteria && (
+                  <Button variant="outline" onClick={clearFilters}>
+                    {t("Clear all")}
+                  </Button>
+                )}
               </EmptyState>
             ) : (
               <>
@@ -599,9 +613,11 @@ export function TransactionsView() {
             <div className="px-3 pb-3 sm:px-4 sm:pb-4">
               <Pager
                 page={page}
-                total={total}
+                total={resultsReady ? total : null}
+                loading={remote.loading && !resultsReady}
                 setPage={(p) => set("page", String(p))}
                 label="Transaction pagination"
+                {...browsing.pager}
               />
             </div>
           </TabsContent>
@@ -613,19 +629,24 @@ export function TransactionsView() {
             >
               <ApprovalQueue
                 key={view + JSON.stringify(requestFilters)}
-                requests={requests}
+                requests={
+                  remote.live
+                    ? requests
+                    : requests.slice(
+                        page * browsing.pageSize,
+                        (page + 1) * browsing.pageSize,
+                      )
+                }
                 pendingView={view === "PENDING"}
                 embedded
-                loading={remote.loading || !!remote.error}
-                pagination={
-                  remote.live
-                    ? {
-                        page,
-                        total,
-                        setPage: (p: number) => set("page", String(p)),
-                      }
-                    : undefined
-                }
+                loading={!resultsReady}
+                pagination={{
+                  page,
+                  total: resultsReady ? total : null,
+                  loading: remote.loading && !resultsReady,
+                  setPage: (p: number) => set("page", String(p)),
+                  ...browsing.pager,
+                }}
               />
             </TabsContent>
           ))}

@@ -7,7 +7,8 @@ import {
   usePokerManagementState,
 } from "./usePokerManagementState";
 
-const PokerManagementContext = createContext<PokerManagementState | null>(null);
+export const PokerManagementContext =
+  createContext<PokerManagementState | null>(null);
 
 export function PokerManagementProvider({
   children,

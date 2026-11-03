@@ -21,11 +21,13 @@ import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
 import type { Day, Totals } from "@/domain/model";
 import { useReadCsvDownload, ReadStatus, useReadPage } from "./use-read-page";
+import { useListBrowsing } from "./use-list-browsing";
 
 export function RangeReport({ today }: { today: string }) {
   const s = usePokerManagementContext(),
     t = useText();
   const csvDownload = useReadCsvDownload();
+  const browsing = useListBrowsing("range", "range");
   const preset = s.draft("range.preset", "week");
   const defaults = reportPreset(preset, today);
   const from =
@@ -42,6 +44,7 @@ export function RangeReport({ today }: { today: string }) {
     query,
     status,
     page: requestedPage,
+    ...browsing.query,
   });
   function clearFilters() {
     for (const key of ["search", "status", "page"])
@@ -55,7 +58,9 @@ export function RangeReport({ today }: { today: string }) {
     s.setDraft("range.page", "0");
   }
   let reports: ReturnType<typeof compareReports> | null = remote.live
-      ? (remote.data?.report ?? null)
+      ? remote.loading || remote.error
+        ? null
+        : (remote.data?.report ?? null)
       : null,
     error = "";
   try {
@@ -66,16 +71,20 @@ export function RangeReport({ today }: { today: string }) {
   }
   const filteredDays = remote.live
     ? (remote.data?.items ?? [])
-    : (reports?.current.days ?? []).filter(
-        (day) =>
-          (!status || day.status === status) && day.date.includes(query.trim()),
+    : browsing.sortRows(
+        (reports?.current.days ?? []).filter(
+          (day) =>
+            (!status || day.status === status) &&
+            day.date.includes(query.trim()),
+        ),
       );
+  const resultsReady = !remote.live || (!!remote.data && !remote.error);
   const total = remote.live ? (remote.data?.total ?? 0) : filteredDays.length;
   const page = remote.live
     ? (remote.data?.page ?? requestedPage)
     : Math.min(
         Math.max(0, Number(s.draft("range.page")) || 0),
-        Math.max(0, Math.ceil(filteredDays.length / 20) - 1),
+        Math.max(0, Math.ceil(filteredDays.length / browsing.pageSize) - 1),
       );
   function download() {
     if (remote.live) {
@@ -239,7 +248,7 @@ export function RangeReport({ today }: { today: string }) {
             <AlertDescription>{t(error)}</AlertDescription>
           </Alert>
         )}
-        <ReadStatus state={remote} />
+        <ReadStatus state={remote} showLoading={resultsReady} />
         {reports && (
           <>
             <div className="flex flex-wrap gap-2 text-sm">
@@ -371,144 +380,151 @@ export function RangeReport({ today }: { today: string }) {
               ]}
             />
           </Panel>
-          <Panel
-            compact
-            title="Daily breakdown"
-            description="Each cash balance belongs to its own business day."
-          >
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {t(
-                "List filters only change the rows shown. Report totals and CSV exports include all records in the selected report.",
-              )}
-            </p>
-            <ListToolbar
-              compact
-              search={query}
-              searchLabel="Search daily breakdown"
-              searchPlaceholder="Search by business date"
-              onSearchChange={(value) => {
-                s.setDraft("range.search", value);
-                s.setDraft("range.page", "0");
-              }}
-              activeFilters={
-                status
-                  ? [
-                      {
-                        key: "status",
-                        label: t("Status") + ": " + t(status),
-                        onRemove: () => {
-                          s.setDraft("range.status", "");
-                          s.setDraft("range.page", "0");
-                        },
-                      },
-                    ]
-                  : []
-              }
-              onClear={clearFilters}
-              resultCount={total}
-            >
-              <Field label="Status">
-                <Select
-                  value={status}
-                  onValueChange={(value) => {
-                    s.setDraft("range.status", value);
-                    s.setDraft("range.page", "0");
-                  }}
-                  options={[
-                    { value: "", label: "All statuses" },
-                    { value: "OPEN", label: "OPEN" },
-                    { value: "CLOSED", label: "CLOSED" },
-                  ]}
-                />
-              </Field>
-            </ListToolbar>
-            {!filteredDays.length ? (
-              <EmptyState title="No matching business days">
-                <Button variant="outline" onClick={clearFilters}>
-                  {t("Clear all")}
-                </Button>
-              </EmptyState>
-            ) : (
-              <RecordList
-                compact
-                wide
-                label="Daily breakdown"
-                rows={
-                  remote.live
-                    ? filteredDays
-                    : filteredDays.slice(page * 20, page * 20 + 20)
-                }
-                rowKey={(d) => d.id}
-                columns={[
-                  {
-                    label: "Business date",
-                    render: (d) => (
-                      <Button
-                        variant="link"
-                        className="h-11 justify-start px-0 sm:h-9"
-                        aria-label={t("View daily report") + ": " + d.date}
-                        onClick={() => {
-                          s.setDraft("report.day", d.id);
-                          s.clearDraft("report.selectedDate");
-                          for (const key of [
-                            "playerSearch",
-                            "playerStatus",
-                            "playerPage",
-                            "closeSearch",
-                            "closePage",
-                          ]) {
-                            s.setDraft("report." + key, "");
-                          }
-                          s.setDraft("report.mode", "day");
-                        }}
-                      >
-                        {d.date}
-                      </Button>
-                    ),
-                  },
-                  {
-                    label: "Status",
-                    render: (d) => (
-                      <Badge tone={d.status === "OPEN" ? "green" : "neutral"}>
-                        {d.status}
-                      </Badge>
-                    ),
-                  },
-                  {
-                    label: "Cash received",
-                    align: "right",
-                    render: (d) => money(d.totals.cashReceived),
-                  },
-                  {
-                    label: "Cash payout",
-                    align: "right",
-                    render: (d) => money(d.totals.cashPayout),
-                  },
-                  {
-                    label: "Expected cash",
-                    align: "right",
-                    render: (d) => money(d.totals.expectedCash),
-                  },
-                  {
-                    label: "Variance",
-                    align: "right",
-                    render: (d) =>
-                      d.totals.variance === null
-                        ? "—"
-                        : money(d.totals.variance),
-                  },
-                ]}
-              />
-            )}
-            <Pager
-              label="Daily breakdown"
-              page={page}
-              total={total}
-              setPage={(value) => s.setDraft("range.page", String(value))}
-            />
-          </Panel>
         </>
       )}
+      <Panel
+        compact
+        title="Daily breakdown"
+        description="Each cash balance belongs to its own business day."
+      >
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t(
+            "List filters only change the rows shown. Report totals and CSV exports include all records in the selected report.",
+          )}
+        </p>
+        <ListToolbar
+          compact
+          search={query}
+          searchLabel="Search daily breakdown"
+          searchPlaceholder="Search by business date"
+          onSearchChange={(value) => {
+            s.setDraft("range.search", value);
+            s.setDraft("range.page", "0");
+          }}
+          activeFilters={
+            status
+              ? [
+                  {
+                    key: "status",
+                    label: t("Status") + ": " + t(status),
+                    onRemove: () => {
+                      s.setDraft("range.status", "");
+                      s.setDraft("range.page", "0");
+                    },
+                  },
+                ]
+              : []
+          }
+          onClear={clearFilters}
+          resultCount={resultsReady ? total : null}
+          loading={remote.loading && !resultsReady}
+        >
+          <Field label="Status">
+            <Select
+              value={status}
+              onValueChange={(value) => {
+                s.setDraft("range.status", value);
+                s.setDraft("range.page", "0");
+              }}
+              options={[
+                { value: "", label: "All statuses" },
+                { value: "OPEN", label: "OPEN" },
+                { value: "CLOSED", label: "CLOSED" },
+              ]}
+            />
+          </Field>
+        </ListToolbar>
+        {browsing.controls}
+        {remote.loading ||
+        remote.error ||
+        error ? null : !filteredDays.length ? (
+          <EmptyState title="No matching business days">
+            <Button variant="outline" onClick={clearFilters}>
+              {t("Clear all")}
+            </Button>
+          </EmptyState>
+        ) : (
+          <RecordList
+            compact
+            wide
+            label="Daily breakdown"
+            rows={
+              remote.live
+                ? filteredDays
+                : filteredDays.slice(
+                    page * browsing.pageSize,
+                    (page + 1) * browsing.pageSize,
+                  )
+            }
+            rowKey={(d) => d.id}
+            columns={[
+              {
+                label: "Business date",
+                render: (d) => (
+                  <Button
+                    variant="link"
+                    className="h-11 justify-start px-0 sm:h-9"
+                    aria-label={t("View daily report") + ": " + d.date}
+                    onClick={() => {
+                      s.setDraft("report.day", d.id);
+                      s.clearDraft("report.selectedDate");
+                      for (const key of [
+                        "playerSearch",
+                        "playerStatus",
+                        "playerPage",
+                        "closeSearch",
+                        "closePage",
+                      ]) {
+                        s.setDraft("report." + key, "");
+                      }
+                      s.setDraft("report.mode", "day");
+                    }}
+                  >
+                    {d.date}
+                  </Button>
+                ),
+              },
+              {
+                label: "Status",
+                render: (d) => (
+                  <Badge tone={d.status === "OPEN" ? "green" : "neutral"}>
+                    {d.status}
+                  </Badge>
+                ),
+              },
+              {
+                label: "Cash received",
+                align: "right",
+                render: (d) => money(d.totals.cashReceived),
+              },
+              {
+                label: "Cash payout",
+                align: "right",
+                render: (d) => money(d.totals.cashPayout),
+              },
+              {
+                label: "Expected cash",
+                align: "right",
+                render: (d) => money(d.totals.expectedCash),
+              },
+              {
+                label: "Variance",
+                align: "right",
+                render: (d) =>
+                  d.totals.variance === null ? "—" : money(d.totals.variance),
+              },
+            ]}
+          />
+        )}
+        <Pager
+          label="Daily breakdown"
+          page={page}
+          total={resultsReady ? total : null}
+          loading={remote.loading && !resultsReady}
+          setPage={(value) => s.setDraft("range.page", String(value))}
+          {...browsing.pager}
+        />
+      </Panel>
     </div>
   );
 }

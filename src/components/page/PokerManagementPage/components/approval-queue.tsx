@@ -55,7 +55,14 @@ export function ApprovalQueue({
   compact?: boolean;
   embedded?: boolean;
   pendingView?: boolean;
-  pagination?: { page: number; total: number; setPage: (page: number) => void };
+  pagination?: {
+    page: number;
+    total: number | null;
+    setPage: (page: number) => void;
+    pageSize?: number;
+    onPageSizeChange?: (pageSize: number) => void;
+    loading?: boolean;
+  };
   loading?: boolean;
 }) {
   const s = usePokerManagementContext(),
@@ -68,6 +75,7 @@ export function ApprovalQueue({
   const [receipt, setReceipt] = useState<Transaction | null>(null);
   const [openingReview, setOpeningReview] = useState(false);
   const contextRequest = useRef<AbortController | null>(null);
+  const queueFocus = useRef<HTMLDivElement | null>(null);
   useEffect(() => () => contextRequest.current?.abort(), []);
   const entries = requests ?? s.pendingApprovals;
   const emptyPendingQueue =
@@ -298,7 +306,13 @@ export function ApprovalQueue({
     );
   }
   const content = (
-    <div className="@container/approvals min-w-0 space-y-3">
+    <div
+      ref={queueFocus}
+      tabIndex={-1}
+      role="region"
+      aria-label={t("Approval queue")}
+      className="@container/approvals min-w-0 space-y-3"
+    >
       {!entries.length && !loading && (
         <EmptyState
           title={
@@ -435,12 +449,16 @@ export function ApprovalQueue({
       ) : (
         <Pager
           page={page}
-          total={pagination?.total ?? entries.length}
+          total={pagination ? pagination.total : entries.length}
+          loading={pagination?.loading ?? loading}
           setPage={pagination?.setPage ?? setPage}
           label="Request pagination"
+          pageSize={pagination?.pageSize}
+          onPageSizeChange={pagination?.onPageSizeChange}
         />
       )}
       <Modal
+        key={request?.id ?? "closed-review"}
         open={!!request}
         onOpenChange={(open) => {
           if (!open) {
@@ -450,6 +468,7 @@ export function ApprovalQueue({
         }}
         title={reviewable ? "Review request" : "Request details"}
         description={request ? subject(request) : "Request details"}
+        fallbackFocus={() => queueFocus.current}
       >
         {request && reviewProgress && (
           <>

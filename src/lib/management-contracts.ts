@@ -1,5 +1,5 @@
 import type { Branch, Snapshot, Staff } from "../domain/model";
-import type { StaffAccount } from "../domain/staff";
+import type { StaffListResult } from "../domain/staff";
 import { ManagementResponseError } from "./management-response";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -110,10 +110,7 @@ export function loginReceipt(value: unknown): { user: Staff } {
   };
 }
 
-export function staffReceipt(value: unknown): {
-  branchId: string;
-  accounts: StaffAccount[];
-} {
+export function staffReceipt(value: unknown): StaffListResult {
   if (
     !record(value) ||
     !text(value.branchId) ||
@@ -129,7 +126,26 @@ export function staffReceipt(value: unknown): {
     )
   )
     invalidReceipt();
-  return value as { branchId: string; accounts: StaffAccount[] };
+  if (["total", "page", "pageSize", "counts"].some((key) => key in value)) {
+    if (
+      !["total", "page", "pageSize"].every(
+        (key) =>
+          Number.isSafeInteger(value[key]) &&
+          (value[key] as number) >= (key === "pageSize" ? 1 : 0),
+      ) ||
+      (value.pageSize as number) > 50 ||
+      value.accounts.length > (value.pageSize as number) ||
+      !record(value.counts) ||
+      !["ALL", "ACTIVE", "DISABLED"].every(
+        (key) =>
+          Number.isSafeInteger(
+            (value.counts as Record<string, unknown>)[key],
+          ) && ((value.counts as Record<string, unknown>)[key] as number) >= 0,
+      )
+    )
+      invalidReceipt();
+  }
+  return value as unknown as StaffListResult;
 }
 
 export function okReceipt(value: unknown) {

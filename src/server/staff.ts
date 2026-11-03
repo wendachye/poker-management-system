@@ -1,8 +1,16 @@
 import "server-only";
 import { createHmac, randomUUID } from "node:crypto";
-import { staffMutationSchema, type StaffAccount } from "../domain/staff";
+import { z } from "zod";
+import {
+  staffMutationSchema,
+  type StaffAccount,
+  type StaffListResult,
+} from "../domain/staff";
+import { validListSort } from "../domain/list-sort";
 import { emptyStore } from "../domain/selectors";
-import type { Snapshot } from "../domain/model";
+import type { Role, Snapshot } from "../domain/model";
+import english from "../../messages/en.json";
+import chinese from "../../messages/zh.json";
 import { DomainError } from "../domain/operations";
 import { hashPassword, requireUser } from "./auth";
 import type { Database, SqlConnection } from "./database";
@@ -24,7 +32,125 @@ async function admin(connection: SqlConnection, token: string | undefined) {
   return user;
 }
 
-export async function listStaff(db: Database, token: string | undefined) {
+const staffListSchema = z
+  .object({
+    query: z.string().trim().max(200).optional(),
+    status: z.enum(["all", "active", "disabled"]).default("all"),
+    role: z.enum(["DEALER", "CASHIER", "MANAGER", "ADMIN"]).optional(),
+    page: z.coerce.number().int().min(0).max(1_000_000).default(0),
+    pageSize: z.coerce.number().int().min(1).max(50).default(20),
+    sort: z.string().min(1).max(40).optional(),
+    direction: z.enum(["asc", "desc"]).optional(),
+  })
+  .strict();
+
+// Use the displayed labels as aliases without storing translated role values.
+const staffRoleLabels: Record<Role, readonly string[]> = {
+  ADMIN: [english.ui.admin, chinese.ui.admin],
+  MANAGER: [english.ui.manager, chinese.ui.manager],
+  CASHIER: [english.ui.cashier, chinese.ui.cashier],
+  DEALER: [english.ui.dealer, chinese.ui.dealer],
+};
+
+export async function listStaff(
+  db: Database,
+  token: string | undefined,
+  input?: unknown,
+): Promise<StaffListResult> {
+  if (input !== undefined) {
+    const parsed = staffListSchema.safeParse(input);
+    if (
+      !parsed.success ||
+      (parsed.data.sort && !validListSort("staff", parsed.data.sort)) ||
+      (parsed.data.direction && !parsed.data.sort)
+    )
+      throw new DomainError(
+        "Choose valid staff filters, sort fields and a page size from 1 to 50.",
+      );
+    const query = parsed.data;
+    return db.transaction(async (connection) => {
+      await connection.query(
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const user = await admin(connection, token);
+      const values: unknown[] = [user.branchId];
+      const clauses = ["m.branch_id=$1"];
+      if (query.role) {
+        values.push(query.role);
+        clauses.push(`m.role=$${values.length}`);
+      }
+      for (const term of (query.query ?? "")
+        .normalize("NFD")
+        .replace(/\p{M}/gu, "")
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 12)) {
+        values.push(term);
+        const textParameter = `$${values.length}`;
+        const roles = Object.entries(staffRoleLabels)
+          .filter(([, labels]) =>
+            labels.some((label) => label.toLowerCase().includes(term)),
+          )
+          .map(([role]) => role);
+        if (roles.length) values.push(roles);
+        clauses.push(
+          `(strpos(regexp_replace(normalize(lower(u.username||' '||m.role),NFD),'[̀-ͯ]','','g'),${textParameter})>0${roles.length ? ` OR m.role=ANY($${values.length}::text[])` : ""})`,
+        );
+      }
+      const countsRow = (
+        await connection.query<{
+          all: string;
+          active: string;
+          disabled: string;
+        }>(
+          `SELECT count(*) AS all,count(*) FILTER(WHERE u.active) AS active,count(*) FILTER(WHERE NOT u.active) AS disabled FROM poker_users u JOIN poker_memberships m ON m.user_id=u.id WHERE ${clauses.join(" AND ")}`,
+          values,
+        )
+      ).rows[0];
+      const counts = {
+        ALL: Number(countsRow.all),
+        ACTIVE: Number(countsRow.active),
+        DISABLED: Number(countsRow.disabled),
+      };
+      const total =
+        query.status === "active"
+          ? counts.ACTIVE
+          : query.status === "disabled"
+            ? counts.DISABLED
+            : counts.ALL;
+      const page = Math.min(
+        query.page,
+        Math.max(0, Math.ceil(total / query.pageSize) - 1),
+      );
+      if (query.status !== "all") {
+        values.push(query.status === "active");
+        clauses.push(`u.active=$${values.length}`);
+      }
+      const fields: Record<string, string> = {
+        username: 'lower(u.username) COLLATE "C"',
+        role: 'lower(m.role) COLLATE "C"',
+        active: "u.active",
+      };
+      const field = query.sort ? fields[query.sort] : undefined;
+      const order = field
+        ? `${field} ${query.direction === "desc" ? "DESC" : "ASC"},u.id COLLATE "C" ASC`
+        : "u.active DESC,u.username,u.id";
+      values.push(query.pageSize, page * query.pageSize);
+      const { rows } = await connection.query<StaffAccount>(
+        `SELECT u.id,u.username,u.active,m.role,(SELECT count(*)>1 FROM poker_memberships WHERE user_id=u.id) AS "sharedAccount" FROM poker_users u JOIN poker_memberships m ON m.user_id=u.id WHERE ${clauses.join(" AND ")} ORDER BY ${order} LIMIT $${values.length - 1} OFFSET $${values.length}`,
+        values,
+      );
+      return {
+        branchId: user.branchId,
+        accounts: rows,
+        total,
+        page,
+        pageSize: query.pageSize,
+        counts,
+      };
+    });
+  }
   const user = await admin(db, token);
   const { rows } = await db.query<StaffAccount>(
     `SELECT u.id,u.username,u.active,m.role,

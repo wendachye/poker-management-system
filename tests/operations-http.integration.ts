@@ -27,7 +27,11 @@ import {
   totalsForDay,
 } from "../src/domain/selectors";
 import { defaultSettings } from "../src/domain/settings";
-import type { StaffAccount, StaffCommand } from "../src/domain/staff";
+import type {
+  StaffAccount,
+  StaffCommand,
+  StaffListResult,
+} from "../src/domain/staff";
 import { hashPassword } from "../src/server/auth";
 import { databaseFromPool } from "../src/server/database";
 import { migrate } from "../src/server/schema";
@@ -1336,6 +1340,58 @@ test(
           (account) => account.username === "http.cashier",
         )!;
         assert.ok(requester);
+        for (const [query, role] of [
+          ["收银员", "CASHIER"],
+          ["收银", "CASHIER"],
+          ["经理", "MANAGER"],
+          ["荷", "DEALER"],
+          ["管理", "ADMIN"],
+        ]) {
+          const translated = await admin.json<StaffListResult>(
+            "/api/staff?status=all&pageSize=50&query=" +
+              encodeURIComponent(query),
+          );
+          const expected = accounts.accounts.filter(
+            (account) => account.role === role,
+          );
+          assert.equal(translated.total, expected.length);
+          assert.deepEqual(
+            translated.accounts.map((account) => account.id).sort(),
+            expected.map((account) => account.id).sort(),
+          );
+        }
+        const literalChinese = await admin.json<StaffListResult>(
+          "/api/staff?query=" + encodeURIComponent("收银%"),
+        );
+        assert.equal(literalChinese.total, 0);
+        const staffPage = await admin.json<StaffListResult>(
+          "/api/staff?status=all&pageSize=1&sort=username&direction=desc",
+        );
+        assert.equal(staffPage.total, accounts.accounts.length);
+        assert.equal(staffPage.accounts.length, 1);
+        assert.equal(staffPage.counts?.ALL, accounts.accounts.length);
+        assert.equal(
+          staffPage.accounts[0].username,
+          accounts.accounts
+            .map((account) => account.username)
+            .sort()
+            .at(-1),
+        );
+        const staffLast = await admin.json<StaffListResult>(
+          "/api/staff?status=all&pageSize=1&sort=username&direction=desc&page=999",
+        );
+        assert.equal(staffLast.page, accounts.accounts.length - 1);
+        assert.equal(
+          staffLast.accounts[0].username,
+          accounts.accounts.map((account) => account.username).sort()[0],
+        );
+        for (const params of [
+          "pageSize=51",
+          "sort=unknown",
+          "sort=username&direction=desc%3BSELECT%201",
+          "branchId=http-pages",
+        ])
+          await admin.json("/api/staff?" + params, "GET", undefined, 400);
         await admin.execute(
           {
             kind: "CREATE_LOCATION",
@@ -1468,6 +1524,51 @@ test(
           ).size,
           45,
         );
+        const sorted = await admin.json<ReadPage<Player>>(
+          "/api/read?resource=players&sort=name&direction=asc&pageSize=20",
+        );
+        const sortedNext = await admin.json<ReadPage<Player>>(
+          "/api/read?resource=players&sort=name&direction=asc&pageSize=20&page=1",
+        );
+        assert.deepEqual(
+          sorted.items.slice(0, 5).map((item) => item.id),
+          [
+            "page-player-0",
+            "page-player-1",
+            "page-player-10",
+            "page-player-11",
+            "page-player-12",
+          ],
+        );
+        assert.equal(
+          new Set([...sorted.items, ...sortedNext.items].map((item) => item.id))
+            .size,
+          40,
+        );
+        assert.deepEqual(sorted.counts, first.counts);
+        const newest = await admin.json<ReadPage<Transaction>>(
+          "/api/read?resource=transactions&sort=time&direction=desc&pageSize=1&query=Fictional%20pagination",
+        );
+        assert.equal(newest.items[0].id, "page-transaction-44");
+        const sortedAudit = await admin.json<ReadPage<AuditLog>>(
+          "/api/read?resource=audit&sort=entity&direction=asc&pageSize=3",
+        );
+        assert.deepEqual(
+          sortedAudit.items.map((item) => item.id),
+          ["page-audit-0", "page-audit-1", "page-audit-10"],
+        );
+        for (const params of [
+          "sort=unknown",
+          "sort=name&direction=desc%3BSELECT%201",
+          "sort=amount",
+          "direction=desc",
+        ])
+          await admin.json(
+            "/api/read?resource=players&" + params,
+            "GET",
+            undefined,
+            400,
+          );
         const found = await admin.json<ReadPage<Player>>(
           "/api/read?resource=players&query=" +
             encodeURIComponent("Pagination player 42"),
@@ -1510,7 +1611,7 @@ test(
         assert.equal(report.totals?.cashReceived, 4500);
         assert.equal(report.totals?.expectedCash, 1_004_500);
         const exported = await admin.csv(
-          "/api/read?resource=report&dayId=page-day&format=csv&pageSize=1&query=no-visible-matches",
+          "/api/read?resource=report&dayId=page-day&format=csv&pageSize=1&query=no-visible-matches&sort=buyIn&direction=desc",
           {
             actorId: report.context.user.id,
             branchId: report.context.branch.id,

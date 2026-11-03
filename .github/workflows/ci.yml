@@ -18,6 +18,8 @@ jobs:
       - run: yarn install --frozen-lockfile
       - run: yarn audit:runtime
       - run: yarn test
+      - name: Verify rendered list controls and navigation
+        run: yarn test:ui
       - run: yarn typecheck
       - run: yarn lint
       - name: Build operations artifact without database secrets

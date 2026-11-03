@@ -214,6 +214,38 @@ test("staff receipts accept an empty location and real account flags", () => {
   assert.equal(staffReceipt(data), data);
 });
 
+test("paged staff receipts require complete bounded pagination metadata", () => {
+  const receipt = {
+    branchId: "test-venue",
+    accounts: [],
+    total: 24,
+    page: 1,
+    pageSize: 10,
+    counts: { ALL: 25, ACTIVE: 24, DISABLED: 1 },
+  };
+  assert.equal(staffReceipt(receipt), receipt);
+  for (const invalid of [
+    { ...receipt, pageSize: 51 },
+    {
+      ...receipt,
+      pageSize: 1,
+      accounts: Array.from({ length: 2 }, (_, index) => ({
+        id: `staff-${index}`,
+        username: `staff.${index}`,
+        role: "CASHIER",
+        active: true,
+        sharedAccount: false,
+      })),
+    },
+    { ...receipt, total: -1 },
+    { ...receipt, page: 1.5 },
+    { ...receipt, pageSize: undefined },
+    { ...receipt, counts: { ALL: 25, ACTIVE: "24", DISABLED: 1 } },
+    { branchId: "test-venue", accounts: [], total: 0 },
+  ])
+    assert.throws(() => staffReceipt(invalid), unconfirmed);
+});
+
 test("staff account receipts require identity, known role and explicit boolean flags", () => {
   const account = {
     id: "test-cashier",

@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RecordList } from "../components/record-list";
 import { ListToolbar } from "../components/list-toolbar";
+import { useListBrowsing } from "../components/use-list-browsing";
 import { RangeReport } from "../components/range-report";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Link } from "@/i18n/navigation";
@@ -57,6 +58,12 @@ export function ReportsView() {
     [closing, setClosing] = useState(false);
   const [closingDayId, setClosingDayId] = useState("");
   const csvDownload = useReadCsvDownload();
+  const browsing = useListBrowsing("report", "report", {
+    page: "playerPage",
+    pageSize: "playerPageSize",
+    sort: "playerSort",
+    direction: "playerDirection",
+  });
   const val = (key: string, fallback = "") =>
       s.draft("report." + key, fallback),
     set = (key: string, v: string) => s.setDraft("report." + key, v);
@@ -70,11 +77,15 @@ export function ReportsView() {
       query: val("playerSearch"),
       status: val("playerStatus"),
       page: requestedPage,
+      ...browsing.query,
     },
     val("mode", "day") === "day" && !!(selected || selectedDate),
   );
+  const resultsReady = !remote.live || (!!remote.data && !remote.error);
   const day = remote.live
-    ? remote.data?.day
+    ? remote.loading || remote.error
+      ? undefined
+      : remote.data?.day
     : s.store.days.find((d) => d.id === selected);
   const totals = remote.live
     ? (remote.data?.totals ?? totalsForDay(emptyStore()))
@@ -89,14 +100,16 @@ export function ReportsView() {
   const players = remote.live ? (remote.data?.items ?? []) : localPlayers;
   const filteredPlayers = remote.live
     ? players
-    : players.filter(
-        (player) =>
-          (!val("playerStatus") || player.status === val("playerStatus")) &&
-          matchesListSearch(
-            val("playerSearch"),
-            [displayName(player.name)],
-            [player.phone],
-          ),
+    : browsing.sortRows(
+        players.filter(
+          (player) =>
+            (!val("playerStatus") || player.status === val("playerStatus")) &&
+            matchesListSearch(
+              val("playerSearch"),
+              [displayName(player.name)],
+              [player.phone],
+            ),
+        ),
       );
   const playerTotal = remote.live
     ? (remote.data?.total ?? 0)
@@ -105,15 +118,16 @@ export function ReportsView() {
     ? (remote.data?.page ?? requestedPage)
     : Math.min(
         Math.max(0, Number(val("playerPage")) || 0),
-        Math.max(0, Math.ceil(filteredPlayers.length / 20) - 1),
+        Math.max(0, Math.ceil(filteredPlayers.length / browsing.pageSize) - 1),
       );
   const closes = day?.closes.toReversed() ?? [];
   const filteredCloses = closes.filter((close) =>
     matchesListSearch(val("closeSearch"), [close.actor, close.reason]),
   );
+  const closePageSize = val("closePageSize") === "50" ? 50 : 20;
   const closePage = Math.min(
     Math.max(0, Number(val("closePage")) || 0),
-    Math.max(0, Math.ceil(filteredCloses.length / 20) - 1),
+    Math.max(0, Math.ceil(filteredCloses.length / closePageSize) - 1),
   );
   function clearPlayerFilters() {
     for (const key of ["playerSearch", "playerStatus", "playerPage"])
@@ -312,8 +326,8 @@ export function ReportsView() {
               </Field>
             </div>
           )}
-          <ReadStatus state={remote} />
-          {!day && (remote.loading || remote.error) ? null : !day ? (
+          <ReadStatus state={remote} showLoading={resultsReady} />
+          {!day && !remote.loading && !remote.error && (
             <EmptyState
               title="No business day yet"
               description={
@@ -322,76 +336,79 @@ export function ReportsView() {
                   : "Ask a manager to open a business day."
               }
             />
-          ) : (
+          )}
+          {(day || (remote.live && !!(selected || selectedDate))) && (
             <>
-              <Panel
-                compact
-                title="Daily report"
-                action={
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone={day.status === "OPEN" ? "green" : "neutral"}>
-                      {day.status}
-                    </Badge>
-                    <Button
-                      variant="outline"
-                      className="h-11 sm:h-9"
-                      onClick={download}
-                      aria-busy={csvDownload.busy}
-                      disabled={
-                        csvDownload.busy ||
-                        (remote.live &&
-                          (remote.loading || !!remote.error || !remote.data))
-                      }
-                    >
-                      <Download />
-                      {t(
-                        csvDownload.busy
-                          ? "Preparing CSV…"
-                          : "Export daily CSV",
-                      )}
-                    </Button>
+              {day && (
+                <Panel
+                  compact
+                  title="Daily report"
+                  action={
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={day.status === "OPEN" ? "green" : "neutral"}>
+                        {day.status}
+                      </Badge>
+                      <Button
+                        variant="outline"
+                        className="h-11 sm:h-9"
+                        onClick={download}
+                        aria-busy={csvDownload.busy}
+                        disabled={
+                          csvDownload.busy ||
+                          (remote.live &&
+                            (remote.loading || !!remote.error || !remote.data))
+                        }
+                      >
+                        <Download />
+                        {t(
+                          csvDownload.busy
+                            ? "Preparing CSV…"
+                            : "Export daily CSV",
+                        )}
+                      </Button>
+                    </div>
+                  }
+                >
+                  {!remote.live && (
+                    <div className="max-w-sm">
+                      <Field label="Report date">
+                        <Select
+                          value={selected}
+                          onValueChange={selectDay}
+                          options={s.store.days.toReversed().map((d) => ({
+                            value: d.id,
+                            label: d.date + " · " + t(d.status),
+                          }))}
+                        />
+                      </Field>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
+                    {[
+                      ["Expected cash", money(totals.expectedCash)],
+                      [
+                        "Counted cash",
+                        totals.countedCash === null
+                          ? t("Not counted")
+                          : money(totals.countedCash),
+                      ],
+                      [
+                        totals.variance === null
+                          ? "Variance"
+                          : varianceLabel(totals.variance),
+                        totals.variance === null
+                          ? "—"
+                          : money(Math.abs(totals.variance)),
+                      ],
+                      ["Opening cash", money(totals.openingCash)],
+                      ["Cash received", money(totals.cashReceived)],
+                      ["Cash payout", money(totals.cashPayout)],
+                    ].map(([label, value]) => (
+                      <Stat compact key={label} label={label} value={value} />
+                    ))}
                   </div>
-                }
-              >
-                {!remote.live && (
-                  <div className="max-w-sm">
-                    <Field label="Report date">
-                      <Select
-                        value={selected}
-                        onValueChange={selectDay}
-                        options={s.store.days.toReversed().map((d) => ({
-                          value: d.id,
-                          label: d.date + " · " + t(d.status),
-                        }))}
-                      />
-                    </Field>
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
-                  {[
-                    ["Expected cash", money(totals.expectedCash)],
-                    [
-                      "Counted cash",
-                      totals.countedCash === null
-                        ? t("Not counted")
-                        : money(totals.countedCash),
-                    ],
-                    [
-                      totals.variance === null
-                        ? "Variance"
-                        : varianceLabel(totals.variance),
-                      totals.variance === null
-                        ? "—"
-                        : money(Math.abs(totals.variance)),
-                    ],
-                    ["Opening cash", money(totals.openingCash)],
-                    ["Cash received", money(totals.cashReceived)],
-                    ["Cash payout", money(totals.cashPayout)],
-                  ].map(([label, value]) => (
-                    <Stat compact key={label} label={label} value={value} />
-                  ))}
-                </div>
-              </Panel>
+                </Panel>
+              )}
               <Panel
                 compact
                 title="Player results"
@@ -423,7 +440,8 @@ export function ReportsView() {
                         : []
                     }
                     onClear={clearPlayerFilters}
-                    resultCount={playerTotal}
+                    resultCount={resultsReady ? playerTotal : null}
+                    loading={remote.loading && !resultsReady}
                   >
                     <Field label="Status">
                       <Select
@@ -441,9 +459,10 @@ export function ReportsView() {
                     </Field>
                   </ListToolbar>
                 )}
-                {!players.length &&
-                !val("playerSearch") &&
-                !val("playerStatus") ? (
+                {browsing.controls}
+                {remote.loading || remote.error ? null : !players.length &&
+                  !val("playerSearch") &&
+                  !val("playerStatus") ? (
                   <EmptyState title="No visits for this day" />
                 ) : !filteredPlayers.length ? (
                   <EmptyState title="No matching player results">
@@ -459,8 +478,8 @@ export function ReportsView() {
                       remote.live
                         ? filteredPlayers
                         : filteredPlayers.slice(
-                            playerPage * 20,
-                            playerPage * 20 + 20,
+                            playerPage * browsing.pageSize,
+                            (playerPage + 1) * browsing.pageSize,
                           )
                     }
                     rowKey={(p) => p.id}
@@ -501,8 +520,10 @@ export function ReportsView() {
                 <Pager
                   label="Player results"
                   page={playerPage}
-                  total={playerTotal}
+                  total={resultsReady ? playerTotal : null}
+                  loading={remote.loading && !resultsReady}
                   setPage={(page) => set("playerPage", String(page))}
+                  {...browsing.pager}
                 />
               </Panel>
               <Panel compact title="Closing history">
@@ -517,10 +538,11 @@ export function ReportsView() {
                       set("closePage", "0");
                     }}
                     onClear={clearCloseFilters}
-                    resultCount={filteredCloses.length}
+                    resultCount={day ? filteredCloses.length : null}
+                    loading={remote.loading && !day}
                   />
                 )}
-                {!day.closes.length ? (
+                {!day ? null : !day.closes.length ? (
                   <EmptyState title="No closing snapshot yet." />
                 ) : !filteredCloses.length ? (
                   <EmptyState title="No matching closing snapshots">
@@ -533,8 +555,8 @@ export function ReportsView() {
                     compact
                     label="Closing history"
                     rows={filteredCloses.slice(
-                      closePage * 20,
-                      closePage * 20 + 20,
+                      closePage * closePageSize,
+                      (closePage + 1) * closePageSize,
                     )}
                     rowKey={(close) => close.time}
                     columns={[
@@ -587,8 +609,13 @@ export function ReportsView() {
                 <Pager
                   label="Closing history"
                   page={closePage}
-                  total={filteredCloses.length}
+                  total={day ? filteredCloses.length : null}
+                  loading={remote.loading && !day}
                   setPage={(page) => set("closePage", String(page))}
+                  pageSize={closePageSize}
+                  onPageSizeChange={(size) =>
+                    set("closePageSize", String(size))
+                  }
                 />
               </Panel>
             </>

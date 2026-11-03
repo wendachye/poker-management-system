@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { displayName } from "@/lib/display-name";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { PlayerActions } from "./player-actions";
@@ -29,6 +29,7 @@ import type { PlayerTag } from "@/domain/model";
 import { money, parseMoney } from "../utils";
 import type { Session } from "@/domain/model";
 import { ReadStatus, useReadPage } from "./use-read-page";
+import { useListBrowsing } from "./use-list-browsing";
 export function PlayerDetails({ playerId }: { playerId: string }) {
   const s = usePokerManagementContext(),
     t = useText();
@@ -128,39 +129,60 @@ function SessionHistory({ playerId }: { playerId: string }) {
   const s = usePokerManagementContext(),
     t = useText(),
     timestamp = useTimestamp();
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [requestedPage, setPage] = useState(0);
+  const browsing = useListBrowsing("sessions", "history");
+  const samePlayer = s.draft("history.playerId") === playerId;
+  const search = samePlayer ? s.draft("history.search") : "";
+  const status = samePlayer ? s.draft("history.status") : "";
+  const requestedPage = samePlayer
+    ? Math.max(0, Number(s.draft("history.page", "0")) || 0)
+    : 0;
+  const setSearch = (value: string) => s.setDraft("history.search", value);
+  const setStatus = (value: string) => s.setDraft("history.status", value);
+  const setPage = (value: number) => s.setDraft("history.page", String(value));
+  useEffect(() => {
+    if (s.draft("history.playerId") === playerId) return;
+    s.setDraft("history.playerId", playerId);
+    s.setDraft("history.search", "");
+    s.setDraft("history.status", "");
+    s.setDraft("history.page", "0");
+  }, [playerId, s]);
   const localSessions = s.store.sessions
     .filter((session) => session.playerId === playerId)
     .toReversed();
-  const localFiltered = localSessions.filter((session) => {
-    const date =
-      s.store.days.find((day) => day.id === session.dayId)?.date ?? "";
-    const table = displayName(
-      s.tables.find((table) => table.id === session.tableId)?.name ?? "",
-    );
-    return (
-      (!status || session.status === status) &&
-      [date, table].some((value) =>
-        value.toLowerCase().includes(search.trim().toLowerCase()),
-      )
-    );
-  });
+  const localFiltered = browsing.sortRows(
+    localSessions.filter((session) => {
+      const date =
+        s.store.days.find((day) => day.id === session.dayId)?.date ?? "";
+      const table = displayName(
+        s.tables.find((table) => table.id === session.tableId)?.name ?? "",
+      );
+      return (
+        (!status || session.status === status) &&
+        [date, table].some((value) =>
+          value.toLowerCase().includes(search.trim().toLowerCase()),
+        )
+      );
+    }),
+  );
   const remote = useReadPage<Session>({
     resource: "sessions",
     playerId,
     query: search,
     status,
     page: requestedPage,
+    ...browsing.query,
   });
   const sessionContext = remote.data?.context.store ?? s.store;
   const sessions = remote.live ? (remote.data?.items ?? []) : localSessions;
   const filtered = remote.live ? sessions : localFiltered;
+  const resultsReady = !remote.live || (!!remote.data && !remote.error);
   const total = remote.live ? (remote.data?.total ?? 0) : filtered.length;
   const page = remote.live
     ? (remote.data?.page ?? requestedPage)
-    : Math.min(requestedPage, Math.max(0, Math.ceil(filtered.length / 20) - 1));
+    : Math.min(
+        requestedPage,
+        Math.max(0, Math.ceil(filtered.length / browsing.pageSize) - 1),
+      );
   function clearFilters() {
     setSearch("");
     setStatus("");
@@ -169,54 +191,54 @@ function SessionHistory({ playerId }: { playerId: string }) {
   return (
     <section className="min-w-0 space-y-4" aria-label={t("Session history")}>
       <h3 className="text-sm font-semibold">{t("Session history")}</h3>
-      {sessions.length > 0 && (
-        <ListToolbar
-          search={search}
-          searchLabel="Search session history"
-          searchPlaceholder="Search by date or table"
-          onSearchChange={(value) => {
-            setSearch(value);
-            setPage(0);
-          }}
-          activeFilters={
-            status
-              ? [
-                  {
-                    key: "status",
-                    label: t("Status") + ": " + t(status),
-                    onRemove: () => {
-                      setStatus("");
-                      setPage(0);
-                    },
+      <ListToolbar
+        search={search}
+        searchLabel="Search session history"
+        searchPlaceholder="Search by date or table"
+        onSearchChange={(value) => {
+          setSearch(value);
+          setPage(0);
+        }}
+        activeFilters={
+          status
+            ? [
+                {
+                  key: "status",
+                  label: t("Status") + ": " + t(status),
+                  onRemove: () => {
+                    setStatus("");
+                    setPage(0);
                   },
-                ]
-              : []
-          }
-          resultCount={total}
-          onClear={clearFilters}
-        >
-          <Field label="Status">
-            <Select
-              value={status}
-              onValueChange={(value) => {
-                setStatus(value);
-                setPage(0);
-              }}
-              options={[
-                { value: "", label: "All statuses" },
-                { value: "ACTIVE", label: "ACTIVE" },
-                { value: "OUT", label: "OUT" },
-              ]}
-            />
-          </Field>
-        </ListToolbar>
-      )}
-      <ReadStatus state={remote} />
-      {!sessions.length &&
-      !remote.loading &&
-      !remote.error &&
-      !search &&
-      !status ? (
+                },
+              ]
+            : []
+        }
+        resultCount={resultsReady ? total : null}
+        loading={remote.loading && !resultsReady}
+        onClear={clearFilters}
+      >
+        <Field label="Status">
+          <Select
+            value={status}
+            onValueChange={(value) => {
+              setStatus(value);
+              setPage(0);
+            }}
+            options={[
+              { value: "", label: "All statuses" },
+              { value: "ACTIVE", label: "ACTIVE" },
+              { value: "OUT", label: "OUT" },
+            ]}
+          />
+        </Field>
+      </ListToolbar>
+      {browsing.controls}
+      <ReadStatus state={remote} showLoading={resultsReady} />
+      {remote.loading || remote.error ? null : !sessions.length &&
+        !remote.loading &&
+        !remote.error &&
+        !search &&
+        !status ? (
         <EmptyState title="No session history yet" />
       ) : !filtered.length ? (
         <EmptyState title="No matching sessions">
@@ -228,7 +250,12 @@ function SessionHistory({ playerId }: { playerId: string }) {
         <RecordList
           label="Session history"
           rows={
-            remote.live ? filtered : filtered.slice(page * 20, page * 20 + 20)
+            remote.live
+              ? filtered
+              : filtered.slice(
+                  page * browsing.pageSize,
+                  (page + 1) * browsing.pageSize,
+                )
           }
           rowKey={(session) => session.id}
           columns={[
@@ -271,8 +298,10 @@ function SessionHistory({ playerId }: { playerId: string }) {
       <Pager
         label="Session history"
         page={page}
-        total={total}
+        total={resultsReady ? total : null}
+        loading={remote.loading && !resultsReady}
         setPage={setPage}
+        {...browsing.pager}
       />
     </section>
   );

@@ -35,6 +35,8 @@ import type { LocationCommand } from "@/domain/locations";
 import type { EntryType, Snapshot } from "@/domain/model";
 import type { ReadPage, ReadQuery } from "@/domain/read-model";
 import { readPageReceipt, readQueryParams } from "@/lib/read-page";
+import { isListDraftKey } from "@/lib/list-state";
+import { useListDrafts } from "./components/use-list-drafts";
 import {
   checkedInVisit,
   type CheckInContinuation,
@@ -62,6 +64,7 @@ export function usePokerManagementState() {
   const { user, refresh: refreshAuth } = useAuth();
   const locale = useLocale();
   const pathname = usePathname();
+  const listDrafts = useListDrafts(user, pathname);
   const messages = useMessages() as { ui?: Record<string, string> };
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [busy, setBusy] = useState(false);
@@ -482,9 +485,15 @@ export function usePokerManagementState() {
   const day = currentDay(store);
   const players = playersForDay(store);
   function draft(key: string, fallback = "") {
-    return drafts[key] ?? fallback;
+    return isListDraftKey(key)
+      ? listDrafts.draft(key, fallback)
+      : (drafts[key] ?? fallback);
   }
   function setDraft(key: string, value: string) {
+    if (isListDraftKey(key)) {
+      listDrafts.setDraft(key, value);
+      return;
+    }
     setDrafts((current) => ({ ...current, [key]: value }));
   }
   const read = useCallback(
@@ -648,14 +657,13 @@ export function usePokerManagementState() {
         return;
       }
       readFocus.current = buyInNext ? { playerId: visit.playerId } : {};
-      setDrafts((current) => ({
-        ...current,
+      listDrafts.patchDrafts({
         "player.search": visit.phone,
         "player.status": "",
         "player.type": "",
         "player.tag": "",
         "player.page": "0",
-      }));
+      });
       setOperation(
         buyInNext
           ? {
@@ -667,7 +675,7 @@ export function usePokerManagementState() {
           : null,
       );
     },
-    snapshot,
+    snapshot: listDrafts.ready ? snapshot : null,
     store,
     day,
     user: snapshot?.user,
@@ -691,14 +699,20 @@ export function usePokerManagementState() {
     refresh,
     setError,
     draft,
-    draftValue: (key: string): string | undefined => drafts[key],
+    draftValue: (key: string): string | undefined =>
+      isListDraftKey(key) ? listDrafts.draftValue(key) : drafts[key],
     setDraft,
-    clearDraft: (key: string) =>
+    clearDraft: (key: string) => {
+      if (isListDraftKey(key)) {
+        listDrafts.clearDraft(key);
+        return;
+      }
       setDrafts((current) => {
         const next = { ...current };
         delete next[key];
         return next;
-      }),
+      });
+    },
     retryRequired:
       retryRequired ||
       !!recoveryCheckpoint ||

@@ -30,6 +30,11 @@ import { applyCommand } from "../src/domain/operations";
 import type { Command } from "../src/domain/commands";
 import { displayName } from "../src/lib/display-name";
 import { csv as moneyCsv } from "../src/domain/money";
+import {
+  listSortOptions,
+  readSortQuery,
+  sortLocalRecords,
+} from "../src/domain/list-sort";
 
 test("read inputs and aggregate conversions reject invalid or unbounded requests", () => {
   for (const input of [
@@ -63,6 +68,70 @@ test("read inputs and aggregate conversions reject invalid or unbounded requests
     ).expectedCash,
     Number.MAX_SAFE_INTEGER,
   );
+});
+
+test("read sorting accepts only the selected resource's documented fields and direction", () => {
+  assert.deepEqual(
+    parseReadQuery({
+      resource: "players",
+      sort: "name",
+      direction: "desc",
+      pageSize: 50,
+    }),
+    {
+      resource: "players",
+      sort: "name",
+      direction: "desc",
+      page: 0,
+      pageSize: 50,
+    },
+  );
+  for (const input of [
+    { resource: "players", sort: "name; DROP TABLE poker_profiles" },
+    { resource: "players", sort: "time" },
+    { resource: "requests", sort: "name" },
+    { resource: "players", sort: "name", direction: "DESC NULLS FIRST" },
+    { resource: "players", direction: "asc" },
+    { resource: "receipt", id: "a", sort: "amount" },
+  ])
+    assert.throws(() => parseReadQuery(input), DomainError);
+});
+
+test("prototype sort controls share server fields, preserve defaults and align null and tie ordering", () => {
+  assert.deepEqual(
+    listSortOptions("transactions").map((item) => item.value),
+    ["", "time", "amount", "type", "staff"],
+  );
+  assert.deepEqual(readSortQuery("", "desc"), {});
+  assert.deepEqual(readSortQuery("name", "desc"), {
+    sort: "name",
+    direction: "desc",
+  });
+  const rows = [
+    { id: "c", name: "Sample · Same", sessionStart: undefined },
+    { id: "b", name: "same", sessionStart: "2026-10-28T05:00:00Z" },
+    { id: "a", name: "Ada", sessionStart: "2026-10-28T06:00:00+01:00" },
+  ];
+  assert.deepEqual(
+    sortLocalRecords("players", rows, "name", "asc").map((row) => row.id),
+    ["a", "b", "c"],
+  );
+  assert.deepEqual(
+    sortLocalRecords("players", rows, "name", "desc").map((row) => row.id),
+    ["b", "c", "a"],
+  );
+  for (const direction of ["asc", "desc"])
+    assert.deepEqual(
+      sortLocalRecords("players", rows, "sessionStart", direction).map(
+        (row) => row.id,
+      ),
+      ["a", "b", "c"],
+    );
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    ["c", "b", "a"],
+  );
+  assert.deepEqual(sortLocalRecords("players", rows), rows);
 });
 
 async function fixture() {
@@ -137,6 +206,204 @@ async function fixture() {
     dealer: await login(db, "dealer", password),
   };
 }
+
+test("server ordering covers the full filtered directory before paging with stable ties", async () => {
+  const f = await fixture();
+  try {
+    const first = await readPage(f.db, f.token, {
+      resource: "players",
+      query: "Directory person",
+      sort: "name",
+      direction: "asc",
+      pageSize: 20,
+    });
+    const second = await readPage(f.db, f.token, {
+      resource: "players",
+      query: "Directory person",
+      sort: "name",
+      direction: "asc",
+      pageSize: 20,
+      page: 1,
+    });
+    assert.equal(first.total, 44);
+    assert.equal(second.total, 44);
+    assert.deepEqual(
+      first.items.slice(0, 5).map((row) => row.id),
+      ["extra-0", "extra-1", "extra-10", "extra-11", "extra-12"],
+    );
+    assert.equal(
+      new Set([...first.items, ...second.items].map((row) => row.id)).size,
+      40,
+    );
+    const reverse = await readPage(f.db, f.token, {
+      resource: "players",
+      query: "Directory person",
+      sort: "name",
+      direction: "desc",
+      pageSize: 20,
+    });
+    assert.deepEqual(
+      reverse.items.slice(0, 5).map((row) => row.id),
+      ["extra-9", "extra-8", "extra-7", "extra-6", "extra-5"],
+    );
+    assert.deepEqual(first.counts, reverse.counts);
+    const requests = await readPage(f.db, f.token, {
+      resource: "requests",
+      query: "history-approval",
+      sort: "amount",
+      direction: "desc",
+      pageSize: 20,
+    });
+    assert.deepEqual(
+      requests.items.slice(0, 5).map((row) => row.id),
+      [
+        "history-approval-0",
+        "history-approval-1",
+        "history-approval-10",
+        "history-approval-100",
+        "history-approval-1000",
+      ],
+    );
+  } finally {
+    await f.engine.close();
+  }
+});
+
+test("all list resources sort complete sample histories while report exports stay canonical", async () => {
+  const f = await fixture();
+  try {
+    const current = f.store.days.find(
+      (day) => day.id === f.store.currentDayId,
+    )!;
+    const requests = await readPage(f.db, f.token, {
+      resource: "requests",
+      sort: "amount",
+      direction: "desc",
+      pageSize: 1,
+    });
+    assert.equal((requests.items[0] as { amount: number }).amount, 2_500_000);
+    for (const query of [undefined, "history-tx"]) {
+      const receipts = await readPage(f.db, f.token, {
+        resource: "transactions",
+        query,
+        sort: "amount",
+        direction: "desc",
+        pageSize: 50,
+      });
+      const amounts = receipts.items.map((row) => (row as Transaction).amount);
+      assert.ok(
+        amounts.every(
+          (amount, index) => index === 0 || amounts[index - 1] >= amount,
+        ),
+      );
+      if (query)
+        assert.deepEqual(
+          receipts.items.slice(0, 5).map((row) => row.id),
+          [
+            "history-tx-0",
+            "history-tx-1",
+            "history-tx-10",
+            "history-tx-100",
+            "history-tx-1000",
+          ],
+        );
+    }
+    const audit = await readPage(f.db, f.token, {
+      resource: "audit",
+      query: "history-log",
+      sort: "actor",
+      direction: "desc",
+      pageSize: 3,
+    });
+    assert.deepEqual(
+      audit.items.map((row) => row.id),
+      ["history-log-0", "history-log-1", "history-log-10"],
+    );
+    for (const sort of ["creditUsed", "buyIn", "cashOut"] as const) {
+      const report = await readPage(f.db, f.token, {
+        resource: "report",
+        date: current.date,
+        sort,
+        direction: "desc",
+        pageSize: 3,
+      });
+      const expected = playersForDay(f.store, current.id)
+        .filter((player) =>
+          f.store.sessions.some(
+            (visit) =>
+              visit.playerId === player.id && visit.dayId === current.id,
+          ),
+        )
+        .sort(
+          (a, b) =>
+            b[sort] - a[sort] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        );
+      assert.deepEqual(
+        report.items.map((row) => row.id),
+        expected.slice(0, 3).map((row) => row.id),
+      );
+    }
+    const playerId = f.store.profiles[0].id;
+    const visits = await readPage(f.db, f.token, {
+      resource: "sessions",
+      playerId,
+      sort: "sessionStart",
+      direction: "asc",
+      pageSize: 1,
+    });
+    assert.equal(
+      visits.items[0].id,
+      f.store.sessions
+        .filter((visit) => visit.playerId === playerId)
+        .sort(
+          (a, b) => Date.parse(a.sessionStart) - Date.parse(b.sessionStart),
+        )[0].id,
+    );
+    const range = {
+      resource: "range" as const,
+      from: f.store.days[0].date,
+      to: current.date,
+    };
+    const dates = await readPage(f.db, f.token, {
+      ...range,
+      sort: "date",
+      direction: "desc",
+      pageSize: 2,
+    });
+    assert.deepEqual(
+      dates.items.map((row) => (row as { date: string }).date),
+      [current.date, f.store.days[1].date],
+    );
+    const access = {
+      actorId: "admin",
+      branchId: "local",
+      role: "ADMIN" as const,
+    };
+    for (const query of [
+      { resource: "report" as const, date: current.date },
+      range,
+    ]) {
+      const canonical = await readCsv(f.db, f.token, query, access);
+      const changed = await readCsv(
+        f.db,
+        f.token,
+        {
+          ...query,
+          sort: query.resource === "report" ? "creditUsed" : "expectedCash",
+          direction: "desc",
+          pageSize: 1,
+          page: 99,
+          query: "no matching rows",
+          status: "OUT",
+        },
+        access,
+      );
+      assert.equal(changed.value, canonical.value);
+    }
+  } finally {
+    await f.engine.close();
+  }
+});
 function sameMoney(actual: unknown, expected: unknown) {
   assert.deepEqual(actual, expected);
 }

@@ -75,11 +75,12 @@ export function TablesView() {
             : table.status === filter))
     );
   });
+  const pageSize = val("pageSize", "20") === "50" ? 50 : 20;
   const page = Math.max(
     0,
     Math.min(
       Number(val("page", "0")) || 0,
-      Math.max(0, Math.ceil(visibleTables.length / 20) - 1),
+      Math.max(0, Math.ceil(visibleTables.length / pageSize) - 1),
     ),
   );
   const clearFilters = () => {
@@ -204,32 +205,36 @@ export function TablesView() {
         )}
       <TableSeatDragProvider>
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] items-start gap-6">
-          {visibleTables.slice(page * 20, page * 20 + 20).map((table) => (
-            <TableFloorCard
-              key={table.id}
-              table={table}
-              players={s.activePlayers.filter(
-                (player) => player.tableId === table.id,
-              )}
-              rules={effectiveTableRules(s.store, table)}
-              busy={s.busy}
-              canCheckIn={operator && !s.locked && table.status === "OPEN"}
-              onEdit={manager ? () => edit(table) : undefined}
-              onSeatSelect={(seat, player) => {
-                s.startOperation(
-                  player
-                    ? { kind: "player", playerId: player.id }
-                    : { kind: "check-in", tableId: table.id, seat },
-                );
-              }}
-            />
-          ))}
+          {visibleTables
+            .slice(page * pageSize, (page + 1) * pageSize)
+            .map((table) => (
+              <TableFloorCard
+                key={table.id}
+                table={table}
+                players={s.activePlayers.filter(
+                  (player) => player.tableId === table.id,
+                )}
+                rules={effectiveTableRules(s.store, table)}
+                busy={s.busy}
+                canCheckIn={operator && !s.locked && table.status === "OPEN"}
+                onEdit={manager ? () => edit(table) : undefined}
+                onSeatSelect={(seat, player) => {
+                  s.startOperation(
+                    player
+                      ? { kind: "player", playerId: player.id }
+                      : { kind: "check-in", tableId: table.id, seat },
+                  );
+                }}
+              />
+            ))}
         </div>
       </TableSeatDragProvider>
       <Pager
         page={page}
         total={visibleTables.length}
         setPage={(value) => set("page", String(value))}
+        pageSize={pageSize}
+        onPageSizeChange={(value) => set("pageSize", String(value))}
         label="Table pagination"
       />
       <Modal

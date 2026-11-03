@@ -30,10 +30,12 @@ import { ListToolbar } from "../components/list-toolbar";
 import { RecordTable } from "../components/record-list";
 import { QuickFilters } from "../components/quick-filters";
 import { ReadStatus, useReadPage } from "../components/use-read-page";
+import { useListBrowsing } from "../components/use-list-browsing";
 
 export function PlayersView() {
   const s = usePokerManagementContext(),
     t = useText();
+  const browsing = useListBrowsing("players", "player");
   const operator = s.user?.role !== "DEALER";
   const value = (key: string, fallback = "") =>
     s.draft("player." + key, fallback);
@@ -61,8 +63,10 @@ export function PlayersView() {
       (!value("type") || p.type === value("type")) &&
       (!value("tag") || p.tags.some((tag) => tag === value("tag"))),
   );
-  const localFiltered = matchingPlayers.filter(
-    (p) => !value("status") || p.status === value("status"),
+  const localFiltered = browsing.sortRows(
+    matchingPlayers.filter(
+      (p) => !value("status") || p.status === value("status"),
+    ),
   );
   const requestedPage = Math.max(0, Number(value("page", "0")) || 0);
   const remote = useReadPage<Player>({
@@ -72,29 +76,44 @@ export function PlayersView() {
     type: value("type"),
     tag: value("tag"),
     page: requestedPage,
+    ...browsing.query,
   });
-  const filtered = remote.live ? (remote.data?.items ?? []) : localFiltered;
+  const resultsReady = !remote.live || (!!remote.data && !remote.error);
+  const hasCriteria = ["search", "status", "type", "tag"].some((key) =>
+    value(key).trim(),
+  );
+  const filtered = remote.live
+    ? resultsReady
+      ? remote.data!.items
+      : []
+    : localFiltered;
   const total = remote.live ? (remote.data?.total ?? 0) : filtered.length;
   const statusOptions = [
     {
       value: "",
       label: "All players",
       count: remote.live
-        ? (remote.data?.counts.ALL ?? 0)
+        ? resultsReady
+          ? remote.data!.counts.ALL
+          : undefined
         : matchingPlayers.length,
     },
     {
       value: "ACTIVE",
       label: "ACTIVE",
       count: remote.live
-        ? (remote.data?.counts.ACTIVE ?? 0)
+        ? resultsReady
+          ? remote.data!.counts.ACTIVE
+          : undefined
         : matchingPlayers.filter((p) => p.status === "ACTIVE").length,
     },
     {
       value: "OUT",
       label: "OUT",
       count: remote.live
-        ? (remote.data?.counts.OUT ?? 0)
+        ? resultsReady
+          ? remote.data!.counts.OUT
+          : undefined
         : matchingPlayers.filter((p) => p.status === "OUT").length,
     },
   ];
@@ -102,11 +121,11 @@ export function PlayersView() {
     ? (remote.data?.page ?? requestedPage)
     : Math.min(
         Number(value("page", "0")),
-        Math.max(0, Math.ceil(filtered.length / 20) - 1),
+        Math.max(0, Math.ceil(filtered.length / browsing.pageSize) - 1),
       );
   const visible = remote.live
     ? filtered
-    : filtered.slice(page * 20, page * 20 + 20);
+    : filtered.slice(page * browsing.pageSize, (page + 1) * browsing.pageSize);
   function startCheckIn() {
     s.startOperation({ kind: "check-in" });
   }
@@ -268,7 +287,8 @@ export function PlayersView() {
                 hideChip: key === "status" || key === "type",
               }))}
             onClear={clearCriteria}
-            resultCount={total}
+            resultCount={resultsReady ? total : null}
+            loading={remote.loading && !resultsReady}
           >
             <Field label="Tag">
               <Select
@@ -284,26 +304,19 @@ export function PlayersView() {
               />
             </Field>
           </ListToolbar>
+          {browsing.controls}
         </div>
-        <ReadStatus state={remote} />
-        {!filtered.length && !remote.loading && !remote.error ? (
+        <ReadStatus state={remote} showLoading={resultsReady} />
+        {!resultsReady ? null : !filtered.length ? (
           <EmptyState
-            title={
-              s.players.length ||
-              value("search") ||
-              value("type") ||
-              value("status") ||
-              value("tag")
-                ? "No matching players."
-                : "No players yet"
-            }
+            title={hasCriteria ? "No matching players." : "No players yet"}
             description={
-              s.players.length
+              hasCriteria
                 ? "Try another search or clear the filters."
                 : "Check in your first player to create their profile and visit."
             }
           >
-            {s.players.length > 0 && (
+            {hasCriteria && (
               <Button variant="outline" onClick={clearCriteria}>
                 {t("Clear all")}
               </Button>
@@ -395,8 +408,10 @@ export function PlayersView() {
         <div className="px-3 pb-3 sm:px-4 sm:pb-4">
           <Pager
             label="Player pages"
+            {...browsing.pager}
             page={page}
-            total={total}
+            total={resultsReady ? total : null}
+            loading={remote.loading && !resultsReady}
             setPage={(p) => set("page", String(p))}
           />
         </div>

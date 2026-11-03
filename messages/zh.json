@@ -1147,6 +1147,15 @@
     "report_download_timed_out_try_exporting_again": "报表下载超时，请重新导出。",
     "request_upload_timed_out_please_try_again": "请求上传超时，请重试。",
     "request_upload_was_cancelled_please_try_again": "请求上传已取消，请重试。",
-    "wait_for_sign_in_to_finish_before_trying_again": "请等待登录完成后再重试。"
+    "wait_for_sign_in_to_finish_before_trying_again": "请等待登录完成后再重试。",
+    "sort_by": "排序方式",
+    "ascending": "升序",
+    "descending": "降序",
+    "rows_per_page": "每页条数",
+    "change_sort_direction": "切换排序方向",
+    "default_order": "默认顺序",
+    "check_in_time": "签到时间",
+    "updating_results": "正在更新结果…",
+    "results_unavailable": "暂时无法获取结果"
   }
 }

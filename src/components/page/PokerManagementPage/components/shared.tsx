@@ -15,17 +15,7 @@ import {
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { useLocale, useMessages } from "next-intl";
-import {
-  Check,
-  ChevronsUpDown,
-  Inbox,
-  LoaderCircle,
-  Info,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-} from "lucide-react";
+import { Check, ChevronsUpDown, Inbox, LoaderCircle, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -88,12 +78,8 @@ import {
   CommandItem,
   CommandGroup,
 } from "@/components/ui/command";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-} from "@/components/ui/pagination";
 import { Link } from "@/i18n/navigation";
+import { ListPager } from "./list-order-controls";
 import { fieldError } from "@/lib/form-validation";
 import { cn } from "@/lib/utils";
 import {
@@ -1030,112 +1016,15 @@ export function DayNotice() {
     </div>
   );
 }
-export function Pager({
-  page,
-  total,
-  setPage,
-  label = "Record pages",
-  pageSize = 20,
-}: {
+export function Pager(props: {
   page: number;
-  total: number;
+  total: number | null;
   setPage: (page: number) => void;
   label?: string;
+  loading?: boolean;
   pageSize?: number;
+  onPageSizeChange?: (pageSize: number) => void;
 }) {
   const t = useText();
-  const size = Number.isFinite(pageSize)
-    ? Math.max(1, Math.floor(pageSize))
-    : 20;
-  const count = Number.isFinite(total) ? Math.max(0, Math.floor(total)) : 0;
-  const pages = Math.max(1, Math.ceil(count / size));
-  const current = Math.min(
-    Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0),
-    pages - 1,
-  );
-  if (count <= size) return null;
-  return (
-    <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-      <p
-        className="text-sm text-muted-foreground"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        {t("Showing")} {current * size + 1}–
-        {Math.min((current + 1) * size, count)} {t("of")} {count}
-      </p>
-      <Pagination className="mx-0 w-auto" aria-label={t(label)}>
-        <PaginationContent className="gap-1">
-          {pages > 2 && (
-            <PaginationItem>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="size-11 sm:size-9"
-                aria-label={t("First page")}
-                disabled={current === 0}
-                onClick={() => setPage(0)}
-              >
-                <ChevronsLeft aria-hidden="true" />
-              </Button>
-            </PaginationItem>
-          )}
-          <PaginationItem>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-11 px-3 sm:h-9"
-              aria-label={t("Previous page")}
-              disabled={current === 0}
-              onClick={() => setPage(current - 1)}
-            >
-              <ChevronLeft aria-hidden="true" />
-              <span className="hidden sm:inline">{t("Previous")}</span>
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <span
-              className="whitespace-nowrap px-2 text-xs tabular-nums sm:text-sm"
-              aria-current="page"
-            >
-              <span className="sr-only">{t("Page")} </span>
-              {current + 1} / {pages}
-            </span>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-11 px-3 sm:h-9"
-              aria-label={t("Next page")}
-              disabled={current + 1 >= pages}
-              onClick={() => setPage(current + 1)}
-            >
-              <span className="hidden sm:inline">{t("Next")}</span>
-              <ChevronRight aria-hidden="true" />
-            </Button>
-          </PaginationItem>
-          {pages > 2 && (
-            <PaginationItem>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="size-11 sm:size-9"
-                aria-label={t("Last page")}
-                disabled={current + 1 >= pages}
-                onClick={() => setPage(pages - 1)}
-              >
-                <ChevronsRight aria-hidden="true" />
-              </Button>
-            </PaginationItem>
-          )}
-        </PaginationContent>
-      </Pagination>
-    </div>
-  );
+  return <ListPager {...props} t={t} />;
 }

@@ -90,10 +90,14 @@ test("empty filters are omitted while zero-based pages and encoded searches surv
     type: "",
     query: "Alex +6012 & VIP",
     status: "PENDING",
+    sort: "amount",
+    direction: "desc",
   });
   assert.equal(params.has("dayId"), false);
   assert.equal(params.has("type"), false);
   assert.equal(params.get("page"), "0");
   assert.equal(params.get("query"), "Alex +6012 & VIP");
   assert.equal(params.get("status"), "PENDING");
+  assert.equal(params.get("sort"), "amount");
+  assert.equal(params.get("direction"), "desc");
 });

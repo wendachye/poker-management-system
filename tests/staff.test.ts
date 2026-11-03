@@ -42,6 +42,14 @@ async function payload<T extends StaffCommand>(command: T) {
 test("staff access is admin-only, branch scoped, and does not expose password hashes", async () => {
   await assert.rejects(listStaff(fixture.db, cashierToken), /Only an admin/);
   await assert.rejects(listStaff(fixture.db, undefined), /expired/);
+  await assert.rejects(
+    listStaff(fixture.db, cashierToken, { pageSize: 1 }),
+    /Only an admin/,
+  );
+  await assert.rejects(
+    listStaff(fixture.db, undefined, { pageSize: 1 }),
+    /expired/,
+  );
   const list = await listStaff(fixture.db, token);
   assert.deepEqual(
     list.accounts.map((a) => a.username),
@@ -75,6 +83,147 @@ test("staff access is admin-only, branch scoped, and does not expose password ha
     ),
     /Only an admin/,
   );
+});
+test("staff pages sort the full venue directory with bounded filters and stable counts", async () => {
+  const { db, engine } = await testDatabase();
+  try {
+    const hash = await hashPassword(password);
+    for (let index = 0; index < 25; index++) {
+      await db.query(
+        "INSERT INTO poker_users(id,username,password_hash,active) VALUES($1,$2,$3,$4)",
+        [
+          `directory-${index}`,
+          `staff.${String(index).padStart(2, "0")}`,
+          hash,
+          index !== 24,
+        ],
+      );
+      await db.query(
+        "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,'local',$2)",
+        [`directory-${index}`, index === 0 ? "ADMIN" : "CASHIER"],
+      );
+    }
+    const session = await login(db, "staff.00", password);
+    const page = await listStaff(db, session, {
+      query: "staff.",
+      status: "active",
+      sort: "username",
+      direction: "desc",
+      pageSize: 10,
+    });
+    assert.equal(page.total, 24);
+    assert.equal(page.pageSize, 10);
+    assert.deepEqual(page.counts, { ALL: 25, ACTIVE: 24, DISABLED: 1 });
+    assert.deepEqual(
+      page.accounts.slice(0, 3).map((item) => item.username),
+      ["staff.23", "staff.22", "staff.21"],
+    );
+    const last = await listStaff(db, session, {
+      query: "staff.",
+      status: "active",
+      sort: "username",
+      direction: "desc",
+      pageSize: 10,
+      page: 999,
+    });
+    assert.equal(last.page, 2);
+    assert.equal(last.accounts.length, 4);
+    assert.equal((await listStaff(db, session)).accounts.length, 25);
+    const filtered = await listStaff(db, session, {
+      query: "STAFF.2",
+      role: "CASHIER",
+      status: "disabled",
+      sort: "active",
+      direction: "desc",
+    });
+    assert.deepEqual(
+      filtered.accounts.map((account) => account.username),
+      ["staff.24"],
+    );
+    assert.deepEqual(filtered.counts, { ALL: 5, ACTIVE: 4, DISABLED: 1 });
+    assert.equal((await listStaff(db, session, { query: "%" })).total, 0);
+    for (const invalid of [
+      { pageSize: 51 },
+      { sort: "username; DROP TABLE poker_users" },
+      { branchId: "other" },
+      { direction: "desc" },
+    ])
+      await assert.rejects(listStaff(db, session, invalid), /valid/);
+  } finally {
+    await engine.close();
+  }
+});
+test("paged staff search matches displayed Chinese role labels and literal partial terms", async () => {
+  const { db, engine } = await testDatabase();
+  try {
+    const hash = await hashPassword(password);
+    for (const [id, role, active] of [
+      ["bilingual.admin", "ADMIN", true],
+      ["cashier.alpha", "CASHIER", true],
+      ["cashier.zulu", "CASHIER", false],
+      ["bilingual.manager", "MANAGER", true],
+      ["bilingual.dealer", "DEALER", true],
+    ] as const) {
+      await db.query(
+        "INSERT INTO poker_users(id,username,password_hash,active) VALUES($1,$1,$2,$3)",
+        [id, hash, active],
+      );
+      await db.query(
+        "INSERT INTO poker_memberships(user_id,branch_id,role) VALUES($1,'local',$2)",
+        [id, role],
+      );
+    }
+    const session = await login(db, "bilingual.admin", password);
+    for (const query of ["收银员", "收银", "CASHIER"]) {
+      const page = await listStaff(db, session, {
+        query,
+        sort: "username",
+        direction: "desc",
+        pageSize: 1,
+      });
+      assert.equal(page.total, 2);
+      assert.deepEqual(page.counts, { ALL: 2, ACTIVE: 1, DISABLED: 1 });
+      assert.deepEqual(
+        page.accounts.map((account) => account.username),
+        ["cashier.zulu"],
+      );
+      const second = await listStaff(db, session, {
+        query,
+        sort: "username",
+        direction: "desc",
+        pageSize: 1,
+        page: 1,
+      });
+      assert.deepEqual(
+        second.accounts.map((account) => account.username),
+        ["cashier.alpha"],
+      );
+    }
+    for (const [query, username] of [
+      ["经理", "bilingual.manager"],
+      ["荷", "bilingual.dealer"],
+      ["管理", "bilingual.admin"],
+      ["cashier.alpha 收银", "cashier.alpha"],
+    ]) {
+      const page = await listStaff(db, session, { query });
+      assert.deepEqual(
+        page.accounts.map((account) => account.username),
+        [username],
+      );
+    }
+    assert.equal((await listStaff(db, session, { query: "收银%" })).total, 0);
+    const enabled = await listStaff(db, session, {
+      query: "收银员",
+      status: "active",
+    });
+    assert.deepEqual(
+      enabled.accounts.map((account) => account.username),
+      ["cashier.alpha"],
+    );
+    assert.deepEqual(enabled.counts, { ALL: 2, ACTIVE: 1, DISABLED: 1 });
+  } finally {
+    await engine.close();
+  }
 });
 test("create staff enforces the draft actor, persists once across retries, and audits no secrets", async () => {
   const request = {

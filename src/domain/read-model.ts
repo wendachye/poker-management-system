@@ -23,6 +23,8 @@ export type ReadQuery = {
   resource: ReadResource;
   page?: number;
   pageSize?: number;
+  sort?: string;
+  direction?: "asc" | "desc";
   query?: string;
   dayId?: string;
   date?: string;

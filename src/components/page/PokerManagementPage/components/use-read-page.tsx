@@ -200,8 +200,10 @@ export function useReadPage<T>(query: ReadQuery, enabled = true) {
 
 export function ReadStatus({
   state,
+  showLoading = true,
 }: {
   state: { loading: boolean; error: string; retry: () => void };
+  showLoading?: boolean;
 }) {
   const t = useText();
   if (state.error)
@@ -220,7 +222,7 @@ export function ReadStatus({
         </AlertDescription>
       </Alert>
     );
-  return state.loading ? (
+  return state.loading && showLoading ? (
     <p role="status" className="px-3 py-2 text-sm text-muted-foreground">
       {t("Loading records…")}
     </p>

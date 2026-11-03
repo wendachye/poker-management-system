@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { Role } from "@/domain/model";
-import type { StaffAccount } from "@/domain/staff";
+import type { StaffAccount, StaffListResult } from "@/domain/staff";
 import { displayName } from "@/lib/display-name";
 import { matchesListSearch } from "@/lib/list-search";
 import { managementJson } from "@/lib/management-request";
@@ -21,6 +21,7 @@ import { usePokerManagementContext } from "../PokerManagementProvider";
 import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
 import { QuickFilters } from "./quick-filters";
+import { useListBrowsing } from "./use-list-browsing";
 import { RowActions, type RowAction } from "./row-actions";
 import {
   ActionForm,
@@ -53,13 +54,24 @@ const roleHelp: Record<Role, string> = {
 export function StaffManagement() {
   const s = usePokerManagementContext(),
     t = useText();
-  const [accounts, setAccounts] = useState<StaffAccount[] | null>(null);
-  const [error, setError] = useState("");
+  const [result, setResult] = useState<{
+    key: string;
+    data: StaffListResult;
+  } | null>(null);
+  const [failure, setFailure] = useState<{
+    key: string;
+    message: string;
+  } | null>(null);
   const [reload, setReload] = useState(0);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("active");
-  const [roleFilter, setRoleFilter] = useState("");
-  const [requestedPage, setPage] = useState(0);
+  const browsing = useListBrowsing("staff", "staff");
+  const query = s.draft("staff.search");
+  const filter = s.draft("staff.status", "active");
+  const roleFilter = s.draft("staff.role");
+  const requestedPage = Math.max(0, Number(s.draft("staff.page", "0")) || 0);
+  const setQuery = (value: string) => s.setDraft("staff.search", value);
+  const setFilter = (value: string) => s.setDraft("staff.status", value);
+  const setRoleFilter = (value: string) => s.setDraft("staff.role", value);
+  const setPage = (value: number) => s.setDraft("staff.page", String(value));
   const [edit, setEdit] = useState<Edit | null>(null);
   const [username, setUsername] = useState("");
   const [role, setRole] = useState<Role>("CASHIER");
@@ -67,30 +79,98 @@ export function StaffManagement() {
   const [confirm, setConfirm] = useState("");
   const [reason, setReason] = useState("");
   const branchId = s.snapshot!.branch.id;
+  const previousSearch = useRef<{
+    identity: string;
+    criteria: string;
+    query: string;
+  } | null>(null);
+  const params = new URLSearchParams({
+    query,
+    status: filter,
+    ...(roleFilter ? { role: roleFilter } : {}),
+    page: String(requestedPage),
+    pageSize: String(browsing.pageSize),
+    ...Object.fromEntries(
+      Object.entries(browsing.query).filter(([key]) => key !== "pageSize"),
+    ),
+  }).toString();
+  const requestKey = JSON.stringify([
+    branchId,
+    s.user?.id,
+    s.user?.role,
+    params,
+  ]);
+  const error = failure?.key === requestKey ? failure.message : "";
+  const current = !error && result?.key === requestKey ? result.data : null;
+  const accounts = current?.accounts ?? null;
+  const resultsReady = !!accounts && !error;
+  const paged = !prototypeEnabled && current?.total !== undefined;
   useEffect(() => {
     const controller = new AbortController();
-    void managementJson<unknown>("/api/staff", {
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(staffReceipt)
-      .then((data) => {
-        if (controller.signal.aborted) return;
-        if (data.branchId !== branchId)
-          throw new Error(
-            "Your active branch changed. Reload this page before continuing.",
-          );
-        setAccounts(data.accounts);
-        setError("");
+    const criteria = new URLSearchParams(params);
+    const text = criteria.get("query") ?? "";
+    criteria.delete("query");
+    criteria.delete("page");
+    const identity = JSON.stringify([
+      branchId,
+      s.user?.id,
+      s.user?.role,
+      s.snapshot?.revision,
+      reload,
+    ]);
+    const previous = previousSearch.current;
+    const delay =
+      text.trim() &&
+      previous?.identity === identity &&
+      previous.criteria === criteria.toString() &&
+      previous.query !== text
+        ? 200
+        : 0;
+    previousSearch.current = {
+      identity,
+      criteria: criteria.toString(),
+      query: text,
+    };
+    const timer = setTimeout(() => {
+      setFailure(null);
+      void managementJson<unknown>("/api/staff?" + params, {
+        cache: "no-store",
+        signal: controller.signal,
       })
-      .catch((e: unknown) => {
-        if (!controller.signal.aborted)
-          setError(
-            e instanceof Error ? e.message : "Cannot load staff accounts.",
-          );
-      });
-    return () => controller.abort();
-  }, [branchId, s.snapshot?.revision, reload]);
+        .then(staffReceipt)
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          if (data.branchId !== branchId)
+            throw new Error(
+              "Your active branch changed. Reload this page before continuing.",
+            );
+          setResult({ key: requestKey, data });
+          setFailure(null);
+        })
+        .catch((e: unknown) => {
+          if (!controller.signal.aborted) {
+            setResult(null);
+            setFailure({
+              key: requestKey,
+              message:
+                e instanceof Error ? e.message : "Cannot load staff accounts.",
+            });
+          }
+        });
+    }, delay);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    branchId,
+    requestKey,
+    params,
+    s.user?.id,
+    s.user?.role,
+    s.snapshot?.revision,
+    reload,
+  ]);
   function start(next: Edit) {
     s.setError("");
     setUsername("");
@@ -131,23 +211,38 @@ export function StaffManagement() {
       ),
     );
   }
-  const matchingAccounts = (accounts ?? []).filter(
-    (a) =>
-      matchesListSearch(query, [
-        a.username,
-        displayName(a.username),
-        a.role,
-        t(a.role),
-      ]) &&
-      (!roleFilter || a.role === roleFilter),
+  const matchingAccounts = paged
+    ? (accounts ?? [])
+    : (accounts ?? []).filter(
+        (a) =>
+          matchesListSearch(query, [
+            a.username,
+            displayName(a.username),
+            a.role,
+            t(a.role),
+          ]) &&
+          (!roleFilter || a.role === roleFilter),
+      );
+  const rows = paged
+    ? matchingAccounts
+    : browsing.sortRows(
+        matchingAccounts.filter(
+          (a) => filter === "all" || a.active === (filter === "active"),
+        ),
+      );
+  const total = paged ? current!.total! : rows.length;
+  const noMatches = !!(
+    accounts?.length ||
+    query.trim() ||
+    roleFilter ||
+    filter !== "all"
   );
-  const rows = matchingAccounts.filter(
-    (a) => filter === "all" || a.active === (filter === "active"),
-  );
-  const page = Math.min(
-    requestedPage,
-    Math.max(0, Math.ceil(rows.length / 20) - 1),
-  );
+  const page = paged
+    ? current!.page!
+    : Math.min(
+        requestedPage,
+        Math.max(0, Math.ceil(rows.length / browsing.pageSize) - 1),
+      );
   const clearCriteria = () => {
     setQuery("");
     setFilter("all");
@@ -248,19 +343,30 @@ export function StaffManagement() {
             {
               value: "all",
               label: "All accounts",
-              count: matchingAccounts.length,
+              count: !resultsReady
+                ? undefined
+                : paged
+                  ? current!.counts!.ALL
+                  : matchingAccounts.length,
             },
             {
               value: "active",
               label: "Enabled",
-              count: matchingAccounts.filter((account) => account.active)
-                .length,
+              count: !resultsReady
+                ? undefined
+                : paged
+                  ? current!.counts!.ACTIVE
+                  : matchingAccounts.filter((account) => account.active).length,
             },
             {
               value: "disabled",
               label: "Disabled",
-              count: matchingAccounts.filter((account) => !account.active)
-                .length,
+              count: !resultsReady
+                ? undefined
+                : paged
+                  ? current!.counts!.DISABLED
+                  : matchingAccounts.filter((account) => !account.active)
+                      .length,
             },
           ]}
         />
@@ -308,7 +414,8 @@ export function StaffManagement() {
               : []),
           ]}
           onClear={clearCriteria}
-          resultCount={rows.length}
+          resultCount={resultsReady ? total : null}
+          loading={!resultsReady && !error}
         >
           <Field label="Role">
             <Select
@@ -327,6 +434,7 @@ export function StaffManagement() {
             />
           </Field>
         </ListToolbar>
+        {browsing.controls}
         {rows.some(
           (account) => account.sharedAccount && account.id !== s.user?.id,
         ) && (
@@ -350,26 +458,20 @@ export function StaffManagement() {
               </Button>
             </AlertDescription>
           </Alert>
-        ) : !accounts ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t("Loading staff accounts…")}
-          </p>
-        ) : !rows.length ? (
+        ) : !accounts ? null : !rows.length ? (
           <EmptyState
             title={
-              accounts.length
-                ? "No matching staff accounts"
-                : "No staff accounts yet"
+              noMatches ? "No matching staff accounts" : "No staff accounts yet"
             }
             description={
-              accounts.length
+              noMatches
                 ? "Try another search or clear the filters."
                 : prototypeEnabled
                   ? "Create a fictional staff record to demonstrate venue setup."
                   : "Create a staff account to give someone access to this location."
             }
           >
-            {accounts.length > 0 && (
+            {noMatches && (
               <Button variant="outline" onClick={clearCriteria}>
                 {t("Clear all")}
               </Button>
@@ -379,7 +481,14 @@ export function StaffManagement() {
           <RecordList
             label="Staff accounts"
             compact
-            rows={rows.slice(page * 20, page * 20 + 20)}
+            rows={
+              paged
+                ? rows
+                : rows.slice(
+                    page * browsing.pageSize,
+                    (page + 1) * browsing.pageSize,
+                  )
+            }
             rowKey={(a) => a.id}
             columns={[
               {
@@ -421,14 +530,14 @@ export function StaffManagement() {
             ]}
           />
         )}
-        {accounts && !error && (
-          <Pager
-            label="Staff account pages"
-            page={page}
-            total={rows.length}
-            setPage={setPage}
-          />
-        )}
+        <Pager
+          label="Staff account pages"
+          page={page}
+          total={resultsReady ? total : null}
+          loading={!resultsReady && !error}
+          setPage={setPage}
+          {...browsing.pager}
+        />
       </Panel>
       <Modal
         open={!!edit}

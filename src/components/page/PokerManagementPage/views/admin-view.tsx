@@ -14,6 +14,7 @@ import { matchesListSearch } from "@/lib/list-search";
 import { shiftDate } from "@/domain/reporting";
 import type { AuditLog } from "@/domain/model";
 import { ReadStatus, useReadPage } from "../components/use-read-page";
+import { useListBrowsing } from "../components/use-list-browsing";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 
 import {
@@ -40,6 +41,7 @@ export function AdminView({
   const [reopen, setReopen] = useState(false),
     [detail, setDetail] = useState<AuditLog | null>(null);
   const val = (key: string) => s.draft("audit." + key);
+  const browsing = useListBrowsing("audit", "audit");
   const set = (key: string, value: string) => {
     s.setDraft("audit." + key, value);
     s.setDraft("audit.page", "0");
@@ -57,29 +59,31 @@ export function AdminView({
           ? "week"
           : "";
   const query = val("search"),
-    localLogs = s.store.auditLogs.filter((log) => {
-      const date = new Intl.DateTimeFormat("en-CA", {
-        timeZone: s.snapshot!.branch.timezone,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(new Date(log.time));
-      return (
-        matchesListSearch(query, [
-          log.actor,
-          displayName(log.actor),
-          log.action,
-          t(log.action),
-          auditReason(log, s.store),
-          t(auditReason(log, s.store)),
-          log.entity,
-        ]) &&
-        (!val("staff") || log.actor === val("staff")) &&
-        (!val("action") || log.action === val("action")) &&
-        (!val("from") || date >= val("from")) &&
-        (!val("to") || date <= val("to"))
-      );
-    });
+    localLogs = browsing.sortRows(
+      s.store.auditLogs.filter((log) => {
+        const date = new Intl.DateTimeFormat("en-CA", {
+          timeZone: s.snapshot!.branch.timezone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date(log.time));
+        return (
+          matchesListSearch(query, [
+            log.actor,
+            displayName(log.actor),
+            log.action,
+            t(log.action),
+            auditReason(log, s.store),
+            t(auditReason(log, s.store)),
+            log.entity,
+          ]) &&
+          (!val("staff") || log.actor === val("staff")) &&
+          (!val("action") || log.action === val("action")) &&
+          (!val("from") || date >= val("from")) &&
+          (!val("to") || date <= val("to"))
+        );
+      }),
+    );
   const requestedPage = Math.max(0, Number(s.draft("audit.page", "0")) || 0);
   const remote = useReadPage<AuditLog>(
     {
@@ -90,17 +94,26 @@ export function AdminView({
       from: val("from"),
       to: val("to"),
       page: requestedPage,
+      ...browsing.query,
     },
     section === "audit",
   );
-  const logs = remote.live ? (remote.data?.items ?? []) : localLogs;
+  const resultsReady = !remote.live || (!!remote.data && !remote.error);
+  const hasCriteria = ["search", "staff", "action", "from", "to"].some((key) =>
+    val(key).trim(),
+  );
+  const logs = remote.live
+    ? resultsReady
+      ? remote.data!.items
+      : []
+    : localLogs;
   const auditStore = remote.data?.context.store ?? s.store;
   const total = remote.live ? (remote.data?.total ?? 0) : logs.length;
   const page = remote.live
     ? (remote.data?.page ?? requestedPage)
     : Math.min(
         Number(s.draft("audit.page", "0")),
-        Math.max(0, Math.ceil(logs.length / 20) - 1),
+        Math.max(0, Math.ceil(logs.length / browsing.pageSize) - 1),
       );
   if (section === "recovery" && s.user?.role !== "ADMIN") {
     return <EmptyState title="Admin access required." />;
@@ -186,7 +199,8 @@ export function AdminView({
                 hideChip: (key === "from" || key === "to") && !!datePreset,
               }))}
             onClear={clearCriteria}
-            resultCount={total}
+            resultCount={resultsReady ? total : null}
+            loading={remote.loading && !resultsReady}
           >
             <Field label="Staff">
               <Select
@@ -194,10 +208,17 @@ export function AdminView({
                 onValueChange={(v) => set("staff", v)}
                 options={[
                   { value: "", label: "All staff" },
-                  ...(remote.live
-                    ? (remote.data?.options?.staff ?? [])
-                    : [...new Set(s.store.auditLogs.map((log) => log.actor))]
-                  )
+                  ...[
+                    ...new Set([
+                      val("staff"),
+                      ...(remote.live
+                        ? resultsReady
+                          ? (remote.data?.options?.staff ?? [])
+                          : []
+                        : s.store.auditLogs.map((log) => log.actor)),
+                    ]),
+                  ]
+                    .filter(Boolean)
                     .sort()
                     .map((value) => ({ value, label: displayName(value) })),
                 ]}
@@ -209,10 +230,17 @@ export function AdminView({
                 onValueChange={(v) => set("action", v)}
                 options={[
                   { value: "", label: "All actions" },
-                  ...(remote.live
-                    ? (remote.data?.options?.actions ?? [])
-                    : [...new Set(s.store.auditLogs.map((log) => log.action))]
-                  )
+                  ...[
+                    ...new Set([
+                      val("action"),
+                      ...(remote.live
+                        ? resultsReady
+                          ? (remote.data?.options?.actions ?? [])
+                          : []
+                        : s.store.auditLogs.map((log) => log.action)),
+                    ]),
+                  ]
+                    .filter(Boolean)
                     .sort()
                     .map((value) => ({ value, label: value })),
                 ]}
@@ -235,21 +263,18 @@ export function AdminView({
               />
             </Field>
           </ListToolbar>
-          <ReadStatus state={remote} />
-          {!logs.length && !remote.loading && !remote.error ? (
+          {browsing.controls}
+          <ReadStatus state={remote} showLoading={resultsReady} />
+          {!resultsReady ? null : !logs.length ? (
             <EmptyState
-              title={
-                s.store.auditLogs.length
-                  ? "No matching activity"
-                  : "No activity yet"
-              }
+              title={hasCriteria ? "No matching activity" : "No activity yet"}
               description={
-                s.store.auditLogs.length
+                hasCriteria
                   ? "Try another search or clear the filters."
                   : "Activity will appear here as staff use this location."
               }
             >
-              {s.store.auditLogs.length > 0 && (
+              {hasCriteria && (
                 <Button variant="outline" onClick={clearCriteria}>
                   {t("Clear all")}
                 </Button>
@@ -259,7 +284,14 @@ export function AdminView({
             <RecordList
               compact
               label="Audit history"
-              rows={remote.live ? logs : logs.slice(page * 20, page * 20 + 20)}
+              rows={
+                remote.live
+                  ? logs
+                  : logs.slice(
+                      page * browsing.pageSize,
+                      (page + 1) * browsing.pageSize,
+                    )
+              }
               rowKey={(log) => log.id}
               columns={[
                 {
@@ -335,8 +367,10 @@ export function AdminView({
           <Pager
             label="Audit history pages"
             page={page}
-            total={total}
+            total={resultsReady ? total : null}
+            loading={remote.loading && !resultsReady}
             setPage={(p) => s.setDraft("audit.page", String(p))}
+            {...browsing.pager}
           />
         </Panel>
       )}

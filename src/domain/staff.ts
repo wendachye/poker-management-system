@@ -60,3 +60,20 @@ export type StaffAccount = {
   active: boolean;
   sharedAccount: boolean;
 };
+export type StaffListQuery = {
+  query?: string;
+  status?: "all" | "active" | "disabled";
+  role?: Role;
+  page?: number;
+  pageSize?: number;
+  sort?: string;
+  direction?: "asc" | "desc";
+};
+export type StaffListResult = {
+  branchId: string;
+  accounts: StaffAccount[];
+  total?: number;
+  page?: number;
+  pageSize?: number;
+  counts?: { ALL: number; ACTIVE: number; DISABLED: number };
+};

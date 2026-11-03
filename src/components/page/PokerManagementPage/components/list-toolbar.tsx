@@ -35,6 +35,7 @@ export function ListToolbar({
   activeFilters = [],
   onClear,
   resultCount,
+  loading = false,
   primaryFilters,
   children,
   compact = false,
@@ -45,7 +46,8 @@ export function ListToolbar({
   onSearchChange: (value: string) => void;
   activeFilters?: (string | ListFilter)[];
   onClear: () => void;
-  resultCount: number;
+  resultCount: number | null;
+  loading?: boolean;
   /** Frequently used criteria, visible without opening the filter panel. */
   primaryFilters?: ReactNode;
   children?: ReactNode;
@@ -182,8 +184,9 @@ export function ListToolbar({
                     className="h-11 w-full sm:h-10"
                     onClick={() => setOpen(false)}
                   >
-                    {t("Show")} {resultCount}{" "}
-                    {t(resultCount === 1 ? "result" : "results")}
+                    {resultCount === null
+                      ? t("Done")
+                      : `${t("Show")} ${resultCount} ${t(resultCount === 1 ? "result" : "results")}`}
                   </Button>
                 </div>
               </PopoverContent>
@@ -213,8 +216,11 @@ export function ListToolbar({
           role="status"
           aria-live="polite"
           aria-atomic="true"
+          aria-busy={loading || undefined}
         >
-          {resultCount} {t(resultCount === 1 ? "result" : "results")}
+          {resultCount === null
+            ? t(loading ? "Updating results…" : "Results unavailable")
+            : `${resultCount} ${t(resultCount === 1 ? "result" : "results")}`}
         </span>
         {compact && hasCriteria && (
           <Button

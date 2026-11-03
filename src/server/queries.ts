@@ -14,6 +14,7 @@ import type {
   Transaction,
 } from "../domain/model";
 import type { ReadPage, ReadQuery } from "../domain/read-model";
+import { validListSort, sortLocalRecords } from "../domain/list-sort";
 import { compareReports, rangeMetrics } from "../domain/reporting";
 import { emptyStore, playersForDay, totalsForDay } from "../domain/selectors";
 import { DomainError } from "../domain/operations";
@@ -47,6 +48,8 @@ const querySchema = z
     ]),
     page: z.coerce.number().int().min(0).max(1_000_000).default(0),
     pageSize: z.coerce.number().int().min(1).max(50).default(20),
+    sort: z.string().min(1).max(40).optional(),
+    direction: z.enum(["asc", "desc"]).optional(),
     query: text,
     dayId: id,
     date: text,
@@ -69,6 +72,12 @@ export function parseReadQuery(
     throw new DomainError(
       "Choose valid search filters and a page size from 1 to 50.",
     );
+  if (
+    (parsed.data.sort &&
+      !validListSort(parsed.data.resource, parsed.data.sort)) ||
+    (parsed.data.direction && !parsed.data.sort)
+  )
+    throw new DomainError("Choose a valid sort field and direction.");
   for (const key of ["date", "from", "to"] as const) {
     const value = parsed.data[key];
     if (
@@ -314,6 +323,58 @@ function search(
 function sqlWhere(target: Where) {
   return target.clauses.join(" AND ");
 }
+type SelectedSort = { expression: string; direction: "ASC" | "DESC" };
+const textSort = (expression: string) => `lower(${expression}) COLLATE "C"`;
+function selectedSort(query: ReadQuery): SelectedSort | undefined {
+  if (!query.sort) return;
+  const fields: Partial<Record<ReadQuery["resource"], Record<string, string>>> =
+    {
+      players: {
+        name: textSort("regexp_replace(p.name,'^Sample\\s*·\\s*','')"),
+        type: textSort("p.type"),
+        status: textSort("COALESCE(visit.status,'OUT')"),
+        creditUsed: "COALESCE(sort_total.credit_delta,0)",
+        sessionStart: "(visit.data->>'sessionStart')::timestamptz",
+      },
+      report: {
+        name: textSort("regexp_replace(p.name,'^Sample\\s*·\\s*','')"),
+        type: textSort("p.type"),
+        status: textSort("COALESCE(visit.status,'OUT')"),
+        buyIn: "COALESCE(sort_total.buy_in,0)",
+        cashOut: "COALESCE(sort_total.cash_out,0)",
+        creditUsed: "COALESCE(sort_total.credit_delta,0)",
+      },
+      requests: {
+        createdAt: "r.created_at::timestamptz",
+        amount: "(r.data->>'amount')::bigint",
+        type: textSort("r.type"),
+        requestedBy: textSort("r.data->>'requestedBy'"),
+      },
+      transactions: {
+        time: "receipt.time::timestamptz",
+        amount: "receipt.amount",
+        type: textSort("receipt.type"),
+        staff: textSort("receipt.data->>'staff'"),
+      },
+      audit: {
+        time: "a.time::timestamptz",
+        actor: textSort("a.actor"),
+        action: textSort("a.action"),
+        entity: textSort("a.entity"),
+      },
+      sessions: {
+        sessionStart: "v.session_start::timestamptz",
+        status: textSort("v.status"),
+      },
+    };
+  const expression = fields[query.resource]?.[query.sort];
+  if (!expression)
+    throw new DomainError("Choose a valid sort field and direction.");
+  return { expression, direction: query.direction === "desc" ? "DESC" : "ASC" };
+}
+function sortOrder(sort: SelectedSort, field = sort.expression, id = "id") {
+  return `${field} ${sort.direction} NULLS LAST,${id} COLLATE "C" ASC`;
+}
 async function paged<T>(
   connection: SqlConnection,
   source: string,
@@ -328,7 +389,39 @@ async function paged<T>(
     descending?: boolean;
     materializeFilter?: boolean;
   },
+  sort?: SelectedSort,
 ) {
+  if (payload && sort) {
+    const requestedPage = `$${target.values.length + 1}`,
+      size = `$${target.values.length + 2}`;
+    const result = await connection.query<{
+      total: string;
+      page: number;
+      data: unknown | null;
+    }>(
+      `WITH matches AS MATERIALIZED (
+        SELECT ${payload.alias}.branch_id,${payload.alias}.id,${sort.expression} AS sort_value
+        FROM ${source} WHERE ${sqlWhere(target)}
+      ), totals AS (SELECT count(*)::text AS total FROM matches), page_info AS (
+        SELECT total,LEAST(${requestedPage}::numeric,GREATEST(0,ceil(total::numeric/${size}::int)-1))::int AS page FROM totals
+      ), page_keys AS MATERIALIZED (
+        SELECT branch_id,id,sort_value FROM matches ORDER BY ${sortOrder(sort, "sort_value")}
+        LIMIT ${size}::int OFFSET (SELECT page FROM page_info)*${size}::int
+      ) SELECT page_info.total,page_info.page,item.data FROM page_info
+        LEFT JOIN page_keys picked ON true
+        LEFT JOIN ${payload.table} item ON item.branch_id=picked.branch_id AND item.id=picked.id
+        ORDER BY ${sortOrder(sort, "picked.sort_value", "picked.id")}`,
+      [...target.values, page, pageSize],
+    );
+    return {
+      rows: result.rows
+        .filter((row) => row.data !== null)
+        .map((row) => ({ data: row.data }) as T),
+      total: checkedTotal(result.rows[0].total),
+      page: result.rows[0].page,
+      pageSize,
+    };
+  }
   if (payload?.materializeFilter) {
     const requestedPage = `$${target.values.length + 1}`,
       size = `$${target.values.length + 2}`,
@@ -501,6 +594,12 @@ async function searchedRequestPage<T>(
   const key = requests ? "id" : "receipt_id",
     order = requests ? "order_no" : "receipt_order_no",
     table = requests ? "poker_approvals" : "poker_ledger";
+  const sort = selectedSort(query),
+    filteredSort = sort ? ",sort_value" : "",
+    pageOrder = sort ? sortOrder(sort, "sort_value") : "order_no,id",
+    itemOrder = sort
+      ? sortOrder(sort, "picked.sort_value", "picked.id")
+      : "picked.order_no,picked.id";
   const row = (
     await connection.query<{
       total: string;
@@ -512,7 +611,7 @@ async function searchedRequestPage<T>(
       items: T[];
     }>(
       `WITH matches AS MATERIALIZED (
-        SELECT r.id,r.status,r.requested_by_id,r.order_no,receipt.id AS receipt_id,receipt.order_no AS receipt_order_no
+        SELECT r.id,r.status,r.requested_by_id,r.order_no,receipt.id AS receipt_id,receipt.order_no AS receipt_order_no${sort ? `,${sort.expression} AS sort_value` : ""}
         FROM ${requestSource} WHERE ${sqlWhere(target)}
       ), counts AS (
         SELECT count(*) FILTER(WHERE status='PENDING')::text AS pending,
@@ -520,13 +619,13 @@ async function searchedRequestPage<T>(
           count(*) FILTER(WHERE status='REJECTED')::text AS rejected,
           count(*) FILTER(WHERE requested_by_id=${actor})::text AS mine FROM matches
       ), filtered AS MATERIALIZED (
-        SELECT ${key} AS id,${order} AS order_no FROM matches${selected.clauses.length ? ` WHERE ${sqlWhere(selected)}` : ""}
+        SELECT ${key} AS id,${order} AS order_no${filteredSort} FROM matches${selected.clauses.length ? ` WHERE ${sqlWhere(selected)}` : ""}
       ), totals AS (SELECT count(*)::text AS total FROM filtered), page_info AS (
         SELECT total,LEAST(${requestedPage}::numeric,GREATEST(0,ceil(total::numeric/${pageSize}::int)-1))::int AS page FROM totals
       ), page_keys AS MATERIALIZED (
-        SELECT id,order_no FROM filtered ORDER BY order_no,id LIMIT ${pageSize}::int OFFSET (SELECT page FROM page_info)*${pageSize}::int
+        SELECT id,order_no${filteredSort} FROM filtered ORDER BY ${pageOrder} LIMIT ${pageSize}::int OFFSET (SELECT page FROM page_info)*${pageSize}::int
       ) SELECT page_info.total,page_info.page,counts.*,
-        COALESCE((SELECT jsonb_agg(item.data ORDER BY picked.order_no,picked.id) FROM page_keys picked
+        COALESCE((SELECT jsonb_agg(item.data ORDER BY ${itemOrder}) FROM page_keys picked
           JOIN ${table} item ON item.branch_id=$1 AND item.id=picked.id),'[]'::jsonb) AS items
       FROM page_info CROSS JOIN counts`,
       selected.values,
@@ -596,7 +695,14 @@ async function readPageWithin(
     }
     const target = where(branchId, "p");
     target.values.push(day?.id ?? dayId);
-    const source = profileSource("$2");
+    const sort = selectedSort(query);
+    const financialSort =
+      query.sort && ["creditUsed", "buyIn", "cashOut"].includes(query.sort);
+    const source =
+      profileSource("$2") +
+      (financialSort
+        ? ` LEFT JOIN poker_financial_totals sort_total ON sort_total.branch_id=p.branch_id AND sort_total.entity_id=p.id AND sort_total.scope='${query.sort === "creditUsed" ? "PLAYER" : "PLAYER_DAY"}' AND sort_total.day_id=${query.sort === "creditUsed" ? "''" : "$2"}`
+        : "");
     if (query.resource === "player") {
       const selected = query.playerId ?? query.id;
       if (!selected) throw new DomainError("Choose a player.");
@@ -619,7 +725,7 @@ async function readPageWithin(
       source,
       "p.id",
       target,
-      "p.order_no,p.id",
+      sort ? sortOrder(sort, sort.expression, "p.id") : "p.order_no,p.id",
       query.page,
       query.pageSize,
     );
@@ -721,6 +827,7 @@ async function readPageWithin(
         query.page,
         query.pageSize,
         { table: "poker_approvals", alias: "r" },
+        selectedSort(query),
       );
       if (query.id && !page.total)
         throw new DomainError("Request not found.", 404);
@@ -751,6 +858,7 @@ async function readPageWithin(
       query.page,
       query.pageSize,
       { table: "poker_ledger", alias: "receipt" },
+      selectedSort(query),
     );
     if (query.resource === "receipt" && !page.total)
       throw new DomainError("Receipt not found.", 404);
@@ -797,6 +905,7 @@ async function readPageWithin(
         alias: "a",
         materializeFilter: !!query.query?.trim(),
       },
+      selectedSort(query),
     );
     const items = page.rows.map((row) => row.data),
       context = await operationalSnapshot(connection, user, {
@@ -842,6 +951,7 @@ async function readPageWithin(
       query.page,
       query.pageSize,
       { table: "poker_visits", alias: "v", descending: true },
+      selectedSort(query),
     );
     const items = page.rows.map((row) => row.data),
       context = await operationalSnapshot(connection, user, {
@@ -880,10 +990,15 @@ async function readPageWithin(
       user,
     });
     const report = compareReports(rangeStore, query.from, query.to);
-    const matching = report.current.days.filter(
-      (day) =>
-        (!query.status || day.status === query.status) &&
-        (!query.query || day.date.includes(query.query.trim())),
+    const matching = sortLocalRecords(
+      "range",
+      report.current.days.filter(
+        (day) =>
+          (!query.status || day.status === query.status) &&
+          (!query.query || day.date.includes(query.query.trim())),
+      ),
+      query.sort,
+      query.direction,
     );
     const page = Math.min(
       query.page,
@@ -989,6 +1104,8 @@ export async function readCsv(
         );
       const completeQuery = {
         ...query,
+        sort: undefined,
+        direction: undefined,
         query: undefined,
         status: undefined,
         type: undefined,
