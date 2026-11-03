@@ -9,6 +9,7 @@ import {
 } from "@/domain/list-sort";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { ListOrderControls } from "./list-order-controls";
+import type { ListSorting } from "./sortable-table-head";
 import { useText } from "./shared";
 
 /** Browsing preferences share the existing access-scoped read draft boundary.
@@ -33,7 +34,19 @@ export function useListBrowsing(
   const requestedSort = s.draft(key("sort"));
   const sort = validListSort(resource, requestedSort) ? requestedSort : "";
   const direction = s.draft(key("direction")) === "desc" ? "desc" : "asc";
+  const sorting: ListSorting = {
+    value: sort,
+    direction,
+    options: listSortOptions(resource),
+    onChange(value, order) {
+      if (value && !validListSort(resource, value)) return;
+      s.setDraft(key("sort"), value);
+      s.setDraft(key("direction"), value ? order : "");
+      s.setDraft(key("page"), "0");
+    },
+  };
   return {
+    sorting,
     pageSize,
     query: { pageSize, ...readSortQuery(sort, direction) },
     sortRows: <T,>(rows: readonly T[]) =>
@@ -46,13 +59,9 @@ export function useListBrowsing(
     controls: (
       <ListOrderControls
         options={listSortOptions(resource)}
-        value={sort}
-        direction={direction}
-        onChange={(value, order) => {
-          s.setDraft(key("sort"), value);
-          s.setDraft(key("direction"), value ? order : "");
-          s.setDraft(key("page"), "0");
-        }}
+        value={sorting.value}
+        direction={sorting.direction}
+        onChange={sorting.onChange}
         label={keys.label}
         t={t}
       />

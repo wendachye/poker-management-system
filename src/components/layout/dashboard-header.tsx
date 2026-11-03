@@ -86,9 +86,9 @@ export function DashboardHeader() {
   }
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1.5 border-b bg-background px-3 sm:gap-2 sm:px-4">
+      <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-1.5 border-b bg-background px-2 sm:h-14 sm:gap-2 sm:px-4">
         <SidebarTrigger
-          className="size-11 shrink-0 sm:size-10"
+          className="size-10 shrink-0"
           aria-label={t("Toggle sidebar")}
         />
         <Separator
@@ -138,7 +138,7 @@ export function DashboardHeader() {
           {branches.length > 0 && (
             <Select
               aria-label={t("Branch")}
-              className="h-11 gap-1 px-2 text-sm sm:h-10 sm:gap-2 sm:px-3"
+              className="h-10 gap-1 px-2 text-sm sm:gap-2 sm:px-3"
               value={user?.branchId ?? ""}
               onValueChange={(v) => {
                 if (busy || navigationBlock) return;

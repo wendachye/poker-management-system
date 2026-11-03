@@ -108,14 +108,14 @@ export function StaffLoginPage({
   }
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-sm space-y-5">
+      <div className="w-full max-w-sm space-y-4 sm:space-y-5">
         <div className="flex justify-end">
           <LanguageSwitcher />
         </div>
         <Card>
           <CardHeader>
             <CardTitle>
-              <h1 className="text-2xl">{t("Poker Management")}</h1>
+              <h1 className="text-xl sm:text-2xl">{t("Poker Management")}</h1>
             </CardTitle>
             <CardDescription>
               {t(
@@ -166,7 +166,7 @@ export function StaffLoginPage({
                 </Alert>
                 <Button
                   type="button"
-                  className="min-h-11 w-full"
+                  className="min-h-10 w-full sm:min-h-11"
                   disabled={!!busy}
                   onClick={() => void checkConnection()}
                 >
@@ -188,7 +188,7 @@ export function StaffLoginPage({
                   <Button
                     type="button"
                     variant="outline"
-                    className="min-h-11 w-full"
+                    className="min-h-10 w-full sm:min-h-11"
                     disabled={!!busy}
                     onClick={() => {
                       setAnotherAccount(true);
@@ -205,7 +205,7 @@ export function StaffLoginPage({
               </div>
             ) : (
               <form
-                className="space-y-5"
+                className="space-y-4 sm:space-y-5"
                 onSubmit={async (event) => {
                   event.preventDefault();
                   if (inFlight.current) return;
@@ -244,7 +244,7 @@ export function StaffLoginPage({
                     <AlertDescription>{t(error)}</AlertDescription>
                   </Alert>
                 )}
-                <FieldSet disabled={!!busy} className="gap-5">
+                <FieldSet disabled={!!busy} className="gap-4 sm:gap-5">
                   <Field label="Username">
                     <Input
                       ref={usernameInput}
@@ -266,7 +266,7 @@ export function StaffLoginPage({
                   </Field>
                   <Button
                     type="submit"
-                    className="min-h-11 w-full"
+                    className="min-h-10 w-full sm:min-h-11"
                     disabled={!!busy}
                   >
                     {t("Sign in")}
@@ -274,7 +274,7 @@ export function StaffLoginPage({
                 </FieldSet>
               </form>
             )}
-            <p className="mt-4 text-center text-sm text-muted-foreground">
+            <p className="mt-3 text-center text-xs sm:mt-4 sm:text-sm text-muted-foreground">
               {t("Need account access? Contact your venue administrator.")}
             </p>
           </CardContent>
@@ -288,7 +288,7 @@ function PasswordInput(props: ComponentProps<typeof InputGroupInput>) {
   const t = useText();
   const [visible, setVisible] = useState(false);
   return (
-    <InputGroup className="h-11">
+    <InputGroup className="h-10 sm:h-11">
       <InputGroupInput {...props} type={visible ? "text" : "password"} />
       <InputGroupAddon align="inline-end">
         <InputGroupButton

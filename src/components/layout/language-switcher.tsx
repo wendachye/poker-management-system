@@ -20,7 +20,7 @@ export function LanguageSwitcher({
     router = useRouter(),
     pathname = usePathname();
   return (
-    <div className={cn("w-28 shrink-0", compactMobile && "w-11 sm:w-28")}>
+    <div className={cn("w-28 shrink-0", compactMobile && "w-10 sm:w-28")}>
       <Select
         value={locale}
         onValueChange={(value) => router.replace(pathname, { locale: value })}
@@ -30,14 +30,16 @@ export function LanguageSwitcher({
           title={locale === "zh" ? "中文" : "English"}
           className={cn(
             compactMobile &&
-              "h-11 justify-center px-0 sm:h-10 sm:justify-between sm:px-3 [&>svg]:hidden sm:[&>svg]:block",
+              "h-10 justify-center px-0 sm:justify-between sm:px-3 [&>svg]:hidden sm:[&>svg]:block",
           )}
         >
           <SelectValue>
             {compactMobile && (
               <Languages className="size-4 sm:hidden" aria-hidden="true" />
             )}
-            <span className={compactMobile ? "sr-only sm:not-sr-only" : undefined}>
+            <span
+              className={compactMobile ? "sr-only sm:not-sr-only" : undefined}
+            >
               {locale === "zh" ? "中文" : "English"}
             </span>
           </SelectValue>

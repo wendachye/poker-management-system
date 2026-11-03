@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { RecordList } from "../components/record-list";
 import { ListToolbar } from "../components/list-toolbar";
+import { ListActions } from "../components/list-actions";
 import { QuickFilters } from "../components/quick-filters";
 import { auditChanges, auditReason } from "@/lib/audit-presentation";
 import { businessDayDates } from "@/lib/business-day-dates";
@@ -119,9 +120,9 @@ export function AdminView({
     return <EmptyState title="Admin access required." />;
   }
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       {section === "policy" && (
-        <Panel title="Approval policy">
+        <Panel>
           <ul className="list-inside list-disc space-y-2 text-sm">
             {[
               "Every request requires an independent reviewer.",
@@ -159,25 +160,28 @@ export function AdminView({
         </Panel>
       )}
       {section === "audit" && (
-        <Panel title="Audit history" compact>
-          <QuickFilters
-            label="Activity dates"
-            value={datePreset}
-            onValueChange={(value) => {
-              set(
-                "from",
-                value === "all" ? "" : value === "today" ? today : weekStart,
-              );
-              set("to", value === "all" ? "" : today);
-            }}
-            options={[
-              { value: "all", label: "All time" },
-              { value: "today", label: "Today" },
-              { value: "week", label: "Last 7 days" },
-            ]}
-          />
+        <Panel compact>
+          <ListActions>
+            <QuickFilters
+              label="Activity dates"
+              value={datePreset}
+              onValueChange={(value) => {
+                set(
+                  "from",
+                  value === "all" ? "" : value === "today" ? today : weekStart,
+                );
+                set("to", value === "all" ? "" : today);
+              }}
+              options={[
+                { value: "all", label: "All time" },
+                { value: "today", label: "Today" },
+                { value: "week", label: "Last 7 days" },
+              ]}
+            />
+          </ListActions>
           <ListToolbar
             compact
+            orderControls={browsing.controls}
             search={val("search")}
             searchLabel="Search audit history"
             searchPlaceholder="Staff, action, reason, or reference"
@@ -263,9 +267,96 @@ export function AdminView({
               />
             </Field>
           </ListToolbar>
-          {browsing.controls}
           <ReadStatus state={remote} showLoading={resultsReady} />
-          {!resultsReady ? null : !logs.length ? (
+          <RecordList
+            compact
+            label="Audit history"
+            sorting={browsing.sorting}
+            rows={
+              !resultsReady
+                ? []
+                : remote.live
+                  ? logs
+                  : logs.slice(
+                      page * browsing.pageSize,
+                      (page + 1) * browsing.pageSize,
+                    )
+            }
+            rowKey={(log) => log.id}
+            columns={[
+              {
+                label: "Action",
+                sortKey: "action",
+                render: (log) => (
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="font-medium [overflow-wrap:anywhere]">
+                      {t(log.action)}
+                    </p>
+                    <p
+                      className="max-w-64 truncate text-xs font-normal text-muted-foreground"
+                      title={t("Reference") + ": " + log.entity}
+                    >
+                      {t("Reference")}: {log.entity}
+                    </p>
+                  </div>
+                ),
+              },
+              {
+                label: "Staff",
+                sortKey: "actor",
+                mobileSpan: "half",
+                render: (log) => (
+                  <span className="[overflow-wrap:anywhere]">
+                    {displayName(log.actor)}
+                  </span>
+                ),
+              },
+              {
+                label: "Date",
+                sortKey: "time",
+                mobileSpan: "half",
+                render: (log) => (
+                  <span className="font-normal text-muted-foreground">
+                    {timestamp(log.time, s.snapshot!.branch.timezone)}
+                  </span>
+                ),
+              },
+              {
+                label: "Reason",
+                mobileSpan: "full",
+                render: (log) => (
+                  <p className="line-clamp-2 max-w-md font-normal [overflow-wrap:anywhere]">
+                    {t(auditReason(log, auditStore)) || "—"}
+                  </p>
+                ),
+              },
+              {
+                label: "Actions",
+                actions: true,
+                render: (log) => (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-10 sm:size-9"
+                    title={t("View details")}
+                    aria-label={
+                      t("View details") +
+                      " · " +
+                      t(log.action) +
+                      " · " +
+                      displayName(log.actor) +
+                      " · " +
+                      timestamp(log.time, s.snapshot!.branch.timezone)
+                    }
+                    onClick={() => setDetail(log)}
+                  >
+                    <Eye aria-hidden="true" />
+                  </Button>
+                ),
+              },
+            ]}
+          />
+          {resultsReady && !logs.length && (
             <EmptyState
               title={hasCriteria ? "No matching activity" : "No activity yet"}
               description={
@@ -280,89 +371,6 @@ export function AdminView({
                 </Button>
               )}
             </EmptyState>
-          ) : (
-            <RecordList
-              compact
-              label="Audit history"
-              rows={
-                remote.live
-                  ? logs
-                  : logs.slice(
-                      page * browsing.pageSize,
-                      (page + 1) * browsing.pageSize,
-                    )
-              }
-              rowKey={(log) => log.id}
-              columns={[
-                {
-                  label: "Action",
-                  render: (log) => (
-                    <div className="min-w-0 space-y-0.5">
-                      <p className="font-medium [overflow-wrap:anywhere]">
-                        {t(log.action)}
-                      </p>
-                      <p
-                        className="max-w-64 truncate text-xs font-normal text-muted-foreground"
-                        title={t("Reference") + ": " + log.entity}
-                      >
-                        {t("Reference")}: {log.entity}
-                      </p>
-                    </div>
-                  ),
-                },
-                {
-                  label: "Staff",
-                  mobileSpan: "half",
-                  render: (log) => (
-                    <span className="[overflow-wrap:anywhere]">
-                      {displayName(log.actor)}
-                    </span>
-                  ),
-                },
-                {
-                  label: "Date",
-                  mobileSpan: "half",
-                  render: (log) => (
-                    <span className="font-normal text-muted-foreground">
-                      {timestamp(log.time, s.snapshot!.branch.timezone)}
-                    </span>
-                  ),
-                },
-                {
-                  label: "Reason",
-                  mobileSpan: "full",
-                  render: (log) => (
-                    <p className="line-clamp-2 max-w-md font-normal [overflow-wrap:anywhere]">
-                      {t(auditReason(log, auditStore)) || "—"}
-                    </p>
-                  ),
-                },
-                {
-                  label: "Actions",
-                  actions: true,
-                  render: (log) => (
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="size-11 sm:size-9"
-                      title={t("View details")}
-                      aria-label={
-                        t("View details") +
-                        " · " +
-                        t(log.action) +
-                        " · " +
-                        displayName(log.actor) +
-                        " · " +
-                        timestamp(log.time, s.snapshot!.branch.timezone)
-                      }
-                      onClick={() => setDetail(log)}
-                    >
-                      <Eye aria-hidden="true" />
-                    </Button>
-                  ),
-                },
-              ]}
-            />
           )}
           <Pager
             label="Audit history pages"

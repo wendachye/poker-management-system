@@ -1,7 +1,7 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { useState } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
 import { ListToolbar } from "../../src/components/page/PokerManagementPage/components/list-toolbar";
@@ -11,6 +11,135 @@ import {
 } from "../../src/components/page/PokerManagementPage/components/list-order-controls";
 
 afterEach(cleanup);
+
+test("sorting stays separate from Filters and supports field, direction and default order", async () => {
+  function Example() {
+    const [sort, setSort] = useState("");
+    const [direction, setDirection] = useState<"asc" | "desc">("asc");
+    return (
+      <NextIntlClientProvider
+        locale="en"
+        timeZone="Asia/Kuala_Lumpur"
+        messages={{}}
+      >
+        <ListToolbar
+          search=""
+          searchLabel="Search players"
+          searchPlaceholder="Name or phone"
+          onSearchChange={() => {}}
+          onClear={() => {}}
+          resultCount={3}
+          orderControls={
+            <ListOrderControls
+              options={[
+                { value: "", label: "Default order" },
+                { value: "sessionStart", label: "Check-in time" },
+              ]}
+              value={sort}
+              direction={direction}
+              onChange={(next, order) => {
+                setSort(next);
+                setDirection(order);
+              }}
+            />
+          }
+        >
+          <label>
+            Tag
+            <input type="text" />
+          </label>
+        </ListToolbar>
+        <output aria-label="Selected order">
+          {sort} {direction}
+        </output>
+      </NextIntlClientProvider>
+    );
+  }
+  const user = userEvent.setup();
+  render(<Example />);
+  assert.equal(screen.queryByRole("combobox", { name: "Sort by" }), null);
+  await user.click(
+    screen.getByRole("button", { name: "Filters · Search players" }),
+  );
+  const filters = screen.getByRole("dialog", {
+    name: "Filters · Search players",
+  });
+  assert.ok(within(filters).getByRole("textbox", { name: "Tag" }));
+  assert.equal(within(filters).queryByText("Sort by"), null);
+  assert.equal(within(filters).queryByRole("combobox"), null);
+  assert.equal(within(filters).queryByRole("menuitemradio"), null);
+  await user.click(
+    within(filters).getByRole("button", { name: "Show 3 results" }),
+  );
+  const sortButton = screen.getByRole("button", { name: "Sort by" });
+  await user.click(sortButton);
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "Descending" })
+      .getAttribute("aria-disabled"),
+    "true",
+  );
+  await user.click(
+    screen.getByRole("menuitemradio", { name: "Check-in time" }),
+  );
+  assert.equal(
+    screen.getByLabelText("Selected order").textContent,
+    "sessionStart asc",
+  );
+  await user.click(screen.getByRole("menuitemradio", { name: "Descending" }));
+  assert.equal(
+    screen.getByLabelText("Selected order").textContent,
+    "sessionStart desc",
+  );
+  await user.keyboard("{Escape}");
+  assert.equal(screen.queryByRole("menu"), null);
+  assert.equal(document.activeElement, sortButton);
+  assert.equal(
+    sortButton.getAttribute("aria-description"),
+    "Check-in time · Descending",
+  );
+  await user.click(sortButton);
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "Check-in time" })
+      .getAttribute("aria-checked"),
+    "true",
+  );
+  await user.click(
+    screen.getByRole("menuitemradio", { name: "Default order" }),
+  );
+  assert.equal(screen.getByLabelText("Selected order").textContent, " asc");
+  await user.keyboard("{Escape}");
+  assert.equal(sortButton.getAttribute("aria-description"), "Default order");
+});
+
+test("a sorting-only toolbar does not show an empty Filters panel", () => {
+  render(
+    <NextIntlClientProvider
+      locale="en"
+      timeZone="Asia/Kuala_Lumpur"
+      messages={{}}
+    >
+      <ListToolbar
+        search=""
+        searchPlaceholder="Name"
+        onSearchChange={() => {}}
+        onClear={() => {}}
+        resultCount={2}
+        orderControls={
+          <ListOrderControls
+            options={[{ value: "", label: "Default order" }]}
+            value=""
+            direction="asc"
+            onChange={() => {}}
+          />
+        }
+      />
+    </NextIntlClientProvider>,
+  );
+  assert.ok(screen.getByRole("button", { name: "Sort by" }));
+  assert.equal(screen.queryByRole("button", { name: /Filters/ }), null);
+});
 
 test("list result status distinguishes pending, confirmed zero and unavailable results without losing search focus", async () => {
   function Example({
@@ -158,18 +287,22 @@ test("staff can select a sort field with the keyboard and change its direction",
   }
   const user = userEvent.setup();
   render(<Example />);
-  await user.click(screen.getByRole("combobox", { name: "Sort by" }));
-  await user.keyboard("{End}{Enter}");
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
+  await user.keyboard("{Home}{ArrowDown}{ArrowDown}{Enter}");
   assert.equal(
     screen.getByLabelText("Selected order").textContent,
     "credit asc",
   );
-  await user.click(
-    screen.getByRole("button", { name: /Change sort direction/ }),
-  );
+  await user.click(screen.getByRole("menuitemradio", { name: "Descending" }));
   assert.equal(
     screen.getByLabelText("Selected order").textContent,
     "credit desc",
+  );
+  await user.keyboard("{Escape}");
+  assert.equal(screen.queryByRole("menu"), null);
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("button", { name: "Sort by" }),
   );
 });
 
@@ -286,7 +419,7 @@ test("small legacy lists keep their original pager-free layout", () => {
   assert.equal(screen.queryByRole("navigation"), null);
 });
 
-test("choosing default order clears the field and disables an inapplicable direction toggle", async () => {
+test("choosing default order clears the field and disables inapplicable direction choices", async () => {
   function Example() {
     const [sort, setSort] = useState("name");
     const [direction, setDirection] = useState<"asc" | "desc">("desc");
@@ -304,26 +437,35 @@ test("choosing default order clears the field and disables an inapplicable direc
             setDirection(order);
           }}
         />
-        <output aria-label="Selected order">{sort || "default"}</output>
+        <output aria-label="Selected order">
+          {sort || "default"} {direction}
+        </output>
       </>
     );
   }
   const user = userEvent.setup();
   render(<Example />);
-  await user.click(screen.getByRole("combobox", { name: "Sort by" }));
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
   await user.keyboard("{Home}{Enter}");
-  assert.equal(screen.getByLabelText("Selected order").textContent, "default");
   assert.equal(
-    (
-      screen.getByRole("button", {
-        name: "Change sort direction",
-      }) as HTMLButtonElement
-    ).disabled,
-    true,
+    screen.getByLabelText("Selected order").textContent,
+    "default asc",
+  );
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "Ascending" })
+      .getAttribute("aria-disabled"),
+    "true",
+  );
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "Descending" })
+      .getAttribute("aria-disabled"),
+    "true",
   );
 });
 
-test("translated labels identify nested list controls without relying on icons", () => {
+test("translated labels identify nested list controls without relying on icons", async () => {
   const words: Record<string, string> = {
     "Rows per page": "每页行数",
     "Player pages": "玩家分页",
@@ -353,6 +495,18 @@ test("translated labels identify nested list controls without relying on icons",
     </>,
   );
   assert.ok(screen.getByRole("combobox", { name: "每页行数 · 玩家分页" }));
-  assert.ok(screen.getByRole("combobox", { name: "排序依据" }));
-  assert.ok(screen.getByRole("button", { name: "切换排序方向 · 升序" }));
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "排序依据" }));
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "玩家姓名" })
+      .getAttribute("aria-checked"),
+    "true",
+  );
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "升序" })
+      .getAttribute("aria-checked"),
+    "true",
+  );
 });

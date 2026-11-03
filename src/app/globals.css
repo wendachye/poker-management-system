@@ -130,6 +130,29 @@
   }
 }
 
+/* Compact mobile text, including portalled menus and dialogs. Keep editable
+   fields at 16px so entering data stays readable without focus zoom. */
+@media (width < 40rem) {
+  :root {
+    --text-sm: 0.8125rem;
+    --text-sm--line-height: 1.25rem;
+  }
+
+  [data-slot="input"],
+  [data-slot="textarea"],
+  [data-slot="input-group-control"],
+  [data-slot="command-input"] {
+    font-size: 1rem;
+  }
+
+  [data-slot="input"]::placeholder,
+  [data-slot="textarea"]::placeholder,
+  [data-slot="input-group-control"]::placeholder,
+  [data-slot="command-input"]::placeholder {
+    font-size: var(--text-sm);
+  }
+}
+
 /* Passive confirmations must not block the next operation underneath them. */
 [data-sonner-toaster] {
   pointer-events: none;

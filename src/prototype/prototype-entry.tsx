@@ -36,11 +36,15 @@ export function PrototypeEntry() {
       </div>
       <div className="mx-auto flex w-full max-w-lg flex-1 items-center py-8">
         <Card className="w-full">
-          <CardHeader className="space-y-3">
+          <CardHeader className="space-y-2 sm:space-y-3">
             <Badge variant="secondary" className="w-fit">
               {t("Frontend prototype")}
             </Badge>
-            <CardTitle role="heading" aria-level={1} className="text-2xl">
+            <CardTitle
+              role="heading"
+              aria-level={1}
+              className="text-xl sm:text-2xl"
+            >
               {t("Explore venue operations")}
             </CardTitle>
             <CardDescription>
@@ -49,8 +53,8 @@ export function PrototypeEntry() {
               )}
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <ul className="space-y-4 text-sm">
+          <CardContent className="space-y-4 sm:space-y-6">
+            <ul className="space-y-3 text-sm sm:space-y-4">
               {features.map(({ icon: Icon, label }) => (
                 <li key={label} className="flex items-center gap-3">
                   <Icon
@@ -62,7 +66,7 @@ export function PrototypeEntry() {
               ))}
             </ul>
             <Button
-              className="h-11 w-full"
+              className="h-10 w-full sm:h-11"
               onClick={() => router.replace("/dashboard")}
             >
               {t("Open prototype")}

@@ -32,7 +32,7 @@ export function QuickFilters({
             t(option.label) +
             (option.count === undefined ? "" : " · " + option.count)
           }
-          className={`h-auto min-h-11 min-w-0 flex-1 flex-col gap-0.5 whitespace-normal px-2 py-1.5 text-xs sm:h-9 sm:min-h-9 sm:flex-none sm:flex-row sm:gap-2 sm:whitespace-nowrap sm:px-3 ${value === option.value ? "bg-background text-foreground shadow-xs hover:bg-background" : "text-muted-foreground"}`}
+          className={`h-auto min-h-10 min-w-0 flex-1 flex-col gap-0.5 whitespace-normal px-2 py-1 text-xs sm:h-9 sm:min-h-9 sm:flex-none sm:flex-row sm:gap-2 sm:whitespace-nowrap sm:px-3 sm:py-1.5 ${value === option.value ? "bg-background text-foreground shadow-xs hover:bg-background" : "text-muted-foreground"}`}
           onClick={() => onValueChange(option.value)}
         >
           <span>{t(option.label)}</span>

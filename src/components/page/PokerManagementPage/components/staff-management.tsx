@@ -20,6 +20,7 @@ import { prototypeEnabled } from "@/prototype/config";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
+import { ListActions } from "./list-actions";
 import { QuickFilters } from "./quick-filters";
 import { useListBrowsing } from "./use-list-browsing";
 import { RowActions, type RowAction } from "./row-actions";
@@ -262,7 +263,7 @@ export function StaffManagement() {
         <Button
           size="sm"
           variant="outline"
-          className="h-11 sm:h-9"
+          className="h-10 sm:h-9"
           disabled={blocked}
           aria-label={t("Change role") + " · " + displayName(account.username)}
           onClick={() => start({ action: "role", account })}
@@ -308,70 +309,74 @@ export function StaffManagement() {
   return (
     <>
       <Panel
-        title="Staff accounts"
         description={
           prototypeEnabled
             ? "Manage fictional staff records in this tab. Use Demo role to try the built-in sample accounts. Changes reset when you refresh."
-            : "Manage staff access for this location. Every change is recorded in the audit history."
+            : undefined
         }
         compact
-        action={
-          <Button
-            size="sm"
-            className="h-11 px-3 sm:h-9"
-            aria-label={t("Create staff account")}
-            title={t("Create staff account")}
-            disabled={s.busy || s.retryRequired}
-            onClick={() => start({ action: "create" })}
-          >
-            <UserPlus />
-            <span className="sm:hidden">{t("Add staff")}</span>
-            <span className="hidden sm:inline">
-              {t("Create staff account")}
-            </span>
-          </Button>
-        }
       >
-        <QuickFilters
-          label="Account status"
-          value={filter}
-          onValueChange={(value) => {
-            setFilter(value);
-            setPage(0);
-          }}
-          options={[
-            {
-              value: "all",
-              label: "All accounts",
-              count: !resultsReady
-                ? undefined
-                : paged
-                  ? current!.counts!.ALL
-                  : matchingAccounts.length,
-            },
-            {
-              value: "active",
-              label: "Enabled",
-              count: !resultsReady
-                ? undefined
-                : paged
-                  ? current!.counts!.ACTIVE
-                  : matchingAccounts.filter((account) => account.active).length,
-            },
-            {
-              value: "disabled",
-              label: "Disabled",
-              count: !resultsReady
-                ? undefined
-                : paged
-                  ? current!.counts!.DISABLED
-                  : matchingAccounts.filter((account) => !account.active)
-                      .length,
-            },
-          ]}
-        />
+        <ListActions
+          actions={
+            <Button
+              size="sm"
+              className="h-10 px-3 sm:h-9"
+              aria-label={t("Create staff account")}
+              title={t("Create staff account")}
+              disabled={s.busy || s.retryRequired}
+              onClick={() => start({ action: "create" })}
+            >
+              <UserPlus />
+              <span className="sm:hidden">{t("Add staff")}</span>
+              <span className="hidden sm:inline">
+                {t("Create staff account")}
+              </span>
+            </Button>
+          }
+        >
+          <QuickFilters
+            label="Account status"
+            value={filter}
+            onValueChange={(value) => {
+              setFilter(value);
+              setPage(0);
+            }}
+            options={[
+              {
+                value: "all",
+                label: "All accounts",
+                count: !resultsReady
+                  ? undefined
+                  : paged
+                    ? current!.counts!.ALL
+                    : matchingAccounts.length,
+              },
+              {
+                value: "active",
+                label: "Enabled",
+                count: !resultsReady
+                  ? undefined
+                  : paged
+                    ? current!.counts!.ACTIVE
+                    : matchingAccounts.filter((account) => account.active)
+                        .length,
+              },
+              {
+                value: "disabled",
+                label: "Disabled",
+                count: !resultsReady
+                  ? undefined
+                  : paged
+                    ? current!.counts!.DISABLED
+                    : matchingAccounts.filter((account) => !account.active)
+                        .length,
+              },
+            ]}
+          />
+        </ListActions>
         <ListToolbar
           compact
+          orderControls={browsing.controls}
           search={query}
           searchLabel="Search staff accounts"
           searchPlaceholder="Username or role"
@@ -434,17 +439,72 @@ export function StaffManagement() {
             />
           </Field>
         </ListToolbar>
-        {browsing.controls}
         {rows.some(
           (account) => account.sharedAccount && account.id !== s.user?.id,
         ) && (
           <p className="text-xs leading-5 text-muted-foreground">
             <span className="font-medium">{t("Multiple locations")}: </span>
             {t(
-              "Password and account access are managed with the operator commands.",
+              "Passwords and shared access: contact your system administrator.",
             )}
           </p>
         )}
+        <RecordList
+          label="Staff accounts"
+          compact
+          sorting={browsing.sorting}
+          rows={
+            !resultsReady
+              ? []
+              : paged
+                ? rows
+                : rows.slice(
+                    page * browsing.pageSize,
+                    (page + 1) * browsing.pageSize,
+                  )
+          }
+          rowKey={(a) => a.id}
+          columns={[
+            {
+              label: "Username",
+              sortKey: "username",
+              render: (a) => (
+                <div className="min-w-0 space-y-0.5">
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                      {displayName(a.username)}
+                    </span>
+                    {a.id === s.user?.id && (
+                      <span className="text-xs font-normal text-muted-foreground">
+                        ({t("You")})
+                      </span>
+                    )}
+                  </div>
+                  {a.sharedAccount && (
+                    <p className="text-xs font-normal leading-4 text-muted-foreground">
+                      {t("Multiple locations")}
+                    </p>
+                  )}
+                </div>
+              ),
+            },
+            { label: "Role", sortKey: "role", render: (a) => t(a.role) },
+            {
+              label: "Status",
+              sortKey: "active",
+              render: (a) => (
+                <Badge tone={a.active ? "green" : "neutral"}>
+                  {a.active ? "Enabled" : "Disabled"}
+                </Badge>
+              ),
+            },
+            {
+              label: "Actions",
+              actions: true,
+              render: accountActions,
+            },
+          ]}
+        />
         {error ? (
           <Alert variant="destructive">
             <AlertDescription>
@@ -477,59 +537,7 @@ export function StaffManagement() {
               </Button>
             )}
           </EmptyState>
-        ) : (
-          <RecordList
-            label="Staff accounts"
-            compact
-            rows={
-              paged
-                ? rows
-                : rows.slice(
-                    page * browsing.pageSize,
-                    (page + 1) * browsing.pageSize,
-                  )
-            }
-            rowKey={(a) => a.id}
-            columns={[
-              {
-                label: "Username",
-                render: (a) => (
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
-                        {displayName(a.username)}
-                      </span>
-                      {a.id === s.user?.id && (
-                        <span className="text-xs font-normal text-muted-foreground">
-                          ({t("You")})
-                        </span>
-                      )}
-                    </div>
-                    {a.sharedAccount && (
-                      <p className="text-xs font-normal leading-4 text-muted-foreground">
-                        {t("Multiple locations")}
-                      </p>
-                    )}
-                  </div>
-                ),
-              },
-              { label: "Role", render: (a) => t(a.role) },
-              {
-                label: "Status",
-                render: (a) => (
-                  <Badge tone={a.active ? "green" : "neutral"}>
-                    {a.active ? "Enabled" : "Disabled"}
-                  </Badge>
-                ),
-              },
-              {
-                label: "Actions",
-                actions: true,
-                render: accountActions,
-              },
-            ]}
-          />
-        )}
+        ) : null}
         <Pager
           label="Staff account pages"
           page={page}

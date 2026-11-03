@@ -77,7 +77,7 @@ export function ApprovalNotifications() {
         <Button
           variant="ghost"
           size="icon"
-          className="relative size-11 shrink-0 sm:size-10"
+          className="relative size-10 shrink-0"
           aria-label={`${t("Approval queue")}: ${countLabel}`}
           title={countLabel}
         >
@@ -106,7 +106,7 @@ export function ApprovalNotifications() {
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
       >
-        <PopoverHeader className="shrink-0 border-b p-4">
+        <PopoverHeader className="shrink-0 border-b p-3 sm:p-4">
           <div className="flex items-center justify-between gap-2">
             <PopoverTitle id={titleId}>{t("Approval queue")}</PopoverTitle>
             <Button
@@ -190,7 +190,7 @@ export function ApprovalNotifications() {
                   <Link
                     href="/transactions"
                     onClick={() => openQueue(request.id)}
-                    className="block space-y-1.5 p-4 outline-none transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    className="block space-y-1 p-3 outline-none sm:space-y-1.5 sm:p-4 transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 font-medium">
                       <span>{t(request.type)}</span>

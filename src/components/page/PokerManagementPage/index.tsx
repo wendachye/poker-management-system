@@ -73,7 +73,7 @@ export function PokerManagementPage({
   const needsSetup =
     state.snapshot && !venueSettings(state.store).setupCompleted;
   return (
-    <div className="min-w-0 space-y-6 sm:space-y-7">
+    <div className="min-w-0 space-y-4 sm:space-y-7">
       <PageHeader
         title={
           moduleDetails?.title ?? module[0].toUpperCase() + module.slice(1)
@@ -81,7 +81,7 @@ export function PokerManagementPage({
         description={moduleDetails?.description ?? descriptions[module]}
         metadata={
           state.snapshot && (
-            <dl className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs leading-5 text-muted-foreground">
+            <dl className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs leading-4 text-muted-foreground sm:leading-5">
               <div className="min-w-0">
                 <dt className="sr-only">{t("Venue name")}</dt>
                 <dd className="break-words">

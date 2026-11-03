@@ -214,6 +214,58 @@
   border-style: dashed;
 }
 
+.map[data-selection="true"] .seatButton:disabled {
+  opacity: 1;
+}
+
+.map[data-selection="true"] .seat[data-occupied="true"] .seatCircle {
+  border-color: color-mix(in oklab, var(--foreground) 25%, var(--card));
+  background: var(--muted);
+  color: var(--muted-foreground);
+  box-shadow: 0 0 0 3px var(--card);
+}
+
+.map[data-selection="true"] .seat[data-occupied="true"] .seatName {
+  color: var(--muted-foreground);
+}
+
+.map[data-selection="true"] .seat[data-current] .seatCircle {
+  border-style: dashed;
+  border-color: var(--foreground);
+  color: var(--foreground);
+  outline: 1px dashed var(--muted-foreground);
+  outline-offset: 3px;
+}
+
+.map[data-selection="true"] .seat[data-current] .seatName {
+  color: var(--foreground);
+}
+
+.map[data-selection="true"] .seat[data-selected] .seatCircle {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow:
+    0 0 0 3px var(--card),
+    0 0 0 5px var(--foreground);
+}
+
+.selectionIndicator {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: flex;
+  width: 17px;
+  height: 17px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--card);
+  border-radius: 50%;
+  background: var(--foreground);
+  color: var(--background);
+  pointer-events: none;
+}
+
 .seatName {
   display: flex;
   position: absolute;

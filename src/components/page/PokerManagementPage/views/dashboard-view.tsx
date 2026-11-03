@@ -21,7 +21,7 @@ export function DashboardView() {
   );
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 xl:grid-cols-4">
         <Stat label="Active players" value={String(summary.activePlayers)} />
         <Card>
@@ -61,7 +61,7 @@ export function DashboardView() {
                 </span>
               )}
             </p>
-            <Button variant="outline" size="sm" asChild>
+            <Button variant="outline" size="sm" className="h-10 sm:h-9" asChild>
               <Link
                 href="/transactions"
                 onClick={() => {
@@ -80,8 +80,8 @@ export function DashboardView() {
         </Alert>
       )}
 
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-        <div className="min-w-0 space-y-5">
+      <div className="grid items-start gap-4 sm:gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-4 sm:space-y-5">
           <Panel
             title="Business-day cash flow"
             description="Posted cash movements for the selected business day."

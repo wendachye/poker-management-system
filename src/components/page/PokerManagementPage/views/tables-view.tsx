@@ -1,6 +1,5 @@
 "use client";
 import { useState } from "react";
-import { Plus, ArrowRightLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -11,7 +10,8 @@ import { matchesListSearch } from "@/lib/list-search";
 import { usePokerManagementContext } from "../PokerManagementProvider";
 import { money, parseMoney } from "../utils";
 import { ListToolbar } from "../components/list-toolbar";
-import { VenueRulesButton } from "../components/venue-rules";
+import { ListActions } from "../components/list-actions";
+import { TableActions, TableSeatingHelp } from "../components/table-actions";
 import { TableFloorCard } from "../components/table-floor-card";
 import { TableSeatDragProvider } from "../components/table-seat-drag";
 import {
@@ -35,6 +35,7 @@ export function TablesView() {
     set = (key: string, v: string) => s.setDraft("table." + key, v);
   const manager = ["MANAGER", "ADMIN"].includes(s.user!.role),
     operator = s.user?.role !== "DEALER";
+  const canMove = operator && !s.locked && s.activePlayers.length > 0;
   const [settings, setSettings] = useState(false);
   function edit(table?: PokerTable) {
     set("id", table?.id ?? "");
@@ -89,37 +90,35 @@ export function TablesView() {
     set("page", "0");
   };
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       <DayNotice />
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          {s.tables.filter((t) => t.status === "OPEN").length}{" "}
-          {t("open tables")} · {s.activePlayers.length} {t("active players")}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          <VenueRulesButton />
-          {operator && !s.locked && s.activePlayers.length > 0 && (
-            <Button
-              variant="outline"
-              data-table-move-trigger
-              disabled={s.locked || !s.activePlayers.length}
-              onClick={() => {
-                s.setError("");
-                s.startOperation({ kind: "move" });
-              }}
-            >
-              <ArrowRightLeft />
-              {t("Move player")}
-            </Button>
-          )}
-          {manager && (
-            <Button onClick={() => edit()}>
-              <Plus />
-              {t("Add table")}
-            </Button>
-          )}
+      <ListActions
+        actions={
+          <TableActions
+            canManage={manager}
+            canMove={canMove}
+            hasTables={s.tables.length > 0}
+            onAdd={() => edit()}
+            onMove={() => {
+              s.setError("");
+              s.startOperation({ kind: "move" });
+            }}
+          />
+        }
+      >
+        <div className="flex min-w-0 items-center justify-between gap-2 sm:justify-start">
+          <p className="text-sm text-muted-foreground">
+            {s.tables.filter((t) => t.status === "OPEN").length}{" "}
+            {t("open tables")} · {s.activePlayers.length} {t("active players")}
+          </p>
+          {canMove &&
+            visibleTables.some(
+              (table) =>
+                table.status === "OPEN" &&
+                s.activePlayers.some((player) => player.tableId === table.id),
+            ) && <TableSeatingHelp />}
         </div>
-      </div>
+      </ListActions>
       {!s.tables.length && (
         <EmptyState
           title="No tables yet"
@@ -128,6 +127,7 @@ export function TablesView() {
       )}
       {!!s.tables.length && (
         <ListToolbar
+          compact
           search={val("search")}
           searchLabel="Search tables"
           searchPlaceholder="Table name or dealer"
@@ -146,10 +146,12 @@ export function TablesView() {
                       ": " +
                       t(
                         val("filter") === "AVAILABLE"
-                          ? "Available seats"
+                          ? "Available tables"
                           : val("filter") === "FULL"
                             ? "Full tables"
-                            : "Closed tables",
+                            : val("filter") === "OPEN"
+                              ? "Open tables"
+                              : "Closed tables",
                       ),
                     onRemove: () => {
                       set("filter", "ALL");
@@ -162,21 +164,21 @@ export function TablesView() {
           onClear={clearFilters}
           resultCount={visibleTables.length}
           primaryFilters={
-            <Field label="Availability">
-              <Select
-                value={val("filter", "ALL")}
-                onValueChange={(v) => {
-                  set("filter", v);
-                  set("page", "0");
-                }}
-                options={[
-                  { value: "ALL", label: "All tables" },
-                  { value: "AVAILABLE", label: "Available seats" },
-                  { value: "FULL", label: "Full tables" },
-                  { value: "CLOSED", label: "Closed tables" },
-                ]}
-              />
-            </Field>
+            <Select
+              aria-label={t("Availability")}
+              value={val("filter", "ALL")}
+              onValueChange={(v) => {
+                set("filter", v);
+                set("page", "0");
+              }}
+              options={[
+                { value: "ALL", label: "All tables" },
+                { value: "OPEN", label: "Open tables only" },
+                { value: "AVAILABLE", label: "Available tables" },
+                { value: "FULL", label: "Full tables" },
+                { value: "CLOSED", label: "Closed tables" },
+              ]}
+            />
           }
         />
       )}
@@ -190,21 +192,8 @@ export function TablesView() {
           </Button>
         </EmptyState>
       )}
-      {operator &&
-        !s.locked &&
-        visibleTables.some(
-          (table) =>
-            table.status === "OPEN" &&
-            s.activePlayers.some((player) => player.tableId === table.id),
-        ) && (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t(
-              "Drag to an empty seat to move, or onto a player to swap. On a phone, press and hold.",
-            )}
-          </p>
-        )}
       <TableSeatDragProvider>
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] items-start gap-6">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] items-start gap-4 sm:gap-6">
           {visibleTables
             .slice(page * pageSize, (page + 1) * pageSize)
             .map((table) => (
@@ -240,6 +229,11 @@ export function TablesView() {
       <Modal
         open={settings}
         onOpenChange={setSettings}
+        fallbackFocus={() =>
+          document.querySelector<HTMLButtonElement>(
+            "[data-table-manage-trigger], [data-table-add-trigger]",
+          )
+        }
         title={val("id") ? "Edit table" : "Add table"}
         description="Configure the table, stakes, buy-in limits, dealer, and availability."
       >

@@ -1,4 +1,7 @@
 import { JSDOM } from "jsdom";
+import { register } from "node:module";
+
+register(new URL("./css-module-loader.mjs", import.meta.url));
 
 // Component tests use a DOM, not a running browser or the operations database.
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
@@ -46,6 +49,21 @@ globalThis.requestAnimationFrame = dom.window.requestAnimationFrame.bind(
 globalThis.cancelAnimationFrame = dom.window.cancelAnimationFrame.bind(
   dom.window,
 );
+// Keep animations inactive while retaining the browser media-query API.
+dom.window.matchMedia = (media: string): MediaQueryList => ({
+  media,
+  matches: media.includes("prefers-reduced-motion: reduce"),
+  onchange: null,
+  addListener() {},
+  removeListener() {},
+  addEventListener() {},
+  removeEventListener() {},
+  dispatchEvent: () => false,
+});
+Object.defineProperty(dom.window.document, "fonts", {
+  configurable: true,
+  value: { ready: Promise.resolve() },
+});
 class PointerEvent extends dom.window.MouseEvent {
   pointerId = 1;
   pointerType = "mouse";

@@ -3,6 +3,7 @@ import { matchesListSearch } from "./list-search";
 export type SearchChoiceOption = {
   value: string;
   label: string;
+  description?: string;
   disabled?: boolean;
   searchTerms?: readonly string[];
   /** Explicit phone fields only; numeric references must retain punctuation. */
@@ -15,7 +16,12 @@ export function matchesSearchChoice(
 ): boolean {
   return matchesListSearch(
     query,
-    [option.value, option.label, ...(option.searchTerms ?? [])],
+    [
+      option.value,
+      option.label,
+      option.description ?? "",
+      ...(option.searchTerms ?? []),
+    ],
     option.phoneNumbers ?? [],
   );
 }

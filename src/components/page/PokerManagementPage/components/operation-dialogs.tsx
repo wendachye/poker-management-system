@@ -8,7 +8,13 @@ import {
   buyInQuickAmounts,
   validBuyInDraftAmount,
 } from "@/lib/operation-form-options";
-import type { EntryType, Player, PlayerType, PlayerTag } from "@/domain/model";
+import type {
+  EntryType,
+  Player,
+  PlayerType,
+  PlayerTag,
+  PokerTable,
+} from "@/domain/model";
 import { ReadStatus, useReadPage } from "./use-read-page";
 import { effectiveTableRules, venueSettings } from "@/domain/settings";
 import { MAX_MONEY } from "@/domain/money";
@@ -43,6 +49,7 @@ import { money, parseMoney } from "../utils";
 import { CashOutSummary, EntryImpact } from "./entry-impact";
 import type { CheckInContinuation } from "./check-in-continuation";
 import { PlayerDetails, EditPlayer } from "./player-details";
+import { SeatAssignment } from "./seat-assignment";
 import {
   playerMoveBlockedReason,
   seatMoveBlockedReason,
@@ -54,6 +61,43 @@ function useFields(initial: Record<string, string>) {
     value: (key: string, fallback = "") => values[key] ?? fallback,
     set: (key: string, value: string) =>
       setValues((old) => ({ ...old, [key]: value })),
+  };
+}
+function playerChoice(
+  player: Player,
+  tables: PokerTable[],
+  t: (text: string) => string,
+) {
+  const table =
+    player.status === "ACTIVE"
+      ? tables.find((entry) => entry.id === player.tableId)
+      : undefined;
+  return {
+    value: player.id,
+    label: displayName(player.name),
+    description: [
+      player.phone,
+      t(player.type),
+      table && displayName(table.name),
+      table && player.seat && `${t("Seat")} ${player.seat}`,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    searchTerms: [player.name, player.type, table?.name ?? ""],
+    phoneNumbers: [player.phone],
+  };
+}
+function tableChoice(
+  table: PokerTable,
+  rules: ReturnType<typeof effectiveTableRules>,
+  seatsAvailable: number,
+  t: (text: string) => string,
+) {
+  return {
+    value: table.id,
+    label: displayName(table.name),
+    description: `${money(rules.smallBlind)} / ${money(rules.bigBlind)} · ${seatsAvailable} ${t("seats available")}`,
+    searchTerms: [table.name, table.dealer],
   };
 }
 export function OperationDialogs() {
@@ -164,6 +208,24 @@ function CheckInDialog({
     (returning
       ? selected?.type === "CREDIT"
       : value("type", "CASH") === "CREDIT");
+  const selectedTable = s.tables.find((table) => table.id === value("table"));
+  const selectedSeat = Number(value("seat"));
+  const seatBlockedReason =
+    value("table") && (!selectedTable || selectedTable.status !== "OPEN")
+      ? "Select an open table."
+      : value("seat") &&
+          (!Number.isInteger(selectedSeat) ||
+            selectedSeat < 1 ||
+            selectedSeat > 9)
+        ? "Select a seat from 1 to 9."
+        : value("seat") &&
+            s.activePlayers.some(
+              (player) =>
+                player.tableId === value("table") &&
+                player.seat === selectedSeat,
+            )
+          ? "That seat is occupied."
+          : null;
   const phoneCheckStatus = phoneCheckRequired ? (
     phoneLookup.error ? (
       <ReadStatus state={phoneLookup} />
@@ -207,6 +269,7 @@ function CheckInDialog({
             setStep("seat");
             return false;
           }
+          if (seatBlockedReason) throw new Error(seatBlockedReason);
           submittedVisit.current = {
             branchId: s.snapshot!.branch.id,
             dayId: s.day!.id,
@@ -262,26 +325,26 @@ function CheckInDialog({
             </li>
           ))}
         </ol>
-        <div ref={stageRef} className="min-w-0 space-y-5">
+        <div ref={stageRef} className="min-w-0 space-y-4 sm:space-y-5">
           {step === "player" && (
-            <FormSection title="Player details">
+            <FormSection title="Player details" hideTitle>
               <Tabs
                 value={returning ? "returning" : "new"}
                 onValueChange={(v) => set("mode", v)}
               >
-                <TabsList className="h-auto w-full">
-                  <TabsTrigger value="returning" className="min-h-11">
+                <TabsList className="!h-auto w-full">
+                  <TabsTrigger
+                    value="returning"
+                    className="min-h-10 sm:min-h-11"
+                  >
                     {t("Returning player")}
                   </TabsTrigger>
-                  <TabsTrigger value="new" className="min-h-11">
+                  <TabsTrigger value="new" className="min-h-10 sm:min-h-11">
                     {t("New player")}
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="returning" className="space-y-4 pt-3">
-                  <Field
-                    label="Player"
-                    hint="Returning players keep their profile, restrictions, and outstanding credit."
-                  >
+                  <Field label="Player">
                     <SearchSelect
                       required
                       value={value("existing")}
@@ -321,10 +384,7 @@ function CheckInDialog({
                               !p.tags.includes("Banned"),
                           )
                           .map((p) => ({
-                            value: p.id,
-                            label: displayName(p.name) + " · " + p.phone,
-                            searchTerms: [p.name],
-                            phoneNumbers: [p.phone],
+                            ...playerChoice(p, s.tables, t),
                             disabled:
                               p.type === "CREDIT" && !settings.creditEnabled,
                           })),
@@ -404,7 +464,7 @@ function CheckInDialog({
                           <Button
                             type="button"
                             variant="outline"
-                            className="min-h-11 w-full sm:w-auto"
+                            className="min-h-10 w-full sm:min-h-11 sm:w-auto"
                             disabled={
                               duplicate.status !== "ACTIVE" &&
                               duplicate.type === "CREDIT" &&
@@ -487,7 +547,7 @@ function CheckInDialog({
                       <Button
                         type="button"
                         variant="ghost"
-                        className="h-11 w-full justify-between px-0 text-muted-foreground"
+                        className="h-10 w-full justify-between px-0 text-muted-foreground sm:h-11"
                       >
                         {t("More options")}
                         {value("tag") ? " · " + t(value("tag")) : ""}
@@ -557,18 +617,21 @@ function CheckInDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  className="h-11 shrink-0 px-2 text-xs"
+                  className="h-10 shrink-0 px-2 text-xs sm:h-11"
                   onClick={() => setStep("player")}
                 >
                   {t("Change player")}
                 </Button>
               </div>
-              <FormSection title="Seat assignment">
+              <FormSection title="Seat assignment" hideTitle>
                 <Field label="Table">
-                  <Select
+                  <SearchSelect
                     required
                     value={value("table")}
-                    className="[&>span]:min-w-0"
+                    placeholder="Select table"
+                    searchLabel="Search tables"
+                    searchPlaceholder="Table name or dealer"
+                    emptyText="No matching tables."
                     onValueChange={(v) => {
                       set("table", v);
                       set("seat", "");
@@ -578,46 +641,33 @@ function CheckInDialog({
                       ...openTables.map((table) => {
                         const rules = effectiveTableRules(s.store, table);
                         return {
-                          value: table.id,
+                          ...tableChoice(table, rules, freeSeats(table.id), t),
                           disabled: freeSeats(table.id) === 0,
-                          label:
-                            displayName(table.name) +
-                            " · " +
-                            money(rules.smallBlind) +
-                            " / " +
-                            money(rules.bigBlind) +
-                            " · " +
-                            freeSeats(table.id) +
-                            " " +
-                            t("seats available"),
                         };
                       }),
                     ]}
                   />
                 </Field>
-                {value("table") ? (
+                {seatBlockedReason && (
+                  <Alert role="alert">
+                    <AlertDescription>{t(seatBlockedReason)}</AlertDescription>
+                  </Alert>
+                )}
+                {selectedTable ? (
                   <Field
                     label="Seat"
                     hint="Choose an available seat. Occupied seats are disabled."
                   >
-                    <ChoiceButtons
+                    <SeatAssignment
                       aria-label={t("Seat")}
                       required
+                      table={selectedTable}
+                      players={s.activePlayers}
                       value={value("seat")}
                       onValueChange={(v) => set("seat", v)}
-                      options={[
-                        ...Array.from({ length: 9 }, (_, i) => i + 1).map(
-                          (seat) => ({
-                            value: String(seat),
-                            label: t("Seat") + " " + seat,
-                            disabled: s.activePlayers.some(
-                              (player) =>
-                                player.tableId === value("table") &&
-                                player.seat === seat,
-                            ),
-                          }),
-                        ),
-                      ]}
+                      disabled={
+                        s.locked || s.busy || s.retryRequired || !operator
+                      }
                     />
                   </Field>
                 ) : (
@@ -633,7 +683,7 @@ function CheckInDialog({
               </FormSection>
               <label
                 htmlFor={buyInNextId}
-                className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border p-3"
+                className="flex min-h-10 cursor-pointer items-start gap-3 rounded-lg border p-3 sm:min-h-11"
               >
                 <Checkbox
                   id={buyInNextId}
@@ -646,10 +696,7 @@ function CheckInDialog({
                   <span className="block font-medium">
                     {t("Open buy-in after check-in")}
                   </span>
-                  <span
-                    id={buyInNextId + "-hint"}
-                    className="block text-xs leading-5 text-muted-foreground"
-                  >
+                  <span id={buyInNextId + "-hint"} className="sr-only">
                     {t(
                       "A buy-in draft opens for this player. Review the amount before sending it for approval.",
                     )}
@@ -660,7 +707,12 @@ function CheckInDialog({
           )}
         </div>
         <FormActions
-          disabled={creditBlocked || !!duplicate || phoneCheckBlocked}
+          disabled={
+            creditBlocked ||
+            !!duplicate ||
+            phoneCheckBlocked ||
+            (step === "seat" && !!seatBlockedReason)
+          }
         >
           {step === "player"
             ? "Choose seat"
@@ -870,7 +922,7 @@ function TransactionDialog({
           s.closeOperation();
         }}
       >
-        <FormSection title="Request details">
+        <FormSection title="Request details" hideTitle>
           {changingType ? (
             <div ref={typePanel}>
               <Field label="Transaction type">
@@ -913,7 +965,7 @@ function TransactionDialog({
               <Button
                 type="button"
                 variant="ghost"
-                className="h-11 shrink-0 px-2 text-xs sm:h-9"
+                className="h-10 shrink-0 px-2 text-xs sm:h-9"
                 onClick={() => setChangingType(true)}
               >
                 {t("Change type")}
@@ -951,7 +1003,7 @@ function TransactionDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  className="h-11 shrink-0 px-2 text-xs sm:h-9"
+                  className="h-10 shrink-0 px-2 text-xs sm:h-9"
                   onClick={() => setChangingPlayer(true)}
                 >
                   {t("Change player")}
@@ -1024,10 +1076,7 @@ function TransactionDialog({
                       ].map((player) => [player.id, player]),
                     ).values(),
                   ].map((p) => ({
-                    value: p.id,
-                    label: displayName(p.name) + " · " + p.phone,
-                    searchTerms: [p.name],
-                    phoneNumbers: [p.phone],
+                    ...playerChoice(p, s.tables, t),
                     disabled:
                       type === "Buy-in" &&
                       p.type === "CREDIT" &&
@@ -1097,9 +1146,13 @@ function TransactionDialog({
                 cashMovement ? "Optional for house cash movements." : undefined
               }
             >
-              <Select
+              <SearchSelect
                 required={!cashMovement}
                 value={val("table")}
+                placeholder="Select table"
+                searchLabel="Search tables"
+                searchPlaceholder="Table name or dealer"
+                emptyText="No matching tables."
                 onValueChange={(v) => set("table", v)}
                 options={[
                   {
@@ -1110,22 +1163,21 @@ function TransactionDialog({
                     .filter((table) => table.status === "OPEN")
                     .map((table) => {
                       const rules = effectiveTableRules(s.store, table);
-                      return {
-                        value: table.id,
-                        label:
-                          displayName(table.name) +
-                          " · " +
-                          money(rules.smallBlind) +
-                          " / " +
-                          money(rules.bigBlind),
-                      };
+                      return tableChoice(
+                        table,
+                        rules,
+                        9 -
+                          s.activePlayers.filter((p) => p.tableId === table.id)
+                            .length,
+                        t,
+                      );
                     }),
                 ]}
               />
             </Field>
           )}
         </FormSection>
-        <FormSection title="Amount and note">
+        <FormSection title="Amount and note" hideTitle>
           <Field
             label={
               type === "Cash-out"
@@ -1139,11 +1191,9 @@ function TransactionDialog({
                     : "Amount (RM)"
             }
             hint={
-              type === "Cash-out"
-                ? "Enter the total value of chips returned."
-                : repayment
-                  ? "Repayment cannot exceed outstanding credit."
-                  : undefined
+              repayment
+                ? "Repayment cannot exceed outstanding credit."
+                : undefined
             }
           >
             <MoneyInput
@@ -1157,7 +1207,7 @@ function TransactionDialog({
               type="button"
               variant="outline"
               size="sm"
-              className="h-auto min-h-11 max-w-full whitespace-normal text-xs sm:min-h-9"
+              className="h-auto min-h-10 max-w-full whitespace-normal text-xs sm:min-h-9"
               data-mark-dirty="true"
               onClick={() => {
                 set("amount", "0.00");
@@ -1172,7 +1222,7 @@ function TransactionDialog({
               type="button"
               variant="outline"
               size="sm"
-              className="h-auto min-h-11 max-w-full flex-wrap whitespace-normal text-xs sm:min-h-9"
+              className="h-auto min-h-10 max-w-full flex-wrap whitespace-normal text-xs sm:min-h-9"
               disabled={selectedPlayer.creditUsed <= 0}
               data-mark-dirty="true"
               onClick={() => {
@@ -1207,7 +1257,7 @@ function TransactionDialog({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-auto min-h-11 max-w-full flex-col gap-0 whitespace-normal text-xs leading-4 sm:min-h-9 sm:flex-row sm:gap-1"
+                      className="h-auto min-h-10 max-w-full flex-col gap-0 whitespace-normal text-xs leading-4 sm:min-h-9 sm:flex-row sm:gap-1"
                       data-mark-dirty="true"
                       onClick={() => {
                         set("amount", (minimum / 100).toFixed(2));
@@ -1224,7 +1274,7 @@ function TransactionDialog({
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-auto min-h-11 max-w-full whitespace-normal text-xs leading-4 sm:min-h-9"
+                      className="h-auto min-h-10 max-w-full whitespace-normal text-xs leading-4 sm:min-h-9"
                       aria-label={
                         t("Use amount") + " · " + money(suggestedAmount)
                       }
@@ -1244,7 +1294,7 @@ function TransactionDialog({
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-auto min-h-11 max-w-full flex-col gap-0 whitespace-normal text-xs leading-4 sm:min-h-9 sm:flex-row sm:gap-1"
+                        className="h-auto min-h-10 max-w-full flex-col gap-0 whitespace-normal text-xs leading-4 sm:min-h-9 sm:flex-row sm:gap-1"
                         data-mark-dirty="true"
                         onClick={() => {
                           set("amount", (maximum / 100).toFixed(2));
@@ -1305,7 +1355,7 @@ function TransactionDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  className="h-11 w-full justify-between px-0 text-muted-foreground"
+                  className="h-10 w-full justify-between px-0 text-muted-foreground sm:h-11"
                 >
                   {t(val("note").trim() ? "Edit note" : "Add note")}
                   <ChevronDown
@@ -1318,7 +1368,7 @@ function TransactionDialog({
                 <Button
                   type="button"
                   variant="ghost"
-                  className="h-11 px-2 text-xs text-muted-foreground"
+                  className="h-10 px-2 text-xs text-muted-foreground sm:h-11"
                   onClick={() => setChangingType(true)}
                 >
                   {t("Change type")}
@@ -1336,9 +1386,11 @@ function TransactionDialog({
               request={{ type, amount, playerId: val("player") || undefined }}
             />
           )}
-          <p className="text-xs text-muted-foreground">
-            {t("Balances change only after independent approval.")}
-          </p>
+          {!validDraftAmount && (
+            <p className="text-xs text-muted-foreground">
+              {t("Balances change only after independent approval.")}
+            </p>
+          )}
         </div>
         <FormActions
           disabled={!!disabledReason || !validDraftAmount}
@@ -1463,8 +1515,11 @@ function MoveDialog({
   const destinationRules = destination
     ? effectiveTableRules(s.store, destination)
     : undefined;
+  const playerBlockedReason = val("player")
+    ? playerMoveBlockedReason(s.store, val("player"))
+    : null;
   const blockedReason = val("player")
-    ? (playerMoveBlockedReason(s.store, val("player")) ??
+    ? (playerBlockedReason ??
       (val("destination") && val("seat")
         ? seatMoveBlockedReason(s.store, val("player"), {
             tableId: val("destination"),
@@ -1478,7 +1533,11 @@ function MoveDialog({
       open
       onOpenChange={() => s.closeOperation()}
       title="Move player"
-      description="Review the player and destination before moving. Pending transactions must be resolved first."
+      description={
+        selectedPlayer
+          ? `${displayName(selectedPlayer.name)} · ${t("Current seat")}: ${displayName(currentTable?.name ?? t("No active seat"))} · ${t("Seat")} ${selectedPlayer.seat}`
+          : "Review the player and destination before moving. Pending transactions must be resolved first."
+      }
       fallbackFocus={() =>
         document.querySelector<HTMLElement>(
           `[data-player-seat="${CSS.escape(val("player"))}"]`,
@@ -1489,6 +1548,11 @@ function MoveDialog({
         disabled={s.locked || !operator}
         onSubmit={() => {
           if (blockedReason) throw new Error(blockedReason);
+          const currentReason = seatMoveBlockedReason(s.store, val("player"), {
+            tableId: val("destination"),
+            seat: Number(val("seat")),
+          });
+          if (currentReason) throw new Error(currentReason);
           return s.submit({
             kind: "MOVE",
             playerId: val("player"),
@@ -1503,7 +1567,7 @@ function MoveDialog({
             <AlertDescription>{t(blockedReason)}</AlertDescription>
           </Alert>
         )}
-        <FormSection title="Player details">
+        <FormSection title="Player details" hideTitle>
           <Field label="Player">
             <SearchSelect
               required
@@ -1514,78 +1578,66 @@ function MoveDialog({
               }}
               options={[
                 { value: "", label: "Select player" },
-                ...s.activePlayers.map((p) => ({
-                  value: p.id,
-                  label: displayName(p.name) + " · " + p.phone,
-                  searchTerms: [p.name],
-                  phoneNumbers: [p.phone],
-                })),
+                ...s.activePlayers.map((p) => playerChoice(p, s.tables, t)),
               ]}
             />
           </Field>
-          {selectedPlayer && (
-            <p className="rounded-lg bg-muted/40 p-3 text-sm">
-              <span className="text-muted-foreground">
-                {t("Current seat")}:{" "}
-              </span>
-              {displayName(currentTable?.name ?? t("No active seat"))} ·{" "}
-              {t("Seat")} {selectedPlayer.seat}
-            </p>
-          )}
         </FormSection>
-        <FormSection title="Seat assignment">
-          <FormGrid>
-            <Field label="Destination table">
-              <Select
+        <FormSection title="Seat assignment" hideTitle>
+          <Field label="Destination table">
+            <SearchSelect
+              required
+              value={val("destination")}
+              placeholder="Select table"
+              searchLabel="Search tables"
+              searchPlaceholder="Table name or dealer"
+              emptyText="No matching tables."
+              onValueChange={(v) => {
+                set("destination", v);
+                set("seat", "");
+              }}
+              options={[
+                { value: "", label: "Select table" },
+                ...s.tables
+                  .filter((t) => t.status === "OPEN")
+                  .map((table) => {
+                    const rules = effectiveTableRules(s.store, table);
+                    return tableChoice(
+                      table,
+                      rules,
+                      9 -
+                        s.activePlayers.filter((p) => p.tableId === table.id)
+                          .length,
+                      t,
+                    );
+                  }),
+              ]}
+            />
+          </Field>
+          {destination && (
+            <Field
+              label="Seat"
+              hint="Choose an available seat. Occupied seats are disabled."
+            >
+              <SeatAssignment
                 required
-                value={val("destination")}
-                onValueChange={(v) => {
-                  set("destination", v);
-                  set("seat", "");
-                }}
-                options={[
-                  { value: "", label: "Select table" },
-                  ...s.tables
-                    .filter((t) => t.status === "OPEN")
-                    .map((table) => {
-                      const rules = effectiveTableRules(s.store, table);
-                      return {
-                        value: table.id,
-                        label:
-                          displayName(table.name) +
-                          " · " +
-                          money(rules.smallBlind) +
-                          " / " +
-                          money(rules.bigBlind),
-                      };
-                    }),
-                ]}
-              />
-            </Field>
-            <Field label="Seat" hint="Only available seats are listed.">
-              <Select
-                required
-                disabled={!val("destination")}
+                aria-label={t("Seat")}
+                table={destination}
+                players={s.activePlayers}
+                currentPlayerId={selectedPlayer?.id}
+                disabled={
+                  s.locked ||
+                  s.busy ||
+                  s.retryRequired ||
+                  !operator ||
+                  !selectedPlayer ||
+                  !!playerBlockedReason
+                }
                 value={val("seat")}
                 onValueChange={(v) => set("seat", v)}
-                options={[
-                  { value: "", label: "Select seat" },
-                  ...Array.from({ length: 9 }, (_, i) => i + 1)
-                    .filter(
-                      (seat) =>
-                        !s.activePlayers.some(
-                          (p) =>
-                            p.tableId === val("destination") && p.seat === seat,
-                        ),
-                    )
-                    .map((seat) => ({
-                      value: String(seat),
-                      label: String(seat),
-                    })),
-                ]}
               />
             </Field>
-          </FormGrid>
+          )}
           {destinationRules && (
             <div
               className="space-y-3 rounded-lg border bg-muted/30 p-3"

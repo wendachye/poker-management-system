@@ -43,7 +43,7 @@ const noop = () => {};
 const registerRead = () => noop;
 const now = new Date("2026-11-03T05:00:00Z");
 
-function fixture() {
+function fixture(options: { holdSort?: boolean } = {}) {
   const admin: Staff = {
     id: "ui-admin",
     username: "UI admin",
@@ -178,11 +178,14 @@ function fixture() {
     });
   }
   let pending: { empty: () => void; fail: () => void } | undefined;
+  let lastRead: ReadQuery | undefined;
   const read: PokerManagementState["read"] = async <T,>(
     query: ReadQuery,
     signal?: AbortSignal,
   ): Promise<ReadPage<T>> => {
-    if (!query.query) return page(query) as ReadPage<T>;
+    lastRead = { ...query };
+    if (!query.query && !(options.holdSort && query.sort))
+      return page(query) as ReadPage<T>;
     return new Promise((resolve, reject) => {
       const request = {
         empty: () => resolve(page(query, true) as ReadPage<T>),
@@ -203,6 +206,9 @@ function fixture() {
     snapshot,
     playerId,
     read,
+    get lastRead() {
+      return lastRead;
+    },
     async respondEmpty() {
       await waitFor(() =>
         assert.ok(pending, "The read adapter received the new criteria"),
@@ -580,6 +586,7 @@ test("player session history retains its focused controls during loading and aft
       <PlayerDetails playerId={data.playerId} />
     </Boundary>,
   );
+  await user.click(screen.getByRole("tab", { name: "Sessions" }));
   const section = await screen.findByRole("region", {
     name: "Session history",
   });
@@ -852,5 +859,148 @@ for (const scenario of [
       screen.getByRole("searchbox", { name: scenario.search }) === input,
       "Settled empty results keep the original search element",
     );
+  });
+}
+
+for (const scenario of [
+  {
+    name: "player directory",
+    route: "/players",
+    query: "player.page=3",
+    component: () => <PlayersView />,
+    table: "Players",
+    header: "Player",
+    sort: "name",
+    action: /^View player · Focus test player$/,
+    empty: "No players yet",
+  },
+  {
+    name: "approved transactions",
+    route: "/transactions",
+    query: "tx.status=APPROVED&tx.page=3",
+    component: () => <TransactionsView />,
+    table: "Transactions",
+    header: "Transaction",
+    sort: "type",
+    action: /^Receipt · Buy-in ·/,
+    empty: "No transactions match these filters.",
+  },
+  {
+    name: "pending approvals",
+    route: "/transactions",
+    query: "tx.status=PENDING&tx.page=3",
+    component: () => <TransactionsView />,
+    table: "Approval queue",
+    header: "Request",
+    sort: "type",
+    action: /^Review request ·/,
+    empty: "No requests match these filters.",
+  },
+  {
+    name: "audit history",
+    route: "/admin/audit",
+    query: "audit.page=3",
+    component: () => <AdminView />,
+    table: "Audit history",
+    header: "Date",
+    sort: "time",
+    action: /^View details ·/,
+    empty: "No activity yet",
+  },
+]) {
+  test(`${scenario.name} keeps the focused sort header during held, failed and empty reads`, async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/en${scenario.route}?listVenue=ui-venue&${scenario.query}`,
+    );
+    const data = fixture({ holdSort: true });
+    const user = userEvent.setup();
+    render(
+      <Boundary data={data} route={scenario.route}>
+        {scenario.component()}
+      </Boundary>,
+    );
+    await waitFor(() =>
+      assert.ok(
+        screen.queryAllByRole("button", { name: scenario.action }).length,
+      ),
+    );
+    assert.equal(
+      data.lastRead?.page,
+      2,
+      "The saved page starts beyond page one",
+    );
+    const table = screen.getByRole("table", { name: scenario.table });
+    const column = within(table).getByRole("columnheader", {
+      name: scenario.header,
+    });
+    const button = within(column).getByRole("button");
+    act(() => button.focus());
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      assert.equal(data.lastRead?.sort, scenario.sort);
+      assert.equal(data.lastRead?.direction, "asc");
+      assert.equal(
+        data.lastRead?.page,
+        0,
+        "Sorting asks for the first server page",
+      );
+    });
+    assert.equal(column.getAttribute("aria-sort"), "ascending");
+    assert.ok(
+      document.activeElement === button,
+      "The held read retains header focus",
+    );
+    assert.equal(
+      screen.queryAllByRole("button", { name: scenario.action }).length,
+      0,
+      "Previous row actions are hidden while the new sort is unresolved",
+    );
+    await data.failRead();
+    await screen.findByText("Fixture read unavailable.");
+    assert.ok(
+      document.activeElement === button,
+      "A failed read retains header focus",
+    );
+    assert.ok(
+      within(table).getByRole("columnheader", {
+        name: scenario.header,
+      }) === column,
+      "A failed read keeps the same column header mounted",
+    );
+    assert.equal(
+      screen.queryAllByRole("button", { name: scenario.action }).length,
+      0,
+      "A failed read cannot expose previous row actions",
+    );
+    await user.keyboard(" ");
+    await waitFor(() => {
+      assert.equal(data.lastRead?.direction, "desc");
+      assert.equal(data.lastRead?.sort, scenario.sort);
+      assert.equal(data.lastRead?.page, 0);
+    });
+    assert.equal(column.getAttribute("aria-sort"), "descending");
+    assert.ok(
+      document.activeElement === button,
+      "Space toggles the existing header button",
+    );
+    await data.respondEmpty();
+    await screen.findByText(scenario.empty);
+    assert.ok(
+      document.activeElement === button,
+      "Empty results retain header focus",
+    );
+    assert.ok(
+      within(table).getByRole("columnheader", {
+        name: scenario.header,
+      }) === column,
+      "Empty results keep the same column header mounted",
+    );
+    assert.equal(
+      screen.queryAllByRole("button", { name: scenario.action }).length,
+      0,
+    );
+    assert.equal(column.getAttribute("aria-sort"), "descending");
   });
 }

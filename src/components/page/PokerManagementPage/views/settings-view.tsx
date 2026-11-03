@@ -23,6 +23,7 @@ import { usePokerManagementContext } from "../PokerManagementProvider";
 import { StaffManagement } from "../components/staff-management";
 import { VenueSettingsDialog } from "../components/venue-settings-dialog";
 import { ListToolbar } from "../components/list-toolbar";
+import { ListActions } from "../components/list-actions";
 import {
   ActionForm,
   Badge,
@@ -127,7 +128,7 @@ export function SettingsView({
       </Alert>
     );
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       {section === "setup" && (
         <Panel
           title={
@@ -171,7 +172,7 @@ export function SettingsView({
         </Panel>
       )}
       {section === "venue" && (
-        <div className="space-y-5">
+        <div className="space-y-4 sm:space-y-5">
           <Panel
             title="Location details"
             action={
@@ -384,6 +385,7 @@ function LocationManagement() {
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("ALL");
   const [currentPage, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
   const query = search.trim().toLowerCase();
   const locations = branches.filter(
     (branch) =>
@@ -394,7 +396,7 @@ function LocationManagement() {
   );
   const page = Math.min(
     currentPage,
-    Math.max(0, Math.ceil(locations.length / 20) - 1),
+    Math.max(0, Math.ceil(locations.length / pageSize) - 1),
   );
   const clearFilters = () => {
     setSearch("");
@@ -403,25 +405,31 @@ function LocationManagement() {
   };
   return (
     <>
-      <Panel
-        title="Locations"
-        description="Each location has its own staff roles, tables, operating rules, and records."
-        action={
-          <Button
-            onClick={() => {
-              setName("");
-              setCode("");
-              setTimezone("Asia/Kuala_Lumpur");
-              s.setError("");
-              setOpen(true);
-            }}
-          >
-            <Plus />
-            {t("Add location")}
-          </Button>
-        }
-      >
+      <Panel compact>
+        <ListActions
+          actions={
+            <Button
+              onClick={() => {
+                setName("");
+                setCode("");
+                setTimezone("Asia/Kuala_Lumpur");
+                s.setError("");
+                setOpen(true);
+              }}
+            >
+              <Plus />
+              {t("Add location")}
+            </Button>
+          }
+        >
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t(
+              "Each location has its own staff roles, tables, operating rules, and records.",
+            )}
+          </p>
+        </ListActions>
         <ListToolbar
+          compact
           search={search}
           searchLabel="Search locations"
           searchPlaceholder="Location name, code, or time zone"
@@ -429,6 +437,23 @@ function LocationManagement() {
             setSearch(value);
             setPage(0);
           }}
+          primaryFilters={
+            <Select
+              aria-label={t("Your role")}
+              value={role}
+              onValueChange={(value) => {
+                setRole(value);
+                setPage(0);
+              }}
+              options={[
+                { value: "ALL", label: "All access roles" },
+                { value: "DEALER", label: "Dealer access" },
+                { value: "CASHIER", label: "Cashier access" },
+                { value: "MANAGER", label: "Manager access" },
+                { value: "ADMIN", label: "Admin access" },
+              ]}
+            />
+          }
           activeFilters={
             role === "ALL"
               ? []
@@ -440,29 +465,13 @@ function LocationManagement() {
                       setRole("ALL");
                       setPage(0);
                     },
+                    hideChip: true,
                   },
                 ]
           }
           onClear={clearFilters}
           resultCount={locations.length}
-        >
-          <Field label="Your role">
-            <Select
-              value={role}
-              onValueChange={(value) => {
-                setRole(value);
-                setPage(0);
-              }}
-              options={[
-                { value: "ALL", label: "All roles" },
-                ...["DEALER", "CASHIER", "MANAGER", "ADMIN"].map((value) => ({
-                  value,
-                  label: value,
-                })),
-              ]}
-            />
-          </Field>
-        </ListToolbar>
+        />
         {!locations.length && (
           <EmptyState
             title="No matching locations"
@@ -475,57 +484,64 @@ function LocationManagement() {
             )}
           </EmptyState>
         )}
-        <ul className="space-y-3">
-          {locations.slice(page * 20, page * 20 + 20).map((branch) => (
-            <li
-              key={branch.id}
-              className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border p-4"
-            >
-              <div className="flex min-w-0 flex-1 items-start gap-3">
-                <Building2 className="size-5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0">
-                  <p className="break-words font-medium">
-                    {displayName(branch.name)}
-                  </p>
-                  <p className="break-words text-xs text-muted-foreground">
-                    {branch.id} · {branch.timezone} · {t(branch.role)}
-                  </p>
+        <ul className="divide-y border-y" aria-label={t("Locations")}>
+          {locations
+            .slice(page * pageSize, (page + 1) * pageSize)
+            .map((branch) => (
+              <li
+                key={branch.id}
+                className="flex min-w-0 flex-wrap items-center gap-3 py-3"
+              >
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <Building2 className="size-5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="break-words text-sm font-medium">
+                      {displayName(branch.name)}
+                    </p>
+                    <p className="break-words text-xs text-muted-foreground">
+                      {branch.id} · {branch.timezone} · {t(branch.role)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-              {branch.id === s.snapshot!.branch.id ? (
-                <Badge>{t("Current location")}</Badge>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-11 w-full sm:h-9 sm:w-auto"
-                  aria-label={
-                    t("Open location") + " · " + displayName(branch.name)
-                  }
-                  disabled={!!switching || s.busy || s.retryRequired}
-                  onClick={async () => {
-                    if (switching || s.busy || s.retryRequired) return;
-                    setSwitching(branch.id);
-                    try {
-                      await switchBranch(branch.id);
-                    } catch (e) {
-                      s.setError(
-                        e instanceof Error ? e.message : "Request failed.",
-                      );
-                      setSwitching("");
+                {branch.id === s.snapshot!.branch.id ? (
+                  <Badge>{t("Current location")}</Badge>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-10 w-full sm:h-9 sm:w-auto"
+                    aria-label={
+                      t("Open location") + " · " + displayName(branch.name)
                     }
-                  }}
-                >
-                  {t(switching === branch.id ? "Loading…" : "Open location")}
-                </Button>
-              )}
-            </li>
-          ))}
+                    disabled={!!switching || s.busy || s.retryRequired}
+                    onClick={async () => {
+                      if (switching || s.busy || s.retryRequired) return;
+                      setSwitching(branch.id);
+                      try {
+                        await switchBranch(branch.id);
+                      } catch (e) {
+                        s.setError(
+                          e instanceof Error ? e.message : "Request failed.",
+                        );
+                        setSwitching("");
+                      }
+                    }}
+                  >
+                    {t(switching === branch.id ? "Loading…" : "Open location")}
+                  </Button>
+                )}
+              </li>
+            ))}
         </ul>
         <Pager
           page={page}
           total={locations.length}
           setPage={setPage}
+          pageSize={pageSize}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(0);
+          }}
           label="Location pagination"
         />
       </Panel>

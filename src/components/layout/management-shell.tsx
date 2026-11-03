@@ -17,7 +17,7 @@ export function ManagementShell({ children }: { children: React.ReactNode }) {
           <SidebarInset className="min-w-0">
             {prototypeEnabled && <PrototypeToolbar />}
             <DashboardHeader />
-            <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-7 xl:px-8 xl:py-8">
+            <div className="mx-auto w-full max-w-7xl flex-1 px-3 py-4 sm:px-6 sm:py-7 xl:px-8 xl:py-8">
               {children}
             </div>
           </SidebarInset>

@@ -91,7 +91,7 @@ export function PlayerActions({
       aria-describedby={compact && pending ? pendingDescriptionId : undefined}
     >
       {pending && (
-        <Button asChild size="sm" variant="outline" className="h-11 sm:h-9">
+        <Button asChild size="sm" variant="outline" className="h-10 sm:h-9">
           <Link
             href="/transactions"
             aria-label={t("View request") + " · " + displayName(player.name)}
@@ -115,7 +115,7 @@ export function PlayerActions({
             <Button
               size="sm"
               variant="outline"
-              className="h-11 sm:h-9"
+              className="h-10 sm:h-9"
               aria-label={t("Buy-in") + " · " + displayName(player.name)}
               disabled={blocked || pending}
               onClick={() =>
@@ -132,7 +132,7 @@ export function PlayerActions({
           {!compact && (
             <Button
               size="sm"
-              className="h-11 sm:h-9"
+              className="h-10 sm:h-9"
               aria-label={t("Cash-out") + " · " + displayName(player.name)}
               disabled={blocked || pending}
               onClick={() =>
@@ -154,7 +154,7 @@ export function PlayerActions({
           <Button
             size="sm"
             variant="outline"
-            className="h-11 sm:h-9"
+            className="h-10 sm:h-9"
             aria-label={t("Check in") + " · " + displayName(player.name)}
             disabled={
               blocked ||
@@ -179,7 +179,7 @@ export function PlayerActions({
           <Button
             size="sm"
             variant="outline"
-            className="h-11 sm:h-9"
+            className="h-10 sm:h-9"
             aria-label={
               t("Credit Repayment") + " · " + displayName(player.name)
             }

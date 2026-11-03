@@ -1,0 +1,20 @@
+# UI standards
+
+Apply these conventions when adding or updating screens. Keep the current theme and reuse the shared shadcn components.
+
+- Use one page heading. Add section headings for distinct content such as cash flow, player results, closing history and form steps. A list whose purpose is already named by the page starts with its controls.
+- Use `ListActions` for primary actions and quick choices or summaries. Put routine staff operations first and group configuration in a secondary menu; onboarding can prioritize setup when no records exist. Primary actions come first in mobile reading and keyboard order; desktop quick choices align to the left of the actions. Keep action labels visible and use the shared touch and desktop sizes.
+- Use `ListToolbar` for search and filters. At narrow container widths, give search a full-width row and place filters and card sorting below it. Primary list dropdowns use self-describing values and translated accessible labels. Keep visible labels for form inputs and date or money controls whose values alone do not explain their purpose.
+- Remove headings or captions that repeat the current step, field label or financial summary. Keep fieldset legends accessible when their visible heading is redundant. Show optional instructions on demand; keep limits, restrictions, errors and cash/credit meaning visible.
+- Keep a record's overview and actions separate from long history lists. Load history when its tab is opened and preserve the staff member's history filters when switching tabs.
+- Lookup options show a clear primary name and a separate line of identifying context. Keep the selected field compact, search the descriptive context, and preserve the original record IDs and phone matching.
+- Seat assignment reuses the floor view's table layout and numbering. Selecting a seat only updates the draft; occupied seats and the player's current seat cannot be chosen. Keep the existing final action and server validation authoritative.
+- Approval reviews initially focus their heading so staff see the request context before the decision. Preserve editable forms' initial control focus, validation error focus and focus restoration when closing.
+- Use `SortableTableHead` with the controlled `useListBrowsing` sorting state for supported columns. Sorting applies to the complete result before pagination. Keep sorting out of Filters. Show the compact shared sort menu only in card layouts; hide it at the list's actual table breakpoint so desktop headers remain the sorting controls. Keep headers mounted during loading, errors and empty results, while unavailable rows and actions are hidden.
+- Keep filter, sort and page preferences scoped to the staff account, role, venue and route. Use the shared pager with 20/50-row choices, including small local lists. A changed filter, sort or page size returns to the first page.
+- Distinguish loading, unavailable and confirmed empty results. Retain usable controls and focus during reads, and provide the shared Retry or clear-filter action when appropriate.
+- Preserve the distinction between entry amounts, credit settlement and actual cash payouts. Sort a visible financial column only when the ordering matches the value it displays.
+- Add English and Chinese copy together. Reuse accessible row menus and button variants instead of introducing module-specific control styles.
+- Below 640px, use the shared compact scale: page titles 20px, section/dialog titles 14px, body and control text 13px, and labels/captions 12px. Use 40px routine controls with 12px panel padding and section gaps; preserve the existing desktop sizes. Editable fields stay 16px for readable entry without focus zoom, and poker seat targets stay 44px. Keep financial totals prominent rather than shrinking every text style.
+
+Before calling a UI change complete, run the relevant existing regressions and check affected shared layouts on desktop and a narrow mobile viewport with sample data. These layout checks are separate from physical-device staff acceptance.

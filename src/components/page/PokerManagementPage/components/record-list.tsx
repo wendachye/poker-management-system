@@ -4,13 +4,13 @@ import {
   Table,
   TableHeader,
   TableRow,
-  TableHead,
   TableBody,
   TableCell,
 } from "@/components/ui/table";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useText } from "./shared";
+import { SortableTableHead, type ListSorting } from "./sortable-table-head";
 
 export function RecordTable({
   children,
@@ -38,8 +38,10 @@ type RecordListProps<T> = {
   label?: string;
   compact?: boolean;
   wide?: boolean;
+  sorting?: ListSorting;
   columns: {
     label: string;
+    sortKey?: string;
     render: (row: T) => ReactNode;
     actions?: boolean;
     align?: "left" | "right";
@@ -54,6 +56,7 @@ export function RecordList<T>({
   label = "Records",
   compact = false,
   wide = false,
+  sorting,
 }: RecordListProps<T>) {
   const t = useText();
   if (compact) {
@@ -64,61 +67,69 @@ export function RecordList<T>({
     const actions = columns.filter((column) => column.actions);
     return (
       <div className="@container/records min-w-0">
-        <ul
-          aria-label={t(label)}
-          className={cn(
-            "divide-y border-y",
-            wide
-              ? "@min-[1000px]/records:hidden"
-              : "@min-[800px]/records:hidden",
-          )}
-        >
-          {rows.map((row) => (
-            <li key={rowKey(row)} className="min-w-0 py-3" data-compact-record>
-              <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-2">
-                <div className="col-span-2 min-w-0">
-                  <dt className="sr-only">{primary && t(primary.label)}</dt>
-                  <dd className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1 break-words text-sm font-medium leading-5 [overflow-wrap:anywhere]">
-                      {primary?.render(row)}
-                    </div>
-                    {actions.map((column) => (
-                      <div
-                        key={column.label}
-                        className="max-w-[45%] shrink-0 break-words text-xs leading-5 [overflow-wrap:anywhere]"
-                      >
-                        <span className="sr-only">{t(column.label)}</span>
-                        {column.render(row)}
+        {rows.length > 0 && (
+          <ul
+            aria-label={t(label)}
+            className={cn(
+              "divide-y border-y",
+              wide
+                ? "@min-[1000px]/records:hidden"
+                : "@min-[800px]/records:hidden",
+            )}
+          >
+            {rows.map((row) => (
+              <li
+                key={rowKey(row)}
+                className="min-w-0 py-3"
+                data-compact-record
+              >
+                <dl className="grid min-w-0 grid-cols-2 gap-x-4 gap-y-2">
+                  <div className="col-span-2 min-w-0">
+                    <dt className="sr-only">{primary && t(primary.label)}</dt>
+                    <dd className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1 break-words text-sm font-medium leading-5 [overflow-wrap:anywhere]">
+                        {primary?.render(row)}
                       </div>
-                    ))}
-                  </dd>
-                </div>
-                {details.map((column) => (
-                  <div
-                    key={column.label}
-                    className={cn(
-                      "min-w-0",
-                      column.mobileSpan === "full" && "col-span-2",
-                    )}
-                  >
-                    <dt className="mb-0.5 text-[11px] leading-4 text-muted-foreground">
-                      {t(column.label)}
-                    </dt>
-                    <dd
-                      className={cn(
-                        "min-w-0 break-words text-xs leading-5 [overflow-wrap:anywhere]",
-                        column.align === "right" && "font-medium tabular-nums",
-                        column.actions && "flex flex-wrap justify-end gap-1.5",
-                      )}
-                    >
-                      {column.render(row)}
+                      {actions.map((column) => (
+                        <div
+                          key={column.label}
+                          className="max-w-[45%] shrink-0 break-words text-xs leading-5 [overflow-wrap:anywhere]"
+                        >
+                          <span className="sr-only">{t(column.label)}</span>
+                          {column.render(row)}
+                        </div>
+                      ))}
                     </dd>
                   </div>
-                ))}
-              </dl>
-            </li>
-          ))}
-        </ul>
+                  {details.map((column) => (
+                    <div
+                      key={column.label}
+                      className={cn(
+                        "min-w-0",
+                        column.mobileSpan === "full" && "col-span-2",
+                      )}
+                    >
+                      <dt className="mb-0.5 text-[11px] leading-4 text-muted-foreground">
+                        {t(column.label)}
+                      </dt>
+                      <dd
+                        className={cn(
+                          "min-w-0 break-words text-xs leading-5 [overflow-wrap:anywhere]",
+                          column.align === "right" &&
+                            "font-medium tabular-nums",
+                          column.actions &&
+                            "flex flex-wrap justify-end gap-1.5",
+                        )}
+                      >
+                        {column.render(row)}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </li>
+            ))}
+          </ul>
+        )}
         <div
           className={cn(
             "hidden [&>div]:block [&_table]:table-fixed",
@@ -129,17 +140,18 @@ export function RecordList<T>({
             <TableHeader>
               <TableRow>
                 {columns.map((column) => (
-                  <TableHead
+                  <SortableTableHead
                     key={column.label}
-                    scope="col"
+                    label={column.label}
+                    sortKey={column.sortKey}
+                    sorting={sorting}
+                    align={column.align ?? (column.actions ? "right" : "left")}
                     className={cn(
                       "h-9 whitespace-normal",
                       (column.align === "right" || column.actions) &&
                         "text-right",
                     )}
-                  >
-                    {t(column.label)}
-                  </TableHead>
+                  />
                 ))}
               </TableRow>
             </TableHeader>
@@ -172,8 +184,8 @@ export function RecordList<T>({
     <>
       <div className="min-w-0 space-y-3 lg:hidden">
         {rows.map((row) => (
-          <Card key={rowKey(row)} className="min-w-0 py-4">
-            <CardContent className="min-w-0 px-4">
+          <Card key={rowKey(row)} className="min-w-0 py-3 sm:py-6">
+            <CardContent className="min-w-0 px-3 sm:px-6">
               <dl className="space-y-3">
                 {columns.map((column) => (
                   <div
@@ -213,17 +225,18 @@ export function RecordList<T>({
         <TableHeader>
           <TableRow>
             {columns.map((column) => (
-              <TableHead
+              <SortableTableHead
                 key={column.label}
-                scope="col"
+                label={column.label}
+                sortKey={column.sortKey}
+                sorting={sorting}
+                align={column.align ?? (column.actions ? "right" : "left")}
                 className={
                   column.align === "right" || column.actions
                     ? "text-right"
                     : undefined
                 }
-              >
-                {t(column.label)}
-              </TableHead>
+              />
             ))}
           </TableRow>
         </TableHeader>

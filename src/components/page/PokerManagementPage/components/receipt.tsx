@@ -124,7 +124,7 @@ export function Receipt({
           !reversalPending && (
             <Button
               variant="outline"
-              className="min-h-11 max-w-full whitespace-normal print:hidden sm:min-h-9"
+              className="min-h-10 max-w-full whitespace-normal print:hidden sm:min-h-9"
               disabled={reversalState.blocked || s.busy || s.retryRequired}
               onClick={() => {
                 if (!reversalState.blocked && !s.busy && !s.retryRequired)
@@ -152,12 +152,12 @@ export function Receipt({
                   : "The reversal is awaiting approval. The original entry has not changed.",
               )}
             </p>
-            <div className="flex flex-wrap gap-2 print:hidden [&>button]:min-h-11 sm:[&>button]:min-h-9">
+            <div className="flex flex-wrap gap-2 print:hidden [&>button]:min-h-10 sm:[&>button]:min-h-9">
               {reversalPending && (
                 <Button
                   variant="outline"
                   size="sm"
-                  className="min-h-11 max-w-full whitespace-normal sm:min-h-9"
+                  className="min-h-10 max-w-full whitespace-normal sm:min-h-9"
                   asChild
                 >
                   <Link

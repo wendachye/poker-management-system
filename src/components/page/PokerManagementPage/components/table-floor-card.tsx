@@ -44,18 +44,18 @@ export function TableFloorCard({
   const stakes = `RM ${number.format(rules.smallBlind / 100)} / ${number.format(rules.bigBlind / 100)}`;
   return (
     <Card className="gap-0 py-0 sm:py-0" role="region" aria-labelledby={id}>
-      <div className="space-y-4 px-4 pt-4 sm:px-5 sm:pt-5">
-        <div className="flex items-start justify-between gap-3">
+      <div className="space-y-3 px-3 pt-3 sm:space-y-4 sm:px-5 sm:pt-5">
+        <div className="flex items-start justify-between gap-2 sm:gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-2 pt-1">
             <h2
               id={id}
-              className="min-w-0 break-words text-base font-semibold leading-6 tracking-tight"
+              className="min-w-0 break-words text-[14px] font-semibold leading-5 tracking-tight sm:text-base sm:leading-6"
             >
               {tableName}
             </h2>
             <Badge
               variant="outline"
-              className="h-6 gap-1.5 rounded-full border-border/70 px-2 text-xs font-normal text-muted-foreground"
+              className="h-5 gap-1.5 rounded-full border-border/70 px-2 text-xs font-normal text-muted-foreground sm:h-6"
             >
               <span
                 aria-hidden="true"
@@ -69,7 +69,7 @@ export function TableFloorCard({
               type="button"
               variant="ghost"
               size="sm"
-              className="-mr-1 -mt-1 size-11 shrink-0 p-0 text-muted-foreground hover:text-foreground sm:mt-0 sm:h-9 sm:w-auto sm:px-3"
+              className="-mr-1 -mt-1 size-10 shrink-0 p-0 text-muted-foreground hover:text-foreground sm:mt-0 sm:h-9 sm:w-auto sm:px-3"
               aria-label={`${t("Edit table")} · ${tableName}`}
               onClick={onEdit}
             >
@@ -121,7 +121,7 @@ export function TableFloorCard({
         />
       </div>
       <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t bg-muted/10 px-3 py-2 sm:gap-3 sm:px-5 sm:py-3">
           <div className="min-w-0 text-xs">
             <p className="text-muted-foreground">{t("Buy-in range")}</p>
             <p className="mt-1 break-words text-[13px] font-medium tabular-nums">
@@ -133,7 +133,7 @@ export function TableFloorCard({
               type="button"
               variant="ghost"
               size="sm"
-              className="-mr-1 h-11 shrink-0 text-muted-foreground hover:text-foreground sm:h-9"
+              className="-mr-1 h-10 shrink-0 text-muted-foreground hover:text-foreground sm:h-9"
               aria-label={`${t("Table details")} · ${tableName}`}
             >
               {t("Details")}
@@ -145,8 +145,8 @@ export function TableFloorCard({
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent>
-          <div className="space-y-3 border-t bg-muted/20 px-4 py-4 sm:px-5">
-            <dl className="grid grid-cols-2 gap-4 text-xs">
+          <div className="space-y-3 border-t bg-muted/20 px-3 py-3 sm:px-5 sm:py-4">
+            <dl className="grid grid-cols-2 gap-3 text-xs sm:gap-4">
               {[
                 [
                   "Buy-in increment",

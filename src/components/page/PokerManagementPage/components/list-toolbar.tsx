@@ -37,6 +37,8 @@ export function ListToolbar({
   resultCount,
   loading = false,
   primaryFilters,
+  orderControls,
+  orderControlsClassName = "@min-[800px]/list-toolbar:hidden",
   children,
   compact = false,
 }: {
@@ -50,6 +52,10 @@ export function ListToolbar({
   loading?: boolean;
   /** Frequently used criteria, visible without opening the filter panel. */
   primaryFilters?: ReactNode;
+  /** Card-layout sorting menu, hidden when the corresponding table is visible. */
+  orderControls?: ReactNode;
+  /** Match the list's actual container or viewport table breakpoint. */
+  orderControlsClassName?: string;
   children?: ReactNode;
   compact?: boolean;
 }) {
@@ -64,22 +70,17 @@ export function ListToolbar({
   ).length;
   const filterLabel = `${t("Filters")} · ${t(searchLabel)}`;
   return (
-    <div className={cn("min-w-0 space-y-3", compact && "space-y-2")}>
-      <div
-        className={cn(
-          "flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end",
-          compact && !primaryFilters && "flex-row items-center",
-        )}
-      >
-        <div
-          className={cn(
-            "relative min-w-0 w-full sm:flex-1 sm:basis-56",
-            compact && !primaryFilters && "flex-1",
-          )}
-        >
+    <div
+      className={cn(
+        "@container/list-toolbar min-w-0 space-y-2.5 sm:space-y-3",
+        compact && "space-y-2 sm:space-y-2",
+      )}
+    >
+      <div className="flex flex-col gap-2 @min-[520px]/list-toolbar:flex-row @min-[520px]/list-toolbar:flex-wrap @min-[520px]/list-toolbar:items-end">
+        <div className="relative min-w-0 w-full @min-[520px]/list-toolbar:flex-1 @min-[520px]/list-toolbar:basis-56">
           <Search
             aria-hidden="true"
-            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground sm:size-4"
           />
           <Input
             ref={input}
@@ -96,7 +97,7 @@ export function ListToolbar({
                 onSearchChange("");
               }
             }}
-            className="h-11 pl-9 pr-11 sm:h-10 [&::-webkit-search-cancel-button]:appearance-none"
+            className="h-10 pl-8 pr-11 sm:pl-9 [&::-webkit-search-cancel-button]:appearance-none"
           />
           {search.length > 0 && (
             <Button
@@ -114,14 +115,9 @@ export function ListToolbar({
             </Button>
           )}
         </div>
-        <div
-          className={cn(
-            "flex items-end gap-2 sm:ml-auto",
-            primaryFilters ? "w-full sm:w-auto" : "shrink-0",
-          )}
-        >
+        <div className="flex w-full items-end justify-end gap-2 empty:hidden @max-[280px]/list-toolbar:flex-wrap @min-[520px]/list-toolbar:ml-auto @min-[520px]/list-toolbar:w-auto">
           {primaryFilters && (
-            <div className="min-w-0 flex-1 sm:w-48 sm:flex-none [&_button[role=combobox]]:h-11 sm:[&_button[role=combobox]]:h-10">
+            <div className="min-w-0 flex-1 @max-[280px]/list-toolbar:basis-full @min-[520px]/list-toolbar:w-48 @min-[520px]/list-toolbar:flex-none [&_button[role=combobox]]:h-10">
               {primaryFilters}
             </div>
           )}
@@ -133,8 +129,8 @@ export function ListToolbar({
                   variant="outline"
                   aria-label={filterLabel}
                   className={cn(
-                    "h-11 sm:h-10",
-                    compact && "min-w-11 px-3 sm:px-4",
+                    "h-10",
+                    compact && "min-w-10 px-3 sm:min-w-11 sm:px-4",
                     advancedFilterCount > 0 && "border-primary text-primary",
                   )}
                 >
@@ -159,29 +155,26 @@ export function ListToolbar({
                 className="flex max-h-[min(32rem,var(--radix-popover-content-available-height))] w-[min(22rem,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0"
                 aria-label={filterLabel}
               >
-                <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
                   <p className="font-semibold">{t("Filters")}</p>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="h-11 sm:h-8"
+                    className="h-10 sm:h-8"
                     disabled={!hasCriteria}
                     onClick={onClear}
                   >
                     {t("Clear all")}
                   </Button>
                 </div>
-                <div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain p-4 [&_input]:h-11 [&_button[role=combobox]]:h-11 sm:[&_input]:h-10 sm:[&_button[role=combobox]]:h-10">
-                  <p className="text-xs text-muted-foreground">
-                    {t("Changes apply immediately.")}
-                  </p>
+                <div className="min-h-0 space-y-3 overflow-y-auto overscroll-contain p-3 sm:space-y-4 sm:p-4 [&_input]:h-10 [&_button[role=combobox]]:h-10">
                   {children}
                 </div>
-                <div className="shrink-0 border-t p-3">
+                <div className="shrink-0 border-t p-2 sm:p-3">
                   <Button
                     type="button"
-                    className="h-11 w-full sm:h-10"
+                    className="h-10 w-full"
                     onClick={() => setOpen(false)}
                   >
                     {resultCount === null
@@ -192,27 +185,17 @@ export function ListToolbar({
               </PopoverContent>
             </Popover>
           )}
-          {hasCriteria && (
-            <Button
-              type="button"
-              variant="ghost"
-              className={cn("h-11 sm:h-10", compact && "hidden sm:inline-flex")}
-              aria-label={t("Clear all")}
-              onClick={onClear}
-            >
-              <RotateCcw aria-hidden="true" />
-              <span>{t("Clear all")}</span>
-            </Button>
+          {orderControls && (
+            <div className={cn("shrink-0", orderControlsClassName)}>
+              {orderControls}
+            </div>
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground sm:gap-2">
         <span
           id={`${id}-results`}
-          className={cn(
-            "w-full tabular-nums sm:mr-auto sm:w-auto",
-            compact && "mr-auto w-auto",
-          )}
+          className="mr-auto tabular-nums"
           role="status"
           aria-live="polite"
           aria-atomic="true"
@@ -222,11 +205,11 @@ export function ListToolbar({
             ? t(loading ? "Updating results…" : "Results unavailable")
             : `${resultCount} ${t(resultCount === 1 ? "result" : "results")}`}
         </span>
-        {compact && hasCriteria && (
+        {hasCriteria && (
           <Button
             type="button"
             variant="ghost"
-            className="h-11 gap-1.5 px-2 text-xs text-muted-foreground sm:hidden"
+            className="h-10 gap-1.5 px-2 text-xs text-muted-foreground sm:h-8"
             onClick={onClear}
           >
             <RotateCcw aria-hidden="true" className="size-3.5" />
@@ -250,7 +233,7 @@ export function ListToolbar({
                 type="button"
                 variant="secondary"
                 size="sm"
-                className="h-auto min-h-11 max-w-full gap-2 whitespace-normal py-1.5 text-left font-normal sm:min-h-8"
+                className="h-auto min-h-10 max-w-full gap-2 whitespace-normal py-1.5 text-left font-normal sm:min-h-8"
                 aria-label={`${t("Remove filter")}: ${t(filter.label)}`}
                 onClick={filter.onRemove}
               >

@@ -11,7 +11,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   TableHeader,
-  TableHead,
   TableRow,
   TableBody,
   TableCell,
@@ -47,7 +46,9 @@ import {
 } from "../components/shared";
 import { entryTypes as types } from "../components/operation-dialogs";
 import { ListToolbar } from "../components/list-toolbar";
+import { ListActions } from "../components/list-actions";
 import { useListBrowsing } from "../components/use-list-browsing";
+import { SortableTableHead } from "../components/sortable-table-head";
 import { RecordTable } from "../components/record-list";
 import { RowActions, type RowAction } from "../components/row-actions";
 export function TransactionsView() {
@@ -268,7 +269,7 @@ export function TransactionsView() {
           <Button
             variant="link"
             size="sm"
-            className="h-11 max-w-full justify-start whitespace-normal p-0 text-xs sm:h-7"
+            className="h-10 max-w-full justify-start whitespace-normal p-0 text-xs sm:h-7"
             onClick={() => setReceipt(linked)}
           >
             {t(original ? "Original receipt" : "Reversal receipt")}
@@ -289,7 +290,7 @@ export function TransactionsView() {
         <Button
           variant="outline"
           size="icon-sm"
-          className="size-11 sm:size-9"
+          className="size-10 sm:size-9"
           title={t("Receipt")}
           aria-label={t("Receipt") + " · " + t(tx.type) + " · " + tx.id}
           onClick={() => setReceipt(tx)}
@@ -338,55 +339,64 @@ export function TransactionsView() {
     ? reversalRequestState(s.store, reversing, s.user?.role, s.locked)
     : null;
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       <DayNotice />
       <Card className="@container/transactions gap-0 py-0 sm:py-0">
         <div className="space-y-3 p-3 sm:p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="min-w-0 text-sm font-semibold">
-              {t("Transactions and requests")}
-            </h2>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <Button
-                className="h-11 px-3 sm:h-9"
-                aria-label={t("New transaction")}
-                title={t("New transaction")}
-                disabled={s.locked}
-                onClick={() => {
-                  s.setError("");
-                  s.startOperation({ kind: "transaction" });
-                }}
-              >
-                <Plus />
-                <span className="sm:hidden">{t("New entry")}</span>
-                <span className="hidden sm:inline">{t("New transaction")}</span>
-              </Button>
-              <div className="sm:hidden">
-                <RowActions
-                  label={t("Transaction actions")}
-                  actions={quickActions}
-                  iconOnly
-                />
-              </div>
-            </div>
-          </div>
-          <div className="hidden flex-wrap gap-1.5 sm:flex">
-            {quickActions.map((action) => (
-              <Button
-                key={action.key}
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-9"
-                disabled={action.disabled}
-                onClick={action.onSelect}
-              >
-                {t(action.label)}
-              </Button>
-            ))}
-          </div>
+          <ListActions
+            actions={
+              <>
+                <div className="flex shrink-0 items-center gap-1.5 sm:order-2">
+                  <Button
+                    className="h-10 px-3 sm:h-9"
+                    aria-label={t("New transaction")}
+                    title={t("New transaction")}
+                    disabled={s.locked}
+                    onClick={() => {
+                      s.setError("");
+                      s.startOperation({ kind: "transaction" });
+                    }}
+                  >
+                    <Plus />
+                    <span className="sm:hidden">{t("New entry")}</span>
+                    <span className="hidden sm:inline">
+                      {t("New transaction")}
+                    </span>
+                  </Button>
+                  <div className="sm:hidden">
+                    <RowActions
+                      label={t("Transaction actions")}
+                      actions={quickActions}
+                      iconOnly
+                    />
+                  </div>
+                </div>
+                <div className="hidden flex-wrap gap-1.5 sm:order-1 sm:flex">
+                  {quickActions.map((action) => (
+                    <Button
+                      key={action.key}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      disabled={action.disabled}
+                      onClick={action.onSelect}
+                    >
+                      {t(action.label)}
+                    </Button>
+                  ))}
+                </div>
+              </>
+            }
+          />
           <ListToolbar
             compact
+            orderControls={browsing.controls}
+            orderControlsClassName={
+              status === "APPROVED"
+                ? "@min-[900px]/transactions:hidden"
+                : "@min-[900px]/list-toolbar:hidden"
+            }
             search={val("search")}
             searchLabel="Search transactions"
             searchPlaceholder="Player, table, staff, or reference"
@@ -399,21 +409,21 @@ export function TransactionsView() {
             resultCount={resultsReady ? total : null}
             loading={remote.loading && !resultsReady}
             primaryFilters={
-              <Field label="Business day">
-                <Select
-                  value={val("day", s.store.currentDayId ?? "")}
-                  onValueChange={(v) => {
-                    set("day", v);
-                    set("page", "0");
-                  }}
-                  options={[
-                    { value: "", label: "All days" },
-                    ...s.store.days
-                      .toReversed()
-                      .map((d) => ({ value: d.id, label: d.date })),
-                  ]}
-                />
-              </Field>
+              <Select
+                aria-label={t("Business day")}
+                value={val("day", s.store.currentDayId ?? "")}
+                onValueChange={(v) => {
+                  set("day", v);
+                  set("page", "0");
+                }}
+                options={[
+                  { value: "", label: "All business days" },
+                  ...s.store.days.toReversed().map((d) => ({
+                    value: d.id,
+                    label: t("Day") + ": " + d.date,
+                  })),
+                ]}
+              />
             }
           >
             <Field label="Transaction type">
@@ -433,7 +443,6 @@ export function TransactionsView() {
               />
             </Field>
           </ListToolbar>
-          {browsing.controls}
         </div>
         <ReadStatus state={remote} showLoading={resultsReady} />
         <Tabs
@@ -458,7 +467,7 @@ export function TransactionsView() {
                 <TabsTrigger
                   key={value}
                   value={value}
-                  className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] leading-4 sm:h-9 sm:flex-row sm:gap-1.5 sm:px-3 sm:text-sm"
+                  className="h-10 min-w-0 flex-col gap-0.5 px-1 text-[11px] leading-4 sm:h-9 sm:flex-row sm:gap-1.5 sm:px-3 sm:text-sm"
                 >
                   <span>{t(label)}</span>
                   {(!remote.live || resultsReady) && (
@@ -478,7 +487,124 @@ export function TransactionsView() {
             </TabsList>
           </div>
           <TabsContent value="APPROVED" className="space-y-3">
-            {!resultsReady ? null : !transactions.length ? (
+            {resultsReady && transactions.length > 0 && (
+              <ul
+                aria-label={t("Transactions")}
+                className="divide-y border-y @min-[900px]/transactions:hidden"
+              >
+                {visibleTransactions.map((tx) => (
+                  <li
+                    key={tx.id}
+                    className="min-w-0 space-y-2 px-3 py-3 sm:px-4"
+                    data-transaction-row
+                  >
+                    <div className="flex min-w-0 items-start justify-between gap-3 font-medium">
+                      <div className="min-w-0">
+                        <p className="break-words">{t(tx.type)}</p>
+                        {reversalDetails(tx)}
+                      </div>
+                      <div className="shrink-0">{amount(tx)}</div>
+                    </div>
+                    <p
+                      className="line-clamp-2 break-words text-sm [overflow-wrap:anywhere]"
+                      title={subject(tx)}
+                    >
+                      {subject(tx)}
+                    </p>
+                    <div className="flex min-w-0 items-end justify-between gap-2">
+                      <p className="min-w-0 text-xs leading-4 text-muted-foreground">
+                        <span className="line-clamp-1 break-all">
+                          {displayName(tx.staff)}
+                        </span>
+                        <span className="block">
+                          {timestamp(tx.time, s.snapshot!.branch.timezone)}
+                        </span>
+                      </p>
+                      {rowActions(tx)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="hidden px-4 @min-[900px]/transactions:block [&>div]:block [&_table]:table-fixed">
+              <RecordTable label="Transactions">
+                <TableHeader>
+                  <TableRow>
+                    {[
+                      "Transaction",
+                      "Player / table",
+                      "Amount",
+                      "Staff",
+                      "Actions",
+                    ].map((x) => (
+                      <SortableTableHead
+                        key={x}
+                        label={x}
+                        sortKey={
+                          x === "Transaction"
+                            ? "type"
+                            : x === "Staff"
+                              ? "staff"
+                              : undefined
+                        }
+                        sorting={browsing.sorting}
+                        align={
+                          x === "Amount" || x === "Actions"
+                            ? "right"
+                            : undefined
+                        }
+                        className={
+                          x === "Amount"
+                            ? "w-44 text-right"
+                            : x === "Actions"
+                              ? "w-28 text-right"
+                              : x === "Staff"
+                                ? "w-32"
+                                : undefined
+                        }
+                      />
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody aria-busy={!resultsReady || undefined}>
+                  {(resultsReady ? visibleTransactions : []).map((tx) => (
+                    <TableRow key={tx.id} data-transaction-row>
+                      <TableCell className="whitespace-normal py-2">
+                        <p className="break-words font-medium">{t(tx.type)}</p>
+                        <p className="mt-1 text-xs leading-4 text-muted-foreground">
+                          {timestamp(tx.time, s.snapshot!.branch.timezone)}
+                        </p>
+                        {reversalDetails(tx)}
+                      </TableCell>
+                      <TableCell className="whitespace-normal py-2">
+                        <p className="line-clamp-2 break-words [overflow-wrap:anywhere]">
+                          {displayName(
+                            s.players.find((p) => p.id === tx.playerId)?.name ??
+                              t("House"),
+                          )}
+                        </p>
+                        <p className="mt-1 line-clamp-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                          {displayName(
+                            s.tables.find((table) => table.id === tx.tableId)
+                              ?.name ?? "—",
+                          )}
+                        </p>
+                      </TableCell>
+                      <TableCell className="py-2">{amount(tx)}</TableCell>
+                      <TableCell className="whitespace-normal py-2 text-xs">
+                        <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
+                          {displayName(tx.staff)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="py-2">
+                        <div className="flex justify-end">{rowActions(tx)}</div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </RecordTable>
+            </div>
+            {resultsReady && !transactions.length && (
               <EmptyState
                 title={
                   hasCriteria
@@ -497,118 +623,6 @@ export function TransactionsView() {
                   </Button>
                 )}
               </EmptyState>
-            ) : (
-              <>
-                <ul
-                  aria-label={t("Transactions")}
-                  className="divide-y border-y @min-[900px]/transactions:hidden"
-                >
-                  {visibleTransactions.map((tx) => (
-                    <li
-                      key={tx.id}
-                      className="min-w-0 space-y-2 px-3 py-3 sm:px-4"
-                      data-transaction-row
-                    >
-                      <div className="flex min-w-0 items-start justify-between gap-3 font-medium">
-                        <div className="min-w-0">
-                          <p className="break-words">{t(tx.type)}</p>
-                          {reversalDetails(tx)}
-                        </div>
-                        <div className="shrink-0">{amount(tx)}</div>
-                      </div>
-                      <p
-                        className="line-clamp-2 break-words text-sm [overflow-wrap:anywhere]"
-                        title={subject(tx)}
-                      >
-                        {subject(tx)}
-                      </p>
-                      <div className="flex min-w-0 items-end justify-between gap-2">
-                        <p className="min-w-0 text-xs leading-4 text-muted-foreground">
-                          <span className="line-clamp-1 break-all">
-                            {displayName(tx.staff)}
-                          </span>
-                          <span className="block">
-                            {timestamp(tx.time, s.snapshot!.branch.timezone)}
-                          </span>
-                        </p>
-                        {rowActions(tx)}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-                <div className="hidden px-4 @min-[900px]/transactions:block [&>div]:block [&_table]:table-fixed">
-                  <RecordTable label="Transactions">
-                    <TableHeader>
-                      <TableRow>
-                        {[
-                          "Transaction",
-                          "Player / table",
-                          "Amount",
-                          "Staff",
-                          "Actions",
-                        ].map((x) => (
-                          <TableHead
-                            key={x}
-                            scope="col"
-                            className={
-                              x === "Amount"
-                                ? "w-44 text-right"
-                                : x === "Actions"
-                                  ? "w-28 text-right"
-                                  : x === "Staff"
-                                    ? "w-32"
-                                    : undefined
-                            }
-                          >
-                            {t(x)}
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {visibleTransactions.map((tx) => (
-                        <TableRow key={tx.id} data-transaction-row>
-                          <TableCell className="whitespace-normal py-2">
-                            <p className="break-words font-medium">
-                              {t(tx.type)}
-                            </p>
-                            <p className="mt-1 text-xs leading-4 text-muted-foreground">
-                              {timestamp(tx.time, s.snapshot!.branch.timezone)}
-                            </p>
-                            {reversalDetails(tx)}
-                          </TableCell>
-                          <TableCell className="whitespace-normal py-2">
-                            <p className="line-clamp-2 break-words [overflow-wrap:anywhere]">
-                              {displayName(
-                                s.players.find((p) => p.id === tx.playerId)
-                                  ?.name ?? t("House"),
-                              )}
-                            </p>
-                            <p className="mt-1 line-clamp-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                              {displayName(
-                                s.tables.find(
-                                  (table) => table.id === tx.tableId,
-                                )?.name ?? "—",
-                              )}
-                            </p>
-                          </TableCell>
-                          <TableCell className="py-2">{amount(tx)}</TableCell>
-                          <TableCell className="whitespace-normal py-2 text-xs">
-                            <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">
-                              {displayName(tx.staff)}
-                            </span>
-                          </TableCell>
-                          <TableCell className="py-2">
-                            <div className="flex justify-end">
-                              {rowActions(tx)}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </RecordTable>
-                </div>
-              </>
             )}
             <div className="px-3 pb-3 sm:px-4 sm:pb-4">
               <Pager
@@ -640,6 +654,7 @@ export function TransactionsView() {
                 pendingView={view === "PENDING"}
                 embedded
                 loading={!resultsReady}
+                sorting={browsing.sorting}
                 pagination={{
                   page,
                   total: resultsReady ? total : null,
@@ -717,7 +732,7 @@ export function TransactionsView() {
                   <Button
                     type="button"
                     variant="ghost"
-                    className="h-11 w-full justify-between px-3 text-xs sm:h-9"
+                    className="h-10 w-full justify-between px-3 text-xs sm:h-9"
                   >
                     {t("Reference details")}
                     <ChevronDown aria-hidden="true" className="size-4" />

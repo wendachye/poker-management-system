@@ -23,6 +23,7 @@ import { RecordList } from "./record-list";
 import { ListToolbar } from "./list-toolbar";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field as UiField, FieldLabel } from "@/components/ui/field";
 import type { PlayerTag } from "@/domain/model";
@@ -45,6 +46,7 @@ export function PlayerDetails({ playerId }: { playerId: string }) {
     <Modal
       open={!!history}
       trackChanges={false}
+      initialFocus="heading"
       onOpenChange={() => s.closeOperation()}
       title="Player details"
       description={
@@ -67,59 +69,100 @@ export function PlayerDetails({ playerId }: { playerId: string }) {
             )}
             {history.seat ? " · " + t("Seat") + " " + history.seat : ""}
           </p>
-          {history.type === "CREDIT" && (
-            <div className="min-w-0 space-y-2 rounded-lg border bg-muted/40 p-3">
-              <dl className="space-y-2 text-sm">
-                {[
-                  ["Outstanding credit", history.creditUsed],
-                  [
-                    "Available credit",
-                    Math.max(
-                      0,
-                      history.creditLimit - history.creditUsed - pendingCredit,
-                    ),
-                  ],
-                  ["Credit limit", history.creditLimit],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1"
-                  >
-                    <dt className="text-muted-foreground">
-                      {t(String(label))}
-                    </dt>
-                    <dd className="whitespace-nowrap font-medium tabular-nums">
-                      {money(Number(value))}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-              {pendingCredit > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  {t("Reserved for pending buy-ins")}: {money(pendingCredit)}
-                </p>
+          <Tabs key={history.id} defaultValue="overview" className="gap-4">
+            <TabsList
+              className="grid !h-auto w-full grid-cols-2"
+              aria-label={t("Player details tabs")}
+            >
+              <TabsTrigger value="overview" className="h-10 sm:h-9">
+                {t("Overview")}
+              </TabsTrigger>
+              <TabsTrigger value="sessions" className="h-10 sm:h-9">
+                {t("Sessions")}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="min-w-0 space-y-4">
+              {history.type === "CREDIT" && (
+                <div className="min-w-0 space-y-2 rounded-lg border bg-muted/40 p-3">
+                  <dl className="space-y-2 text-sm">
+                    {[
+                      ["Outstanding credit", history.creditUsed],
+                      [
+                        "Available credit",
+                        Math.max(
+                          0,
+                          history.creditLimit -
+                            history.creditUsed -
+                            pendingCredit,
+                        ),
+                      ],
+                      ["Credit limit", history.creditLimit],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1"
+                      >
+                        <dt className="text-muted-foreground">
+                          {t(String(label))}
+                        </dt>
+                        <dd className="whitespace-nowrap font-medium tabular-nums">
+                          {money(Number(value))}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {pendingCredit > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("Reserved for pending buy-ins")}:{" "}
+                      {money(pendingCredit)}
+                    </p>
+                  )}
+                </div>
               )}
-            </div>
-          )}
-          <PlayerActions player={history} details />
-          <p className="text-sm font-medium">
-            {t("Current business day")}: {s.day?.date ?? "—"}
-          </p>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <p>
-              {t("Buy-in")}: {money(history.buyIn)}
-            </p>
-            <p>
-              {t("Cash-out")}: {money(history.cashOut)}
-            </p>
-            <p>
-              {t("P/L")}:{" "}
-              {history.status === "ACTIVE"
-                ? t("Unsettled")
-                : money(history.cashOut - history.buyIn)}
-            </p>
-          </div>
-          <SessionHistory key={history.id} playerId={history.id} />
+              <section
+                className="min-w-0 space-y-3"
+                aria-label={t("Current business day")}
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                  <h3 className="font-medium">{t("Current business day")}</h3>
+                  <span className="text-muted-foreground">
+                    {s.day?.date ?? "—"}
+                  </span>
+                </div>
+                <dl className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-3">
+                  {[
+                    ["Buy-in", money(history.buyIn)],
+                    ["Cash-out", money(history.cashOut)],
+                    [
+                      "P/L",
+                      history.status === "ACTIVE"
+                        ? t("Unsettled")
+                        : money(history.cashOut - history.buyIn),
+                    ],
+                  ].map(([label, value], index) => (
+                    <div
+                      key={label}
+                      className={
+                        "min-w-0 rounded-lg border bg-muted/20 p-3" +
+                        (index === 2 ? " col-span-2 sm:col-span-1" : "")
+                      }
+                    >
+                      <dt className="text-xs text-muted-foreground">
+                        {t(label)}
+                      </dt>
+                      <dd className="mt-1 break-words text-sm font-semibold tabular-nums">
+                        {value}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+              <PlayerActions player={history} details />
+            </TabsContent>
+            <TabsContent value="sessions" className="min-w-0">
+              <SessionHistory playerId={history.id} />
+            </TabsContent>
+          </Tabs>
         </>
       )}
     </Modal>
@@ -190,8 +233,10 @@ function SessionHistory({ playerId }: { playerId: string }) {
   }
   return (
     <section className="min-w-0 space-y-4" aria-label={t("Session history")}>
-      <h3 className="text-sm font-semibold">{t("Session history")}</h3>
       <ListToolbar
+        compact
+        orderControls={browsing.controls}
+        orderControlsClassName="lg:hidden"
         search={search}
         searchLabel="Search session history"
         searchPlaceholder="Search by date or table"
@@ -232,11 +277,57 @@ function SessionHistory({ playerId }: { playerId: string }) {
           />
         </Field>
       </ListToolbar>
-      {browsing.controls}
       <ReadStatus state={remote} showLoading={resultsReady} />
+      <RecordList
+        label="Session history"
+        sorting={browsing.sorting}
+        rows={
+          !resultsReady || remote.loading || remote.error
+            ? []
+            : remote.live
+              ? filtered
+              : filtered.slice(
+                  page * browsing.pageSize,
+                  (page + 1) * browsing.pageSize,
+                )
+        }
+        rowKey={(session) => session.id}
+        columns={[
+          {
+            label: "Business day",
+            sortKey: "sessionStart",
+            render: (session) => (
+              <>
+                {sessionContext.days.find((day) => day.id === session.dayId)
+                  ?.date ?? "—"}
+                <p className="text-xs text-muted-foreground">
+                  {timestamp(session.sessionStart, s.snapshot!.branch.timezone)}
+                </p>
+              </>
+            ),
+          },
+          {
+            label: "Table / seat",
+            render: (session) =>
+              displayName(
+                s.tables.find((table) => table.id === session.tableId)?.name ??
+                  "—",
+              ) +
+              " / " +
+              session.seat,
+          },
+          {
+            label: "Status",
+            sortKey: "status",
+            render: (session) => (
+              <Badge tone={session.status === "ACTIVE" ? "green" : "neutral"}>
+                {session.status}
+              </Badge>
+            ),
+          },
+        ]}
+      />
       {remote.loading || remote.error ? null : !sessions.length &&
-        !remote.loading &&
-        !remote.error &&
         !search &&
         !status ? (
         <EmptyState title="No session history yet" />
@@ -246,55 +337,7 @@ function SessionHistory({ playerId }: { playerId: string }) {
             {t("Clear all")}
           </Button>
         </EmptyState>
-      ) : (
-        <RecordList
-          label="Session history"
-          rows={
-            remote.live
-              ? filtered
-              : filtered.slice(
-                  page * browsing.pageSize,
-                  (page + 1) * browsing.pageSize,
-                )
-          }
-          rowKey={(session) => session.id}
-          columns={[
-            {
-              label: "Business day",
-              render: (session) => (
-                <>
-                  {sessionContext.days.find((day) => day.id === session.dayId)
-                    ?.date ?? "—"}
-                  <p className="text-xs text-muted-foreground">
-                    {timestamp(
-                      session.sessionStart,
-                      s.snapshot!.branch.timezone,
-                    )}
-                  </p>
-                </>
-              ),
-            },
-            {
-              label: "Table / seat",
-              render: (session) =>
-                displayName(
-                  s.tables.find((table) => table.id === session.tableId)
-                    ?.name ?? "—",
-                ) +
-                " / " +
-                session.seat,
-            },
-            {
-              label: "Status",
-              render: (session) => (
-                <Badge tone={session.status === "ACTIVE" ? "green" : "neutral"}>
-                  {session.status}
-                </Badge>
-              ),
-            },
-          ]}
-        />
-      )}
+      ) : null}
       <Pager
         label="Session history"
         page={page}

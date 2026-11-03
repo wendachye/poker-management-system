@@ -16,7 +16,6 @@ import {
   Table,
   TableHeader,
   TableRow,
-  TableHead,
   TableBody,
   TableCell,
 } from "@/components/ui/table";
@@ -33,7 +32,6 @@ import {
   Modal,
   ActionForm,
   FormActions,
-  FormSection,
   EmptyState,
   Pager,
   useText,
@@ -41,6 +39,7 @@ import {
 } from "./shared";
 import { CashOutSummary, EntryImpact } from "./entry-impact";
 import { Receipt } from "./receipt";
+import { SortableTableHead, type ListSorting } from "./sortable-table-head";
 import { Link } from "@/i18n/navigation";
 
 export function ApprovalQueue({
@@ -50,6 +49,7 @@ export function ApprovalQueue({
   pendingView = false,
   pagination,
   loading = false,
+  sorting,
 }: {
   requests?: ApprovalRequest[];
   compact?: boolean;
@@ -64,6 +64,7 @@ export function ApprovalQueue({
     loading?: boolean;
   };
   loading?: boolean;
+  sorting?: ListSorting;
 }) {
   const s = usePokerManagementContext(),
     t = useText(),
@@ -84,11 +85,13 @@ export function ApprovalQueue({
   const page =
     pagination?.page ??
     Math.min(currentPage, Math.max(0, Math.ceil(entries.length / 20) - 1));
-  const visible = compact
-    ? entries.slice(0, 4)
-    : pagination
-      ? entries
-      : entries.slice(page * 20, page * 20 + 20);
+  const visible = loading
+    ? []
+    : compact
+      ? entries.slice(0, 4)
+      : pagination
+        ? entries
+        : entries.slice(page * 20, page * 20 + 20);
   const request = s.store.approvals.find((r) => r.id === reviewId);
   const reviewProgress = request ? approvalReviewProgress(request, t) : null;
   const requestDay = request
@@ -259,7 +262,7 @@ export function ApprovalQueue({
           <Button
             size="icon-sm"
             variant="ghost"
-            className="size-11 sm:size-9"
+            className="size-10 sm:size-9"
             aria-label={t("Receipt") + " · " + subject(r) + " · " + r.id}
             title={t("Receipt")}
             onClick={() => setReceipt(posted)}
@@ -269,7 +272,7 @@ export function ApprovalQueue({
         )}
         <Button
           size="sm"
-          className="h-11 px-3 sm:h-9"
+          className="h-10 px-3 sm:h-9"
           aria-label={t(actionLabel) + " · " + subject(r) + " · " + r.id}
           variant={actionLabel === "Review request" ? "default" : "outline"}
           disabled={s.busy || openingReview}
@@ -313,6 +316,108 @@ export function ApprovalQueue({
       aria-label={t("Approval queue")}
       className="@container/approvals min-w-0 space-y-3"
     >
+      {!!visible.length && (
+        <ul
+          aria-label={t("Approval queue")}
+          className="divide-y border-y @min-[900px]/approvals:hidden"
+        >
+          {visible.map((r) => (
+            <li key={r.id} className="min-w-0 space-y-2 py-3" data-approval-row>
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium">
+                    <span className="break-words [overflow-wrap:anywhere]">
+                      {t(r.type)}
+                    </span>
+                    {status(r)}
+                  </p>
+                  <p
+                    className="line-clamp-2 break-words text-sm font-medium leading-5 [overflow-wrap:anywhere]"
+                    title={subject(r)}
+                  >
+                    {subject(r)}
+                  </p>
+                </div>
+                <div className="shrink-0">{amount(r)}</div>
+              </div>
+              {metadata(r)}
+              {r.note && (
+                <p
+                  className="line-clamp-1 break-words text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]"
+                  title={r.note}
+                >
+                  {r.note}
+                </p>
+              )}
+              <div className="flex min-w-0 flex-wrap items-end justify-between gap-x-3 gap-y-2">
+                <div className="min-w-0 flex-1 basis-36">
+                  {reviewSummary(r)}
+                </div>
+                {actions(r)}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(!!sorting || !!visible.length) && (
+        <div className="hidden border-y @min-[900px]/approvals:block">
+          <Table className="table-fixed" aria-label={t("Approval queue")}>
+            <TableHeader>
+              <TableRow>
+                <SortableTableHead
+                  label="Request"
+                  sortKey="type"
+                  sorting={sorting}
+                />
+                <SortableTableHead label="Review" className="w-60" />
+                <SortableTableHead
+                  label="Amount"
+                  align="right"
+                  className="w-44 text-right"
+                />
+                <SortableTableHead
+                  label="Actions"
+                  align="right"
+                  className="w-48 text-right"
+                />
+              </TableRow>
+            </TableHeader>
+            <TableBody aria-busy={loading || undefined}>
+              {visible.map((r) => (
+                <TableRow key={r.id} data-approval-row>
+                  <TableCell className="space-y-0.5 whitespace-normal py-2">
+                    <p
+                      className="line-clamp-2 break-words font-medium leading-5 [overflow-wrap:anywhere]"
+                      title={t(r.type) + " · " + subject(r)}
+                    >
+                      {t(r.type)}
+                      <span className="font-normal text-muted-foreground">
+                        {" "}
+                        · {subject(r)}
+                      </span>
+                    </p>
+                    {metadata(r)}
+                    {r.note && (
+                      <p
+                        className="line-clamp-1 break-words text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]"
+                        title={r.note}
+                      >
+                        {r.note}
+                      </p>
+                    )}
+                  </TableCell>
+                  <TableCell className="space-y-1.5 whitespace-normal py-2">
+                    {status(r)}
+                    {reviewSummary(r)}
+                  </TableCell>
+                  <TableCell className="py-2">{amount(r)}</TableCell>
+                  <TableCell className="py-2">{actions(r)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
       {!entries.length && !loading && (
         <EmptyState
           title={
@@ -330,106 +435,6 @@ export function ApprovalQueue({
               : "Requests keep their status and review history here."
           }
         />
-      )}
-      {!!visible.length && (
-        <>
-          <ul
-            aria-label={t("Approval queue")}
-            className="divide-y border-y @min-[900px]/approvals:hidden"
-          >
-            {visible.map((r) => (
-              <li
-                key={r.id}
-                className="min-w-0 space-y-2 py-3"
-                data-approval-row
-              >
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-medium">
-                      <span className="break-words [overflow-wrap:anywhere]">
-                        {t(r.type)}
-                      </span>
-                      {status(r)}
-                    </p>
-                    <p
-                      className="line-clamp-2 break-words text-sm font-medium leading-5 [overflow-wrap:anywhere]"
-                      title={subject(r)}
-                    >
-                      {subject(r)}
-                    </p>
-                  </div>
-                  <div className="shrink-0">{amount(r)}</div>
-                </div>
-                {metadata(r)}
-                {r.note && (
-                  <p
-                    className="line-clamp-1 break-words text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]"
-                    title={r.note}
-                  >
-                    {r.note}
-                  </p>
-                )}
-                <div className="flex min-w-0 flex-wrap items-end justify-between gap-x-3 gap-y-2">
-                  <div className="min-w-0 flex-1 basis-36">
-                    {reviewSummary(r)}
-                  </div>
-                  {actions(r)}
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="hidden border-y @min-[900px]/approvals:block">
-            <Table className="table-fixed" aria-label={t("Approval queue")}>
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col">{t("Request")}</TableHead>
-                  <TableHead scope="col" className="w-60">
-                    {t("Review")}
-                  </TableHead>
-                  <TableHead scope="col" className="w-44 text-right">
-                    {t("Amount")}
-                  </TableHead>
-                  <TableHead scope="col" className="w-48 text-right">
-                    {t("Actions")}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {visible.map((r) => (
-                  <TableRow key={r.id} data-approval-row>
-                    <TableCell className="space-y-0.5 whitespace-normal py-2">
-                      <p
-                        className="line-clamp-2 break-words font-medium leading-5 [overflow-wrap:anywhere]"
-                        title={t(r.type) + " · " + subject(r)}
-                      >
-                        {t(r.type)}
-                        <span className="font-normal text-muted-foreground">
-                          {" "}
-                          · {subject(r)}
-                        </span>
-                      </p>
-                      {metadata(r)}
-                      {r.note && (
-                        <p
-                          className="line-clamp-1 break-words text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]"
-                          title={r.note}
-                        >
-                          {r.note}
-                        </p>
-                      )}
-                    </TableCell>
-                    <TableCell className="space-y-1.5 whitespace-normal py-2">
-                      {status(r)}
-                      {reviewSummary(r)}
-                    </TableCell>
-                    <TableCell className="py-2">{amount(r)}</TableCell>
-                    <TableCell className="py-2">{actions(r)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </>
       )}
       {compact ? (
         <Button variant="outline" asChild>
@@ -467,15 +472,22 @@ export function ApprovalQueue({
           }
         }}
         title={reviewable ? "Review request" : "Request details"}
-        description={request ? subject(request) : "Request details"}
+        description={
+          request
+            ? `${t(request.type)} · ${subject(request)}`
+            : "Request details"
+        }
         fallbackFocus={() => queueFocus.current}
+        initialFocus="heading"
       >
         {request && reviewProgress && (
           <>
-            <div className="min-w-0 space-y-2 rounded-lg bg-muted p-4 text-sm [overflow-wrap:anywhere]">
+            <div className="min-w-0 space-y-2 rounded-lg bg-muted p-3 text-sm sm:p-4 [overflow-wrap:anywhere]">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="space-y-1">
-                  <p className="text-lg font-semibold">{t(request.type)}</p>
+                  <p className="text-[14px] font-semibold sm:text-lg">
+                    {t(request.type)}
+                  </p>
                   <p className="font-medium tabular-nums">
                     {t(
                       cashOutReversal
@@ -514,10 +526,7 @@ export function ApprovalQueue({
                   {t("Note")}: {request.note}
                 </p>
               )}
-              <p>{reviewProgress.label}</p>
-              <p className="text-xs text-muted-foreground">
-                {t(request.riskReason)}
-              </p>
+              {request.status === "PENDING" && reviewSummary(request)}
             </div>
             {request.status === "PENDING" &&
               (reviewable && decision === "REJECTED" ? (
@@ -582,40 +591,35 @@ export function ApprovalQueue({
                   }
                 }}
               >
-                <FormSection title="Review decision">
-                  <Tabs value={decision} onValueChange={setDecision}>
-                    <TabsList
-                      className="w-full"
-                      aria-label={t("Review decision")}
-                    >
-                      <TabsTrigger value="APPROVED">{t("Approve")}</TabsTrigger>
-                      <TabsTrigger value="REJECTED">{t("Reject")}</TabsTrigger>
-                    </TabsList>
-                    <TabsContent value="APPROVED">
+                <Tabs value={decision} onValueChange={setDecision}>
+                  <TabsList
+                    className="w-full"
+                    aria-label={t("Review decision")}
+                  >
+                    <TabsTrigger value="APPROVED">{t("Approve")}</TabsTrigger>
+                    <TabsTrigger value="REJECTED">{t("Reject")}</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="APPROVED">
+                    {request.approvalLevel === "DUAL" && (
                       <p className="text-sm text-muted-foreground">
                         {t(
-                          request.approvalLevel === "DUAL"
-                            ? "The entry posts after two distinct reviewers approve, including an admin."
-                            : "Approving posts this entry to the ledger.",
+                          "The entry posts after two distinct reviewers approve, including an admin.",
                         )}
                       </p>
-                    </TabsContent>
-                    <TabsContent value="REJECTED">
-                      <Field
-                        label="Rejection reason"
-                        hint="Explain what needs to be corrected before this request can be submitted again."
-                      >
-                        <Textarea
-                          required
-                          minLength={3}
-                          maxLength={500}
-                          value={reason}
-                          onChange={(e) => setReason(e.target.value)}
-                        />
-                      </Field>
-                    </TabsContent>
-                  </Tabs>
-                </FormSection>
+                    )}
+                  </TabsContent>
+                  <TabsContent value="REJECTED">
+                    <Field label="Rejection reason">
+                      <Textarea
+                        required
+                        minLength={3}
+                        maxLength={500}
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                      />
+                    </Field>
+                  </TabsContent>
+                </Tabs>
                 <FormActions
                   destructive={decision === "REJECTED"}
                   summary={
@@ -665,7 +669,7 @@ export function ApprovalQueue({
                 <Button
                   type="button"
                   variant="ghost"
-                  className="group h-auto min-h-11 w-full justify-between gap-3 whitespace-normal px-3 py-2 text-left"
+                  className="group h-auto min-h-10 w-full justify-between gap-3 whitespace-normal px-3 py-2 text-left sm:min-h-11"
                 >
                   {t("Request details")}
                   <ChevronDown
@@ -675,6 +679,9 @@ export function ApprovalQueue({
                 </Button>
               </CollapsibleTrigger>
               <CollapsibleContent className="space-y-3 border-t p-3 text-sm [overflow-wrap:anywhere]">
+                <p className="text-xs text-muted-foreground">
+                  {t(request.riskReason)}
+                </p>
                 <dl className="space-y-2 text-xs">
                   <div className="flex flex-wrap justify-between gap-x-3 gap-y-1">
                     <dt className="text-muted-foreground">{t("Date")}</dt>

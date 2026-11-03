@@ -70,6 +70,8 @@ PGlite serializes database work. Use regular PostgreSQL for a future shared serv
 
 ### Set up a location before operating
 
+Interface changes follow the shared [UI standards](docs/ui-standards.md) across operations, reports and administration.
+
 The bottom **Administration** navigation groups focused modules: **Venue settings** (venue and rules, tables and stakes, locations, and a setup checklist), **Staff accounts**, and **Controls and audit** (audit history, approval policy, and admin-only day recovery). Each module has its own URL and breadcrumb. Managers can review audit history and approval policy; venue settings, staff accounts, and day recovery require an administrator. Legacy `/settings` and `/admin` links redirect to the setup checklist and audit history. A new location's dashboard shows a setup reminder linking to Settings while keeping its analytics visible.
 
 1. **Venue and rules:** edit the location name, business time zone, and house rules. Select the game, default blinds, minimum/maximum buy-in, and optional buy-in increment. Stakes are flexible: the 5/10 and 10/25 presets are shortcuts, and any valid pair can be entered.

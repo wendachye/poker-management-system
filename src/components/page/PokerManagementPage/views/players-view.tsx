@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/badge";
 import {
   TableHeader,
   TableRow,
-  TableHead,
   TableBody,
   TableCell,
 } from "@/components/ui/table";
@@ -29,8 +28,10 @@ import { PlayerActions } from "../components/player-actions";
 import { ListToolbar } from "../components/list-toolbar";
 import { RecordTable } from "../components/record-list";
 import { QuickFilters } from "../components/quick-filters";
+import { ListActions } from "../components/list-actions";
 import { ReadStatus, useReadPage } from "../components/use-read-page";
 import { useListBrowsing } from "../components/use-list-browsing";
+import { SortableTableHead } from "../components/sortable-table-head";
 
 export function PlayersView() {
   const s = usePokerManagementContext(),
@@ -139,7 +140,7 @@ export function PlayersView() {
     return (
       <Button
         variant="link"
-        className="h-auto min-h-11 w-full min-w-0 shrink justify-start whitespace-normal p-0 text-left @min-[800px]/players:min-h-0"
+        className="h-auto min-h-10 w-full min-w-0 shrink justify-start whitespace-normal p-0 text-left sm:min-h-11 @min-[800px]/players:min-h-0"
         aria-label={t("View player") + " · " + displayName(p.name)}
         aria-description={[
           p.phone,
@@ -218,25 +219,35 @@ export function PlayersView() {
     );
   }
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 sm:space-y-5">
       <DayNotice />
       <Card className="@container/players gap-0 py-0 sm:py-0">
         <div className="space-y-3 p-3 sm:p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold">{t("Player directory")}</h2>
-            {operator && (
-              <Button
-                className="h-11 shrink-0 px-3 sm:h-9"
-                aria-label={t("Check in player")}
-                disabled={s.locked || !available.length}
-                onClick={() => startCheckIn()}
-              >
-                <Plus />
-                <span className="sm:hidden">{t("Check in")}</span>
-                <span className="hidden sm:inline">{t("Check in player")}</span>
-              </Button>
-            )}
-          </div>
+          <ListActions
+            actions={
+              operator && (
+                <Button
+                  className="h-10 shrink-0 px-3 sm:h-9"
+                  aria-label={t("Check in player")}
+                  disabled={s.locked || !available.length}
+                  onClick={() => startCheckIn()}
+                >
+                  <Plus />
+                  <span className="sm:hidden">{t("Check in")}</span>
+                  <span className="hidden sm:inline">
+                    {t("Check in player")}
+                  </span>
+                </Button>
+              )
+            }
+          >
+            <QuickFilters
+              label="Player status"
+              value={value("status")}
+              onValueChange={(next) => setCriteria("status", next)}
+              options={statusOptions}
+            />
+          </ListActions>
           {!available.length && operator && (
             <p className="text-sm text-muted-foreground">
               {t(
@@ -249,30 +260,25 @@ export function PlayersView() {
               </Link>
             </p>
           )}
-          <QuickFilters
-            label="Player status"
-            value={value("status")}
-            onValueChange={(next) => setCriteria("status", next)}
-            options={statusOptions}
-          />
           <ListToolbar
             compact
+            orderControls={browsing.controls}
+            orderControlsClassName="@min-[800px]/players:hidden"
             search={value("search")}
             searchLabel="Search players"
             searchPlaceholder="Name, phone, or ID"
             onSearchChange={(v) => setCriteria("search", v)}
             primaryFilters={
-              <Field label="Player type">
-                <Select
-                  value={value("type")}
-                  onValueChange={(v) => setCriteria("type", v)}
-                  options={[
-                    { value: "", label: "All player types" },
-                    { value: "CASH", label: "CASH" },
-                    { value: "CREDIT", label: "CREDIT" },
-                  ]}
-                />
-              </Field>
+              <Select
+                aria-label={t("Player type")}
+                value={value("type")}
+                onValueChange={(v) => setCriteria("type", v)}
+                options={[
+                  { value: "", label: "All player types" },
+                  { value: "CASH", label: "Cash players" },
+                  { value: "CREDIT", label: "Credit players" },
+                ]}
+              />
             }
             activeFilters={[
               ["status", "Status"],
@@ -304,10 +310,103 @@ export function PlayersView() {
               />
             </Field>
           </ListToolbar>
-          {browsing.controls}
         </div>
         <ReadStatus state={remote} showLoading={resultsReady} />
-        {!resultsReady ? null : !filtered.length ? (
+        {resultsReady && filtered.length > 0 && (
+          <ul
+            aria-label={t("Players")}
+            className="divide-y border-t @min-[800px]/players:hidden"
+          >
+            {visible.map((p) => (
+              <li
+                key={p.id}
+                className="min-w-0 space-y-2 px-3 py-3 sm:px-4"
+                data-player-row
+              >
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">{playerIdentity(p)}</div>
+                  <span className="pt-1">{playerStatus(p)}</span>
+                </div>
+                {p.creditUsed > 0 && (
+                  <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs leading-4 text-muted-foreground">
+                    <span>{t("Outstanding credit")}</span>
+                    <span className="whitespace-nowrap font-medium tabular-nums text-foreground">
+                      {money(p.creditUsed)}
+                    </span>
+                  </p>
+                )}
+                <div className="flex min-w-0 items-end justify-between gap-2">
+                  <div className="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
+                    {p.status === "ACTIVE" && <p>{playerSeat(p)}</p>}
+                  </div>
+                  <div className="shrink-0">{rowActions(p)}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="hidden px-4 pb-1 @min-[800px]/players:block [&>div]:block">
+          <RecordTable label="Players">
+            <TableHeader>
+              <TableRow>
+                {[
+                  "Player",
+                  "Status",
+                  "Table / seat",
+                  "Outstanding credit",
+                  "Actions",
+                ].map((x) => (
+                  <SortableTableHead
+                    key={x}
+                    label={x}
+                    sortKey={
+                      x === "Player"
+                        ? "name"
+                        : x === "Status"
+                          ? "status"
+                          : x === "Outstanding credit"
+                            ? "creditUsed"
+                            : undefined
+                    }
+                    sorting={browsing.sorting}
+                    align={
+                      x === "Actions" || x === "Outstanding credit"
+                        ? "right"
+                        : undefined
+                    }
+                    className={
+                      x === "Actions" || x === "Outstanding credit"
+                        ? "text-right"
+                        : undefined
+                    }
+                  />
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody aria-busy={!resultsReady || undefined}>
+              {(resultsReady ? visible : []).map((p) => (
+                <TableRow key={p.id} data-player-row>
+                  <TableCell className="w-[38%] max-w-80 whitespace-normal py-2">
+                    {playerIdentity(p)}
+                  </TableCell>
+                  <TableCell className="py-2">{playerStatus(p)}</TableCell>
+                  <TableCell className="max-w-48 whitespace-normal py-2 text-xs">
+                    {playerSeat(p)}
+                  </TableCell>
+                  <TableCell
+                    className={`py-2 text-right tabular-nums ${p.creditUsed ? "font-medium" : "text-muted-foreground"}`}
+                  >
+                    {money(p.creditUsed)}
+                  </TableCell>
+                  <TableCell className="py-2">
+                    <div className="flex justify-end">{rowActions(p)}</div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </RecordTable>
+        </div>
+        {resultsReady && !filtered.length && (
           <EmptyState
             title={hasCriteria ? "No matching players." : "No players yet"}
             description={
@@ -322,88 +421,6 @@ export function PlayersView() {
               </Button>
             )}
           </EmptyState>
-        ) : (
-          <>
-            <ul
-              aria-label={t("Players")}
-              className="divide-y border-t @min-[800px]/players:hidden"
-            >
-              {visible.map((p) => (
-                <li
-                  key={p.id}
-                  className="min-w-0 space-y-2 px-3 py-3 sm:px-4"
-                  data-player-row
-                >
-                  <div className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">{playerIdentity(p)}</div>
-                    <span className="pt-1">{playerStatus(p)}</span>
-                  </div>
-                  {p.creditUsed > 0 && (
-                    <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs leading-4 text-muted-foreground">
-                      <span>{t("Outstanding credit")}</span>
-                      <span className="whitespace-nowrap font-medium tabular-nums text-foreground">
-                        {money(p.creditUsed)}
-                      </span>
-                    </p>
-                  )}
-                  <div className="flex min-w-0 items-end justify-between gap-2">
-                    <div className="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
-                      {p.status === "ACTIVE" && <p>{playerSeat(p)}</p>}
-                    </div>
-                    <div className="shrink-0">{rowActions(p)}</div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <div className="hidden px-4 pb-1 @min-[800px]/players:block [&>div]:block">
-              <RecordTable label="Players">
-                <TableHeader>
-                  <TableRow>
-                    {[
-                      "Player",
-                      "Status",
-                      "Table / seat",
-                      "Outstanding credit",
-                      "Actions",
-                    ].map((x) => (
-                      <TableHead
-                        key={x}
-                        scope="col"
-                        className={
-                          x === "Actions" || x === "Outstanding credit"
-                            ? "text-right"
-                            : undefined
-                        }
-                      >
-                        {t(x)}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visible.map((p) => (
-                    <TableRow key={p.id} data-player-row>
-                      <TableCell className="w-[38%] max-w-80 whitespace-normal py-2">
-                        {playerIdentity(p)}
-                      </TableCell>
-                      <TableCell className="py-2">{playerStatus(p)}</TableCell>
-                      <TableCell className="max-w-48 whitespace-normal py-2 text-xs">
-                        {playerSeat(p)}
-                      </TableCell>
-                      <TableCell
-                        className={`py-2 text-right tabular-nums ${p.creditUsed ? "font-medium" : "text-muted-foreground"}`}
-                      >
-                        {money(p.creditUsed)}
-                      </TableCell>
-                      <TableCell className="py-2">
-                        <div className="flex justify-end">{rowActions(p)}</div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </RecordTable>
-            </div>
-          </>
         )}
         <div className="px-3 pb-3 sm:px-4 sm:pb-4">
           <Pager

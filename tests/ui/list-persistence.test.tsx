@@ -108,6 +108,10 @@ test("search, filters and selected page size survive a list remount", async () =
     screen.getByRole("combobox", { name: "Player status" }),
     "ACTIVE",
   );
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
+  await user.click(screen.getByRole("menuitemradio", { name: "Player name" }));
+  await user.click(screen.getByRole("menuitemradio", { name: "Descending" }));
+  await user.keyboard("{Escape}");
   await user.click(screen.getByRole("combobox", { name: /Rows per page/ }));
   await user.keyboard("{End}{Enter}");
   await user.click(screen.getByRole("button", { name: "Next page" }));
@@ -140,6 +144,19 @@ test("search, filters and selected page size survive a list remount", async () =
     "50",
   );
   assert.ok(screen.getByText("Showing 51–100 of 101"));
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "Player name" })
+      .getAttribute("aria-checked"),
+    "true",
+  );
+  assert.equal(
+    screen
+      .getByRole("menuitemradio", { name: "Descending" })
+      .getAttribute("aria-checked"),
+    "true",
+  );
 });
 
 test("browser back restores the earlier page and filter controls", async () => {
@@ -241,7 +258,7 @@ test("browser back after an account switch cannot restore the previous staff mem
   );
 });
 
-test("a bookmark restores valid criteria while invalid sorting and sizes show safe defaults", () => {
+test("a bookmark restores valid criteria while invalid sorting and sizes show safe defaults", async () => {
   window.history.replaceState(
     null,
     "",
@@ -264,10 +281,15 @@ test("a bookmark restores valid criteria while invalid sorting and sizes show sa
     ).value,
     "ACTIVE",
   );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
   assert.equal(
-    screen.getByRole("combobox", { name: "Sort by" }).textContent,
-    "Default order",
+    screen
+      .getByRole("menuitemradio", { name: "Default order" })
+      .getAttribute("aria-checked"),
+    "true",
   );
+  await user.keyboard("{Escape}");
   assert.equal(
     screen.getByRole("combobox", { name: /Rows per page/ }).textContent,
     "20",
@@ -291,8 +313,9 @@ test("changing search, a filter or sorting returns staff to the first page", asy
   );
   assert.ok(screen.getByText("Showing 1–20 of 101"));
   await user.click(screen.getByRole("button", { name: "Next page" }));
-  await user.click(screen.getByRole("combobox", { name: "Sort by" }));
-  await user.keyboard("{End}{Enter}");
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
+  await user.keyboard("{Home}{ArrowDown}{Enter}");
+  await user.keyboard("{Escape}");
   assert.ok(screen.getByText("Showing 1–20 of 101"));
   await waitFor(() => {
     const criteria = new URLSearchParams(window.location.search);
@@ -476,22 +499,32 @@ test("switching transaction queues removes unsupported sorting and retains share
   );
   const user = userEvent.setup();
   render(<TransactionExample />);
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
   assert.equal(
-    screen.getByRole("combobox", { name: "Sort by" }).textContent,
-    "Date",
+    screen
+      .getByRole("menuitemradio", { name: "Date" })
+      .getAttribute("aria-checked"),
+    "true",
   );
+  await user.keyboard("{Escape}");
   const queue = screen.getByRole("combobox", { name: "Transaction queue" });
   await user.selectOptions(queue, "PENDING");
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
   assert.equal(
-    screen.getByRole("combobox", { name: "Sort by" }).textContent,
-    "Default order",
+    screen
+      .getByRole("menuitemradio", { name: "Default order" })
+      .getAttribute("aria-checked"),
+    "true",
   );
-  await user.click(screen.getByRole("combobox", { name: "Sort by" }));
-  await user.click(screen.getByRole("option", { name: "Amount" }));
+  await user.click(screen.getByRole("menuitemradio", { name: "Entry amount" }));
+  await user.keyboard("{Escape}");
   await user.selectOptions(queue, "APPROVED");
   await user.selectOptions(queue, "PENDING");
+  await user.click(screen.getByRole("button", { name: "Sort by" }));
   assert.equal(
-    screen.getByRole("combobox", { name: "Sort by" }).textContent,
-    "Amount",
+    screen
+      .getByRole("menuitemradio", { name: "Entry amount" })
+      .getAttribute("aria-checked"),
+    "true",
   );
 });

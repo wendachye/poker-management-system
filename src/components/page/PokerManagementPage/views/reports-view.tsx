@@ -247,7 +247,7 @@ export function ReportsView() {
             {t("Day controls always apply to the current business day.")}
           </p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2 [&>a]:w-full [&>button]:h-auto [&>button]:min-h-11 [&>button]:w-full [&>button]:whitespace-normal sm:[&>a]:w-auto sm:[&>button]:min-h-9 sm:[&>button]:w-auto">
+        <div className="flex shrink-0 flex-wrap gap-2 [&>a]:w-full [&>button]:h-auto [&>button]:min-h-10 [&>button]:w-full [&>button]:whitespace-normal sm:[&>a]:w-auto sm:[&>button]:min-h-9 sm:[&>button]:w-auto">
           {supervisor &&
             (s.locked && !setupComplete ? (
               s.user?.role === "ADMIN" ? (
@@ -342,7 +342,6 @@ export function ReportsView() {
               {day && (
                 <Panel
                   compact
-                  title="Daily report"
                   action={
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge tone={day.status === "OPEN" ? "green" : "neutral"}>
@@ -350,7 +349,7 @@ export function ReportsView() {
                       </Badge>
                       <Button
                         variant="outline"
-                        className="h-11 sm:h-9"
+                        className="h-10 sm:h-9"
                         onClick={download}
                         aria-busy={csvDownload.busy}
                         disabled={
@@ -414,52 +413,101 @@ export function ReportsView() {
                 title="Player results"
                 description="List filters only change the rows shown. Report totals and CSV exports include all records in the selected report."
               >
-                {(remote.live || players.length > 0) && (
-                  <ListToolbar
-                    compact
-                    search={val("playerSearch")}
-                    searchLabel="Search player results"
-                    searchPlaceholder="Search by name or phone"
-                    onSearchChange={(value) => {
-                      set("playerSearch", value);
-                      set("playerPage", "0");
-                    }}
-                    activeFilters={
-                      val("playerStatus")
-                        ? [
-                            {
-                              key: "status",
-                              label:
-                                t("Status") + ": " + t(val("playerStatus")),
-                              onRemove: () => {
-                                set("playerStatus", "");
-                                set("playerPage", "0");
-                              },
+                <ListToolbar
+                  compact
+                  orderControls={browsing.controls}
+                  search={val("playerSearch")}
+                  searchLabel="Search player results"
+                  searchPlaceholder="Search by name or phone"
+                  onSearchChange={(value) => {
+                    set("playerSearch", value);
+                    set("playerPage", "0");
+                  }}
+                  activeFilters={
+                    val("playerStatus")
+                      ? [
+                          {
+                            key: "status",
+                            label: t("Status") + ": " + t(val("playerStatus")),
+                            onRemove: () => {
+                              set("playerStatus", "");
+                              set("playerPage", "0");
                             },
-                          ]
-                        : []
-                    }
-                    onClear={clearPlayerFilters}
-                    resultCount={resultsReady ? playerTotal : null}
-                    loading={remote.loading && !resultsReady}
-                  >
-                    <Field label="Status">
-                      <Select
-                        value={val("playerStatus")}
-                        onValueChange={(value) => {
-                          set("playerStatus", value);
-                          set("playerPage", "0");
-                        }}
-                        options={[
-                          { value: "", label: "All statuses" },
-                          { value: "ACTIVE", label: "ACTIVE" },
-                          { value: "OUT", label: "OUT" },
-                        ]}
-                      />
-                    </Field>
-                  </ListToolbar>
-                )}
-                {browsing.controls}
+                          },
+                        ]
+                      : []
+                  }
+                  onClear={clearPlayerFilters}
+                  resultCount={resultsReady ? playerTotal : null}
+                  loading={remote.loading && !resultsReady}
+                >
+                  <Field label="Status">
+                    <Select
+                      value={val("playerStatus")}
+                      onValueChange={(value) => {
+                        set("playerStatus", value);
+                        set("playerPage", "0");
+                      }}
+                      options={[
+                        { value: "", label: "All statuses" },
+                        { value: "ACTIVE", label: "ACTIVE" },
+                        { value: "OUT", label: "OUT" },
+                      ]}
+                    />
+                  </Field>
+                </ListToolbar>
+                <RecordList
+                  compact
+                  label="Player results"
+                  sorting={browsing.sorting}
+                  rows={
+                    !resultsReady || remote.loading || remote.error
+                      ? []
+                      : remote.live
+                        ? filteredPlayers
+                        : filteredPlayers.slice(
+                            playerPage * browsing.pageSize,
+                            (playerPage + 1) * browsing.pageSize,
+                          )
+                  }
+                  rowKey={(p) => p.id}
+                  columns={[
+                    {
+                      label: "Player",
+                      sortKey: "name",
+                      render: (p) => (
+                        <span className="font-medium [overflow-wrap:anywhere]">
+                          {displayName(p.name)}
+                        </span>
+                      ),
+                    },
+                    {
+                      label: "Buy-in",
+                      sortKey: "buyIn",
+                      align: "right",
+                      render: (p) => money(p.buyIn),
+                    },
+                    {
+                      label: "Cash-out",
+                      sortKey: "cashOut",
+                      align: "right",
+                      render: (p) => money(p.cashOut),
+                    },
+                    {
+                      label: "P/L",
+                      align: "right",
+                      render: (p) =>
+                        p.status === "ACTIVE"
+                          ? t("Unsettled")
+                          : money(p.cashOut - p.buyIn),
+                    },
+                    {
+                      label: "Status",
+                      sortKey: "status",
+                      render: (p) => <Badge>{p.status}</Badge>,
+                    },
+                  ]}
+                />
                 {remote.loading || remote.error ? null : !players.length &&
                   !val("playerSearch") &&
                   !val("playerStatus") ? (
@@ -470,53 +518,7 @@ export function ReportsView() {
                       {t("Clear all")}
                     </Button>
                   </EmptyState>
-                ) : (
-                  <RecordList
-                    compact
-                    label="Player results"
-                    rows={
-                      remote.live
-                        ? filteredPlayers
-                        : filteredPlayers.slice(
-                            playerPage * browsing.pageSize,
-                            (playerPage + 1) * browsing.pageSize,
-                          )
-                    }
-                    rowKey={(p) => p.id}
-                    columns={[
-                      {
-                        label: "Player",
-                        render: (p) => (
-                          <span className="font-medium [overflow-wrap:anywhere]">
-                            {displayName(p.name)}
-                          </span>
-                        ),
-                      },
-                      {
-                        label: "Buy-in",
-                        align: "right",
-                        render: (p) => money(p.buyIn),
-                      },
-                      {
-                        label: "Cash-out",
-                        align: "right",
-                        render: (p) => money(p.cashOut),
-                      },
-                      {
-                        label: "P/L",
-                        align: "right",
-                        render: (p) =>
-                          p.status === "ACTIVE"
-                            ? t("Unsettled")
-                            : money(p.cashOut - p.buyIn),
-                      },
-                      {
-                        label: "Status",
-                        render: (p) => <Badge>{p.status}</Badge>,
-                      },
-                    ]}
-                  />
-                )}
+                ) : null}
                 <Pager
                   label="Player results"
                   page={playerPage}
@@ -736,7 +738,7 @@ export function ReportsView() {
                   <Button
                     variant="link"
                     size="sm"
-                    className="ml-auto h-11 shrink-0 sm:h-9"
+                    className="ml-auto h-10 shrink-0 sm:h-9"
                     asChild
                   >
                     <Link
@@ -778,7 +780,7 @@ export function ReportsView() {
         )}
         {(!ready || !closingDayMatches) && (
           <DialogClose asChild>
-            <Button variant="outline" className="h-11 w-full">
+            <Button variant="outline" className="h-10 w-full sm:h-11">
               {t("Cancel")}
             </Button>
           </DialogClose>

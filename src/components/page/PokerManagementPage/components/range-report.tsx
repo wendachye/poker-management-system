@@ -191,7 +191,7 @@ export function RangeReport({ today }: { today: string }) {
         action={
           <Button
             variant="outline"
-            className="h-11 sm:h-9"
+            className="h-10 sm:h-9"
             onClick={download}
             aria-busy={csvDownload.busy}
             disabled={
@@ -206,29 +206,30 @@ export function RangeReport({ today }: { today: string }) {
           </Button>
         }
       >
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Period">
-            <Select
-              value={preset}
-              onValueChange={(v) => {
-                if (v === "custom") {
-                  s.setDraft("range.from", from);
-                  s.setDraft("range.to", to);
-                }
-                s.setDraft("range.preset", v);
-                s.setDraft("range.page", "0");
-              }}
-              options={[
-                { value: "week", label: "Last 7 days" },
-                { value: "month", label: "Month to date" },
-                { value: "last-month", label: "Previous month" },
-                { value: "custom", label: "Custom range" },
-              ]}
-            />
-          </Field>
+        <div className="grid items-end gap-3 sm:grid-cols-3">
+          <Select
+            aria-label={t("Period")}
+            className="h-10"
+            value={preset}
+            onValueChange={(v) => {
+              if (v === "custom") {
+                s.setDraft("range.from", from);
+                s.setDraft("range.to", to);
+              }
+              s.setDraft("range.preset", v);
+              s.setDraft("range.page", "0");
+            }}
+            options={[
+              { value: "week", label: "Last 7 days" },
+              { value: "month", label: "Month to date" },
+              { value: "last-month", label: "Previous month" },
+              { value: "custom", label: "Custom range" },
+            ]}
+          />
           <Field label="From date">
             <Input
               type="date"
+              className="h-10"
               value={from}
               max={to || undefined}
               onChange={(e) => custom("from", e.target.value)}
@@ -237,6 +238,7 @@ export function RangeReport({ today }: { today: string }) {
           <Field label="To date">
             <Input
               type="date"
+              className="h-10"
               value={to}
               min={from || undefined}
               onChange={(e) => custom("to", e.target.value)}
@@ -394,6 +396,8 @@ export function RangeReport({ today }: { today: string }) {
         </p>
         <ListToolbar
           compact
+          orderControls={browsing.controls}
+          orderControlsClassName="@min-[1000px]/list-toolbar:hidden"
           search={query}
           searchLabel="Search daily breakdown"
           searchPlaceholder="Search by business date"
@@ -434,7 +438,84 @@ export function RangeReport({ today }: { today: string }) {
             />
           </Field>
         </ListToolbar>
-        {browsing.controls}
+        <RecordList
+          compact
+          wide
+          label="Daily breakdown"
+          sorting={browsing.sorting}
+          rows={
+            !resultsReady || remote.loading || remote.error || error
+              ? []
+              : remote.live
+                ? filteredDays
+                : filteredDays.slice(
+                    page * browsing.pageSize,
+                    (page + 1) * browsing.pageSize,
+                  )
+          }
+          rowKey={(d) => d.id}
+          columns={[
+            {
+              label: "Business date",
+              sortKey: "date",
+              render: (d) => (
+                <Button
+                  variant="link"
+                  className="h-10 justify-start px-0 sm:h-9"
+                  aria-label={t("View daily report") + ": " + d.date}
+                  onClick={() => {
+                    s.setDraft("report.day", d.id);
+                    s.clearDraft("report.selectedDate");
+                    for (const key of [
+                      "playerSearch",
+                      "playerStatus",
+                      "playerPage",
+                      "closeSearch",
+                      "closePage",
+                    ]) {
+                      s.setDraft("report." + key, "");
+                    }
+                    s.setDraft("report.mode", "day");
+                  }}
+                >
+                  {d.date}
+                </Button>
+              ),
+            },
+            {
+              label: "Status",
+              render: (d) => (
+                <Badge tone={d.status === "OPEN" ? "green" : "neutral"}>
+                  {d.status}
+                </Badge>
+              ),
+            },
+            {
+              label: "Cash received",
+              sortKey: "cashReceived",
+              align: "right",
+              render: (d) => money(d.totals.cashReceived),
+            },
+            {
+              label: "Cash payout",
+              sortKey: "cashPayout",
+              align: "right",
+              render: (d) => money(d.totals.cashPayout),
+            },
+            {
+              label: "Expected cash",
+              sortKey: "expectedCash",
+              align: "right",
+              render: (d) => money(d.totals.expectedCash),
+            },
+            {
+              label: "Variance",
+              align: "right",
+              render: (d) =>
+                d.totals.variance === null ? "—" : money(d.totals.variance),
+            },
+          ]}
+        />
         {remote.loading ||
         remote.error ||
         error ? null : !filteredDays.length ? (
@@ -443,79 +524,7 @@ export function RangeReport({ today }: { today: string }) {
               {t("Clear all")}
             </Button>
           </EmptyState>
-        ) : (
-          <RecordList
-            compact
-            wide
-            label="Daily breakdown"
-            rows={
-              remote.live
-                ? filteredDays
-                : filteredDays.slice(
-                    page * browsing.pageSize,
-                    (page + 1) * browsing.pageSize,
-                  )
-            }
-            rowKey={(d) => d.id}
-            columns={[
-              {
-                label: "Business date",
-                render: (d) => (
-                  <Button
-                    variant="link"
-                    className="h-11 justify-start px-0 sm:h-9"
-                    aria-label={t("View daily report") + ": " + d.date}
-                    onClick={() => {
-                      s.setDraft("report.day", d.id);
-                      s.clearDraft("report.selectedDate");
-                      for (const key of [
-                        "playerSearch",
-                        "playerStatus",
-                        "playerPage",
-                        "closeSearch",
-                        "closePage",
-                      ]) {
-                        s.setDraft("report." + key, "");
-                      }
-                      s.setDraft("report.mode", "day");
-                    }}
-                  >
-                    {d.date}
-                  </Button>
-                ),
-              },
-              {
-                label: "Status",
-                render: (d) => (
-                  <Badge tone={d.status === "OPEN" ? "green" : "neutral"}>
-                    {d.status}
-                  </Badge>
-                ),
-              },
-              {
-                label: "Cash received",
-                align: "right",
-                render: (d) => money(d.totals.cashReceived),
-              },
-              {
-                label: "Cash payout",
-                align: "right",
-                render: (d) => money(d.totals.cashPayout),
-              },
-              {
-                label: "Expected cash",
-                align: "right",
-                render: (d) => money(d.totals.expectedCash),
-              },
-              {
-                label: "Variance",
-                align: "right",
-                render: (d) =>
-                  d.totals.variance === null ? "—" : money(d.totals.variance),
-              },
-            ]}
-          />
-        )}
+        ) : null}
         <Pager
           label="Daily breakdown"
           page={page}

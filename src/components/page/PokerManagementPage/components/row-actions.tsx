@@ -42,7 +42,7 @@ export function RowActions({
           variant="outline"
           size={iconOnly ? "icon-sm" : "sm"}
           className={
-            iconOnly ? "size-11 shrink-0 sm:size-9" : "h-11 shrink-0 sm:h-9"
+            iconOnly ? "size-10 shrink-0 sm:size-9" : "h-10 shrink-0 sm:h-9"
           }
           aria-label={t(label)}
           disabled={disabled}
@@ -65,7 +65,7 @@ export function RowActions({
             disabled={action.disabled}
             variant={action.destructive ? "destructive" : "default"}
             onSelect={action.onSelect}
-            className="min-h-11 gap-2 px-3 sm:min-h-9"
+            className="min-h-10 gap-2 px-3 sm:min-h-9"
           >
             {action.icon && <action.icon aria-hidden="true" />}
             <span className="min-w-0">

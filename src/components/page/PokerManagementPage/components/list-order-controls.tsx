@@ -12,6 +12,15 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Pagination,
   PaginationContent,
   PaginationItem,
@@ -42,7 +51,6 @@ export function ListOrderControls({
   label?: string;
   t?: Translate;
 }) {
-  const id = useId();
   const selected = options.some((option) => option.value === value)
     ? value
     : "";
@@ -52,57 +60,73 @@ export function ListOrderControls({
     : direction === "asc"
       ? ArrowUpWideNarrow
       : ArrowDownWideNarrow;
+  const description = selected
+    ? `${t(options.find((option) => option.value === selected)!.label)} · ${directionLabel}`
+    : t("Default order");
   return (
-    <div
-      className="flex min-w-0 flex-wrap items-center gap-2"
-      data-list-controls
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-2 sm:flex-initial">
-        <label htmlFor={id} className="shrink-0 text-xs text-muted-foreground">
-          {t(label)}
-        </label>
-        <Select
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={`size-10 shrink-0${selected ? " border-primary text-primary" : ""}`}
+          aria-label={t(label)}
+          aria-description={description}
+          title={`${t(label)} · ${description}`}
+        >
+          <Icon aria-hidden="true" className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-56 max-w-[calc(100vw-2rem)]"
+        aria-label={t(label)}
+      >
+        <DropdownMenuLabel>{t(label)}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          aria-label={t(label)}
           value={selected || "__default_order__"}
           onValueChange={(next) => {
             const actual = next === "__default_order__" ? "" : next;
             if (options.some((option) => option.value === actual))
-              onChange(actual, direction);
+              onChange(actual, actual ? direction : "asc");
           }}
         >
-          <SelectTrigger
-            id={id}
-            aria-label={t(label)}
-            className="h-11 min-w-0 flex-1 sm:h-10 sm:w-48 sm:flex-initial"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {options.map((option) => (
-              <SelectItem
-                key={option.value || "__default_order__"}
-                value={option.value || "__default_order__"}
-              >
-                {t(option.label)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        className="h-11 shrink-0 px-3 sm:h-10"
-        disabled={!selected}
-        aria-label={
-          t("Change sort direction") + (selected ? ` · ${directionLabel}` : "")
-        }
-        title={selected ? directionLabel : t("Default order")}
-        onClick={() => onChange(selected, direction === "asc" ? "desc" : "asc")}
-      >
-        <Icon aria-hidden="true" className="size-4" />
-        {selected && <span className="hidden sm:inline">{directionLabel}</span>}
-      </Button>
-    </div>
+          {options.map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value || "__default_order__"}
+              value={option.value || "__default_order__"}
+              className="min-h-10 sm:min-h-9"
+              onSelect={(event) => event.preventDefault()}
+            >
+              {t(option.label)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuRadioGroup
+          aria-label={t("Change sort direction")}
+          value={selected ? direction : ""}
+          onValueChange={(next) => {
+            if (selected && (next === "asc" || next === "desc"))
+              onChange(selected, next);
+          }}
+        >
+          {(["asc", "desc"] as const).map((order) => (
+            <DropdownMenuRadioItem
+              key={order}
+              value={order}
+              disabled={!selected}
+              className="min-h-10 sm:min-h-9"
+              onSelect={(event) => event.preventDefault()}
+            >
+              {t(order === "asc" ? "Ascending" : "Descending")}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -141,7 +165,7 @@ export function ListPager({
   if ((count === null || count <= size) && !onPageSizeChange) return null;
   return (
     <div
-      className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
+      className="flex flex-col gap-2 border-t pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:pt-4"
       data-list-controls
       aria-busy={loading || undefined}
     >
@@ -174,7 +198,7 @@ export function ListPager({
             <SelectTrigger
               id={id}
               aria-label={`${t("Rows per page")} · ${t(label)}`}
-              className="h-11 w-20 sm:h-9"
+              className="h-10 w-20 sm:h-9"
             >
               <SelectValue />
             </SelectTrigger>
@@ -194,7 +218,7 @@ export function ListPager({
                   type="button"
                   variant="outline"
                   size="icon"
-                  className="size-11 sm:size-9"
+                  className="size-10 sm:size-9"
                   aria-label={t("First page")}
                   disabled={current === 0}
                   onClick={() => setPage(0)}
@@ -208,7 +232,7 @@ export function ListPager({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-11 px-3 sm:h-9"
+                className="h-10 px-3 sm:h-9"
                 aria-label={t("Previous page")}
                 disabled={current === 0}
                 onClick={() => setPage(current - 1)}
@@ -231,7 +255,7 @@ export function ListPager({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-11 px-3 sm:h-9"
+                className="h-10 px-3 sm:h-9"
                 aria-label={t("Next page")}
                 disabled={current + 1 >= pages}
                 onClick={() => setPage(current + 1)}
@@ -246,7 +270,7 @@ export function ListPager({
                   type="button"
                   variant="outline"
                   size="icon"
-                  className="size-11 sm:size-9"
+                  className="size-10 sm:size-9"
                   aria-label={t("Last page")}
                   disabled={current + 1 >= pages}
                   onClick={() => setPage(pages - 1)}

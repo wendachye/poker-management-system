@@ -1,8 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type AriaAttributes,
+  type CSSProperties,
+} from "react";
 import { gsap } from "gsap";
-import { ArrowRightLeft } from "lucide-react";
+import { ArrowRightLeft, Check } from "lucide-react";
+import { RadioGroup } from "radix-ui";
 import { useDraggable, useDroppable } from "@dnd-kit/react";
 import { pointerIntersection } from "@dnd-kit/collision";
 import type { Player, TableRecord } from "@/domain/model";
@@ -33,7 +40,17 @@ export type PokerTableMapProps = {
   onSeatSelect: (seat: number, player?: Player) => void;
   disabled: boolean;
   canCheckIn: boolean;
+  /** Seat selection uses the same rail but has no floor-view or drag actions. */
+  selection?: PokerSeatSelection;
 };
+
+export type PokerSeatSelection = {
+  value: string;
+  onValueChange: (value: string) => void;
+  currentPlayerId?: string;
+  required?: boolean;
+  id?: string;
+} & Pick<AriaAttributes, "aria-label" | "aria-describedby" | "aria-invalid">;
 
 /** A seating control for real venue records; its buttons use the existing workflows. */
 export function PokerTableMap({
@@ -42,6 +59,7 @@ export function PokerTableMap({
   onSeatSelect,
   disabled,
   canCheckIn,
+  selection,
 }: PokerTableMapProps) {
   const t = useText();
   const tableName = displayName(table.name);
@@ -59,6 +77,15 @@ export function PokerTableMap({
   const occupancy = seatNumbers
     .map((seat) => occupants.get(seat)?.id ?? "")
     .join("|");
+  const selectedNumber = Number(selection?.value);
+  const selectedValue =
+    table.status === "OPEN" &&
+    Number.isInteger(selectedNumber) &&
+    selectedNumber >= 1 &&
+    selectedNumber <= 9 &&
+    !occupants.has(selectedNumber)
+      ? String(selectedNumber)
+      : "";
 
   useEffect(() => {
     if (!rail.current) return;
@@ -126,8 +153,12 @@ export function PokerTableMap({
     return () => media.revert();
   }, [occupancy]);
 
-  return (
-    <div ref={root} className={styles.map}>
+  const content = (
+    <div
+      ref={root}
+      className={styles.map}
+      data-selection={selection ? "true" : undefined}
+    >
       <div className={styles.arena} data-table-arena>
         <div
           className={styles.felt}
@@ -146,7 +177,28 @@ export function PokerTableMap({
               const desktop = desktopPositions[seat - 1];
               const position = positions?.[seat - 1];
               const player = occupants.get(seat);
-              return (
+              const seatStyle = {
+                "--mobile-seat-x": `${mobile.xPercent}%`,
+                "--mobile-seat-y": `${mobile.yPercent}%`,
+                "--desktop-seat-x": `${desktop.xPercent}%`,
+                "--desktop-seat-y": `${desktop.yPercent}%`,
+                ...(position && {
+                  "--seat-x": `${position.xPercent}%`,
+                  "--seat-y": `${position.yPercent}%`,
+                }),
+              } as CSSProperties;
+              return selection ? (
+                <SelectablePokerSeat
+                  key={seat}
+                  table={table}
+                  seat={seat}
+                  player={player}
+                  current={!!player && player.id === selection.currentPlayerId}
+                  selected={selectedValue === String(seat)}
+                  disabled={disabled || table.status !== "OPEN" || !!player}
+                  style={seatStyle}
+                />
+              ) : (
                 <PokerSeat
                   key={seat}
                   table={table}
@@ -154,18 +206,7 @@ export function PokerTableMap({
                   player={player}
                   disabled={disabled || (!player && !canCheckIn)}
                   onSelect={() => onSeatSelect(seat, player)}
-                  style={
-                    {
-                      "--mobile-seat-x": `${mobile.xPercent}%`,
-                      "--mobile-seat-y": `${mobile.yPercent}%`,
-                      "--desktop-seat-x": `${desktop.xPercent}%`,
-                      "--desktop-seat-y": `${desktop.yPercent}%`,
-                      ...(position && {
-                        "--seat-x": `${position.xPercent}%`,
-                        "--seat-y": `${position.yPercent}%`,
-                      }),
-                    } as CSSProperties
-                  }
+                  style={seatStyle}
                 />
               );
             })}
@@ -173,6 +214,115 @@ export function PokerTableMap({
         </TooltipProvider>
       </div>
     </div>
+  );
+
+  if (!selection) return content;
+  return (
+    <RadioGroup.Root
+      id={selection.id}
+      aria-label={selection["aria-label"] ?? tableName + " · " + t("Seat")}
+      aria-describedby={selection["aria-describedby"]}
+      aria-invalid={selection["aria-invalid"]}
+      required={selection.required}
+      disabled={disabled || table.status !== "OPEN"}
+      value={selectedValue}
+      data-required={(selection.required && !disabled) || undefined}
+      data-value={selectedValue}
+      onValueChange={(next) => {
+        const seat = Number(next);
+        if (
+          !disabled &&
+          table.status === "OPEN" &&
+          Number.isInteger(seat) &&
+          seat >= 1 &&
+          seat <= 9 &&
+          !occupants.has(seat)
+        )
+          selection.onValueChange(String(seat));
+      }}
+      className="min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:ring-2 aria-invalid:ring-destructive/40"
+    >
+      {content}
+      {selectedValue && (
+        <p role="status" className="text-sm tabular-nums">
+          {t("Selected seat")}:{" "}
+          <span className="font-medium">{selectedValue}</span>
+        </p>
+      )}
+    </RadioGroup.Root>
+  );
+}
+
+function SelectablePokerSeat({
+  table,
+  seat,
+  player,
+  current,
+  selected,
+  disabled,
+  style,
+}: {
+  table: PokerTableMapProps["table"];
+  seat: number;
+  player?: Player;
+  current: boolean;
+  selected: boolean;
+  disabled: boolean;
+  style: CSSProperties;
+}) {
+  const t = useText();
+  const name = player ? displayName(player.name) : "";
+  const state = current
+    ? t("Current seat")
+    : player
+      ? t("occupied")
+      : t(table.status === "OPEN" ? "Available" : "Closed");
+  const label = [displayName(table.name), t("Seat") + " " + seat, name, state]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <li
+      className={styles.seat}
+      style={style}
+      data-seat={seat}
+      data-occupied={!!player}
+      data-current={current || undefined}
+      data-selected={selected || undefined}
+      title={label}
+    >
+      <RadioGroup.Item value={String(seat)} disabled={disabled} asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          className={styles.seatButton}
+          aria-label={label}
+          title={label}
+          data-mark-dirty="true"
+        >
+          <span
+            className={styles.seatCircle}
+            data-seat-circle
+            aria-hidden="true"
+          >
+            {seat}
+          </span>
+          {selected && (
+            <span className={styles.selectionIndicator} aria-hidden="true">
+              <Check className="size-2.5" />
+            </span>
+          )}
+          {player && (
+            <span
+              className={styles.seatName}
+              data-player-label
+              aria-hidden="true"
+            >
+              <PlayerSeatName name={current ? t("Current seat") : name} />
+            </span>
+          )}
+        </Button>
+      </RadioGroup.Item>
+    </li>
   );
 }
 

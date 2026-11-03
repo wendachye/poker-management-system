@@ -21,13 +21,13 @@ const options: Partial<Record<ListSortResource, readonly ListSortOption[]>> = {
   ],
   requests: [
     { value: "createdAt", label: "Date" },
-    { value: "amount", label: "Amount" },
+    { value: "amount", label: "Entry amount" },
     { value: "type", label: "Transaction type" },
     { value: "requestedBy", label: "Requested by" },
   ],
   transactions: [
     { value: "time", label: "Date" },
-    { value: "amount", label: "Amount" },
+    { value: "amount", label: "Entry amount" },
     { value: "type", label: "Transaction type" },
     { value: "staff", label: "Staff" },
   ],
