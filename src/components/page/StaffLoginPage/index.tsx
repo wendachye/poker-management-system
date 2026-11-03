@@ -1,5 +1,11 @@
 "use client";
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+  type ComponentProps,
+} from "react";
 import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import {
   InputGroup,
@@ -43,6 +49,7 @@ export function StaffLoginPage({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState<"login" | "check" | null>(null);
+  const [navigating, startNavigation] = useTransition();
   const [error, setError] = useState("");
   const [connectionUnavailable, setConnectionUnavailable] = useState(false);
   const [anotherAccount, setAnotherAccount] = useState(false);
@@ -54,13 +61,16 @@ export function StaffLoginPage({
     !accountMismatch &&
     (connectionUnavailable || !!auth.error || (unavailable && !!auth.user));
   const hasSession = !!auth.user && !anotherAccount;
+  const entering = busy === "login" || navigating;
   useEffect(() => {
     if (accountMismatch && busy === null) usernameInput.current?.focus();
   }, [accountMismatch, busy]);
 
   function enterSystem() {
-    router.replace("/dashboard");
-    router.refresh();
+    startNavigation(() => {
+      router.replace("/dashboard");
+      router.refresh();
+    });
   }
   function showAccountMismatch() {
     setPassword("");
@@ -109,14 +119,14 @@ export function StaffLoginPage({
             </CardTitle>
             <CardDescription>
               {t(
-                serviceError || hasSession
+                !entering && (serviceError || hasSession)
                   ? "Check your connection and continue."
                   : "Sign in with your staff account.",
               )}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {auth.loading ? (
+            {auth.loading || entering ? (
               <p
                 role="status"
                 className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -125,7 +135,13 @@ export function StaffLoginPage({
                   aria-hidden="true"
                   className="size-4 animate-spin"
                 />
-                {t("Checking staff access…")}
+                {t(
+                  navigating
+                    ? "Opening dashboard…"
+                    : busy === "login"
+                      ? "Signing in…"
+                      : "Checking staff access…",
+                )}
               </p>
             ) : serviceError || hasSession ? (
               <div className="space-y-4">
@@ -253,7 +269,7 @@ export function StaffLoginPage({
                     className="min-h-11 w-full"
                     disabled={!!busy}
                   >
-                    {t(busy === "login" ? "Signing in…" : "Sign in")}
+                    {t("Sign in")}
                   </Button>
                 </FieldSet>
               </form>

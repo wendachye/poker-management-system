@@ -1132,6 +1132,7 @@
     "close_form": "关闭表单",
     "check_your_connection_and_continue": "请检查连接后继续。",
     "checking_staff_access": "正在检查员工访问权限…",
+    "opening_dashboard": "正在打开概览…",
     "connection_unavailable": "暂时无法连接",
     "continue_your_session": "继续当前会话",
     "the_service_could_not_be_reached_check_the_connection_to_continue_with_your_existing_session": "暂时无法连接服务。请检查连接，恢复后可继续当前会话。",
