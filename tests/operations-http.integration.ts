@@ -2241,14 +2241,14 @@ test(
     );
 
     await t.test(
-      "a committed financial approval with a held receipt times out uncertain and recovers once through HTTP",
+      "a committed financial approval with stalled or oversized receipts stays uncertain and recovers once through HTTP",
       async () => {
         const original = await admin.snapshot();
         const venueId = "http-receipt-timeout";
         const submitter = new StaffBrowser();
-        const held: { read?: Promise<unknown> } = {};
-        let releaseReceipt: (() => void) | undefined;
-        let fallback: ReturnType<typeof setTimeout> | undefined;
+        const pendingReads: Promise<void>[] = [];
+        const releases: (() => void)[] = [];
+        const fallbacks: ReturnType<typeof setTimeout>[] = [];
         let changedVenue = false;
         try {
           const accounts = await admin.json<{ accounts: StaffAccount[] }>(
@@ -2354,28 +2354,53 @@ test(
             ).rows[0].count,
             "1",
           );
-          const nativeJson = committed.json.bind(committed);
+          const requestId = committed.headers.get("x-request-id");
+          assert.match(requestId ?? "", /^[a-f0-9-]{36}$/);
+          const receiptBytes = new Uint8Array(await committed.arrayBuffer());
           let released = false;
+          let receiptCancelled = false;
+          let receiptReads = 0;
+          let receiptCancels = 0;
+          let releaseReceipt!: () => void;
           const receiptGate = new Promise<void>((resolve) => {
             releaseReceipt = () => {
               released = true;
               resolve();
             };
           });
-          Object.defineProperty(committed, "json", {
-            value: () => {
-              held.read = receiptGate.then(nativeJson);
-              return held.read;
+          releases.push(releaseReceipt);
+          const receiptBody = new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                receiptReads++;
+                const read = receiptGate.then(() => {
+                  if (!receiptCancelled) {
+                    controller.enqueue(receiptBytes);
+                    controller.close();
+                  }
+                });
+                pendingReads.push(read);
+                return read;
+              },
+              cancel() {
+                receiptCancelled = true;
+                receiptCancels++;
+              },
             },
+            { highWaterMark: 0 },
+          );
+          const delayedReceipt = new Response(receiptBody, {
+            status: committed.status,
+            headers: committed.headers,
           });
-          // Only the adapter delays the already committed real HTTP receipt.
-          // This does not assert that native fetch ignores an AbortSignal.
+          // Only a custom body stream delays the small, already committed real
+          // HTTP receipt. Native fetch ignoring an AbortSignal is not asserted.
           const signals: AbortSignal[] = [];
           let acceptedLateReceipt = false;
           const attempt = requestManagementJson<Snapshot>(
             async (signal) => {
               signals.push(signal);
-              return committed;
+              return delayedReceipt;
             },
             undefined,
             10,
@@ -2384,17 +2409,17 @@ test(
             return value;
           });
           // A regression must fail promptly rather than leave a held body behind.
-          fallback = setTimeout(() => releaseReceipt?.(), 2000);
+          fallbacks.push(setTimeout(releaseReceipt, 2000));
           await assert.rejects(attempt, (error: unknown) => {
             assert.ok(error instanceof ManagementResponseError);
             assert.equal(error.status, 408);
             assert.equal(error.uncertain, true);
             return true;
           });
-          assert.ok(
-            held.read,
-            "The delayed JSON body reader must have started",
-          );
+          assert.equal(receiptReads, 1, "The delayed body reader must start");
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          assert.equal(receiptCancels, 1);
+          assert.equal(receiptBody.locked, false);
           assert.equal(released, false);
           assert.equal(signals.length, 1);
           assert.equal(signals[0].aborted, true);
@@ -2433,8 +2458,8 @@ test(
             requests: "1",
             operations: "1",
           });
-          releaseReceipt?.();
-          await held.read;
+          releaseReceipt();
+          await Promise.all(pendingReads);
           await attempt.catch(() => {});
           assert.equal(acceptedLateReceipt, false);
           assert.equal(
@@ -2442,10 +2467,115 @@ test(
             1,
             "No automatic adapter retry is allowed",
           );
+
+          let oversizedReleased = false;
+          let oversizedCancelled = false;
+          let oversizedCancels = 0;
+          let oversizedChunks = 0;
+          let receiptSent = false;
+          let releaseOversized!: () => void;
+          const oversizedGate = new Promise<void>((resolve) => {
+            releaseOversized = () => {
+              oversizedReleased = true;
+              resolve();
+            };
+          });
+          releases.push(releaseOversized);
+          const whitespace = new Uint8Array(1024 * 1024).fill(0x20);
+          const oversizedBody = new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                if (oversizedChunks < 17) {
+                  oversizedChunks++;
+                  controller.enqueue(whitespace);
+                  return;
+                }
+                if (!receiptSent) {
+                  receiptSent = true;
+                  controller.enqueue(receiptBytes);
+                  return;
+                }
+                const read = oversizedGate.then(() => {
+                  if (!oversizedCancelled) controller.close();
+                });
+                pendingReads.push(read);
+                return read;
+              },
+              cancel() {
+                oversizedCancelled = true;
+                oversizedCancels++;
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          // Preserve the genuine success status/request reference and append
+          // only whitespace before the real JSON. This controlled adapter can
+          // exceed its HTTP metadata; the server never emitted this large body.
+          const oversizedReceipt = new Response(oversizedBody, {
+            status: committed.status,
+            headers: committed.headers,
+          });
+          let oversizedAttempts = 0;
+          let acceptedOversizedReceipt = false;
+          fallbacks.push(setTimeout(releaseOversized, 2000));
+          await assert.rejects(
+            requestManagementJson<Snapshot>(async () => {
+              oversizedAttempts++;
+              return oversizedReceipt;
+            }).then((value) => {
+              acceptedOversizedReceipt = true;
+              return value;
+            }),
+            (error: unknown) => {
+              assert.ok(error instanceof ManagementResponseError);
+              assert.equal(error.status, 200);
+              assert.equal(error.uncertain, true);
+              assert.equal(error.requestId, requestId);
+              return true;
+            },
+          );
+          assert.equal(oversizedChunks, 17);
+          assert.equal(oversizedReleased, false);
+          assert.equal(oversizedCancels, 1);
+          assert.equal(oversizedBody.locked, false);
+          assert.equal(
+            receiptSent,
+            false,
+            "Reject before reading beyond budget",
+          );
+          assert.equal(oversizedAttempts, 1);
+          assert.equal(acceptedOversizedReceipt, false);
+          const recoveredAgain = await admin.json<typeof confirmed>(
+            "/api/operations/recover",
+            "POST",
+            checkpoint,
+          );
+          assert.equal(recoveredAgain.status, "saved");
+          assert.equal(recoveredAgain.operationId, checkpoint.operationId);
+          assert.equal(recoveredAgain.actorId, checkpoint.actorId);
+          assert.equal(recoveredAgain.branchId, checkpoint.branchId);
+          assert.equal(
+            recoveredAgain.snapshot.store.transactions.filter(
+              (entry) => entry.approvalId === approvalId,
+            ).length,
+            1,
+          );
+          assert.deepEqual(
+            (
+              await fixturePool.query<typeof counts>(
+                `SELECT
+                 (SELECT count(*) FROM poker_ledger WHERE branch_id=$1) AS ledger,
+                 (SELECT count(*) FROM poker_approvals WHERE branch_id=$1) AS requests,
+                 (SELECT count(*) FROM poker_operations WHERE branch_id=$1 AND operation_id=$2) AS operations`,
+                [venueId, checkpoint.operationId],
+              )
+            ).rows[0],
+            counts,
+          );
         } finally {
-          clearTimeout(fallback);
-          releaseReceipt?.();
-          await held.read?.catch(() => {});
+          for (const fallback of fallbacks) clearTimeout(fallback);
+          for (const release of releases) release();
+          await Promise.allSettled(pendingReads);
           if (changedVenue)
             await admin.json("/api/branch", "POST", {
               branchId: original.branch.id,

@@ -1,3 +1,5 @@
+import { readManagementJsonBody } from "./management-json-body";
+
 /** An HTTP failure with a safe staff message and its retry semantics. */
 export class ManagementResponseError extends Error {
   constructor(
@@ -14,6 +16,8 @@ export class ManagementResponseError extends Error {
 /** Proxy error pages and incomplete responses must never become raw JSON errors. */
 export async function readManagementResponse<T>(
   response: Response,
+  signal?: AbortSignal,
+  checkStopped?: () => void,
 ): Promise<T> {
   const reference = response.headers.get("x-request-id");
   const requestId =
@@ -25,7 +29,7 @@ export async function readManagementResponse<T>(
       : null;
   let data: unknown;
   try {
-    data = await response.json();
+    data = await readManagementJsonBody(response, signal, checkStopped);
   } catch {
     // A successful status without a readable receipt does not confirm a save.
     if (response.ok)
@@ -120,8 +124,21 @@ export async function requestManagementJson<T>(
     const work = (async () => {
       checkStopped();
       const response = await request(combined);
-      checkStopped();
-      const data = await readManagementResponse<T>(response);
+      try {
+        checkStopped();
+      } catch (error) {
+        // A late adapter response never enters the body reader's ownership.
+        // Cancel its unread body without waiting for an uncooperative source.
+        try {
+          void response.body?.cancel().catch(() => {});
+        } catch {}
+        throw error;
+      }
+      const data = await readManagementResponse<T>(
+        response,
+        combined,
+        checkStopped,
+      );
       checkStopped();
       return data;
     })();

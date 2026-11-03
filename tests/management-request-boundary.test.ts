@@ -64,15 +64,41 @@ function timedOut(outcome: ReturnType<typeof watch>["outcome"]) {
   assert.equal(outcome.error.requestId, null);
 }
 
-function delayedBody() {
+function delayedBody(options: { status?: number; neverCancel?: boolean } = {}) {
   const gate = Promise.withResolvers<unknown>();
-  const response = Response.json({ unused: true });
   let reads = 0;
-  response.json = async () => {
-    reads++;
-    return gate.promise;
-  };
-  return { gate, response, reads: () => reads };
+  let cancels = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        reads++;
+        try {
+          const value = await gate.promise;
+          if (!cancelled) {
+            controller.enqueue(new TextEncoder().encode(JSON.stringify(value)));
+            controller.close();
+          }
+        } catch (error) {
+          if (!cancelled) controller.error(error);
+        }
+      },
+      cancel() {
+        cancelled = true;
+        cancels++;
+        if (options.neverCancel) return new Promise<void>(() => {});
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const response = new Response(body, {
+    status: options.status ?? 200,
+    headers: {
+      "content-type": "application/json",
+      "x-request-id": reference,
+    },
+  });
+  return { gate, response, body, reads: () => reads, cancels: () => cancels };
 }
 
 test("a pre-aborted JSON caller never dispatches or retains a deadline timer", async (t) => {
@@ -111,20 +137,16 @@ test("the JSON deadline settles even when its request never reacts to cancellati
 
 test("the JSON deadline settles an uncooperative body without waiting for EOF", async (t) => {
   const timer = clock(t);
-  const response = Response.json({ unused: true });
-  let reads = 0;
-  response.json = () => {
-    reads++;
-    return new Promise(() => {});
-  };
+  const body = delayedBody({ neverCancel: true });
   const pending = watch(
-    requestManagementJson(async () => response, undefined, 20),
+    requestManagementJson(async () => body.response, undefined, 20),
   );
   await flush();
-  assert.equal(reads, 1);
+  assert.equal(body.reads(), 1);
   timer.advance(20);
   await flush();
   timedOut(pending.outcome);
+  body.gate.resolve({ saved: true });
   await pending.done;
 });
 
@@ -144,6 +166,8 @@ test("headers arriving after cancellation never start JSON body consumption", as
   await pending.done;
   timedOut(pending.outcome);
   assert.equal(body.reads(), 0);
+  assert.equal(body.cancels(), 1);
+  assert.equal(body.body.locked, false);
 });
 
 test("a successful body arriving after the JSON deadline cannot confirm a save", async (t) => {
@@ -219,7 +243,11 @@ for (const phase of ["headers", "body"] as const)
       await pending.done;
     }
     assert.equal(pending.outcome.error, reason);
-    if (phase === "headers") assert.equal(body.reads(), 0);
+    if (phase === "headers") {
+      assert.equal(body.reads(), 0);
+      assert.equal(body.cancels(), 1);
+      assert.equal(body.body.locked, false);
+    }
   });
 
 for (const phase of ["headers", "body"] as const)
@@ -227,13 +255,12 @@ for (const phase of ["headers", "body"] as const)
     clock(t);
     const caller = new AbortController();
     const reason = new DOMException("View closed", "AbortError");
-    const response = Response.json({ unused: true });
-    response.json = () => new Promise(() => {});
+    const body = delayedBody({ neverCancel: true });
     const pending = watch(
       requestManagementJson(
         phase === "headers"
           ? () => new Promise<Response>(() => {})
-          : async () => response,
+          : async () => body.response,
         caller.signal,
         20,
       ),
@@ -244,6 +271,7 @@ for (const phase of ["headers", "body"] as const)
     assert.equal(pending.outcome.settled, true);
     assert.equal(pending.outcome.accepted, false);
     assert.equal(pending.outcome.error, reason);
+    body.gate.resolve({ saved: true });
     await pending.done;
   });
 
@@ -262,6 +290,8 @@ test("overdue headers are refused by monotonic time before a delayed timer fires
   await pending.done;
   timedOut(pending.outcome);
   assert.equal(body.reads(), 0);
+  assert.equal(body.cancels(), 1);
+  assert.equal(body.body.locked, false);
 });
 
 test("an overdue JSON result is refused even when its timer has not run", async (t) => {
@@ -280,17 +310,12 @@ test("an overdue JSON result is refused even when its timer has not run", async 
 
 test("synchronous request work cannot carry a response beyond the monotonic deadline", async (t) => {
   const timer = clock(t);
-  let reads = 0;
-  const response = Response.json({ saved: true });
-  response.json = async () => {
-    reads++;
-    return { saved: true };
-  };
+  const body = delayedBody();
   const pending = watch(
     requestManagementJson(
       async () => {
         timer.monotonicOnly(20);
-        return response;
+        return body.response;
       },
       undefined,
       20,
@@ -298,18 +323,26 @@ test("synchronous request work cannot carry a response beyond the monotonic dead
   );
   await pending.done;
   timedOut(pending.outcome);
-  assert.equal(reads, 0);
+  assert.equal(body.reads(), 0);
+  body.gate.resolve({ saved: true });
 });
 
-test("a caller cancelled during JSON parsing cannot accept that parsed result", async (t) => {
+test("a caller cancelled as final JSON bytes arrive cannot accept that result", async (t) => {
   clock(t);
   const caller = new AbortController();
   const reason = new DOMException("View closed", "AbortError");
-  const response = Response.json({ saved: true });
-  response.json = async () => {
-    caller.abort(reason);
-    return { saved: true };
-  };
+  const response = new Response(
+    new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          controller.enqueue(new TextEncoder().encode('{"saved":true}'));
+          controller.close();
+          caller.abort(reason);
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+  );
   await assert.rejects(
     requestManagementJson(async () => response, caller.signal, 20),
     (error: unknown) => error === reason,
@@ -318,14 +351,9 @@ test("a caller cancelled during JSON parsing cannot accept that parsed result", 
 
 test("a late definite conflict cannot downgrade an already uncertain timeout", async (t) => {
   const timer = clock(t);
-  const body = delayedBody();
-  const response = new Response(null, {
-    status: 409,
-    headers: { "x-request-id": reference },
-  });
-  response.json = body.response.json;
+  const body = delayedBody({ status: 409 });
   const pending = watch(
-    requestManagementJson(async () => response, undefined, 20),
+    requestManagementJson(async () => body.response, undefined, 20),
   );
   await flush();
   timer.advance(20);
@@ -334,6 +362,42 @@ test("a late definite conflict cannot downgrade an already uncertain timeout", a
   await flush();
   await pending.done;
   timedOut(pending.outcome);
+});
+
+test("monotonic JSON body checks stop zero-byte drips before a delayed timer or EOF", async (t) => {
+  const timer = clock(t);
+  const gate = Promise.withResolvers<void>();
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        pulls++;
+        timer.monotonicOnly(10);
+        if (pulls <= 3) controller.enqueue(new Uint8Array(0));
+        else {
+          await gate.promise;
+          if (!cancelled) controller.close();
+        }
+      },
+      cancel() {
+        cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const pending = watch(
+    requestManagementJson(async () => new Response(body), undefined, 20),
+  );
+  try {
+    await flush();
+    timedOut(pending.outcome);
+    assert.equal(pulls, 2);
+    assert.equal(body.locked, false);
+  } finally {
+    gate.resolve();
+    await pending.done;
+  }
 });
 
 test("JSON request outcomes release their deadline timer and owned abort listeners", async (t) => {
