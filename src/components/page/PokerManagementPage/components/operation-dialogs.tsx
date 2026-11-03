@@ -713,6 +713,47 @@ function CheckInDialog({
             phoneCheckBlocked ||
             (step === "seat" && !!seatBlockedReason)
           }
+          summary={
+            step === "seat" ? (
+              <div
+                className="min-w-0 space-y-0.5"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <p
+                  className="truncate text-sm font-medium"
+                  title={displayName(
+                    returning ? (selected?.name ?? "") : value("name"),
+                  )}
+                >
+                  {displayName(
+                    returning ? (selected?.name ?? "") : value("name"),
+                  ) || t("Select player")}
+                </p>
+                <p className="break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                  {selectedTable
+                    ? displayName(selectedTable.name)
+                    : t("Select table")}
+                  {selectedTable && (
+                    <>
+                      {" · "}
+                      {value("seat") &&
+                      Number.isInteger(selectedSeat) &&
+                      selectedSeat >= 1 &&
+                      selectedSeat <= 9
+                        ? `${t("Seat")} ${selectedSeat}`
+                        : t("Select seat")}
+                    </>
+                  )}
+                </p>
+                {seatBlockedReason && (
+                  <p className="text-xs text-destructive">
+                    {t(seatBlockedReason)}
+                  </p>
+                )}
+              </div>
+            ) : undefined
+          }
         >
           {step === "player"
             ? "Choose seat"

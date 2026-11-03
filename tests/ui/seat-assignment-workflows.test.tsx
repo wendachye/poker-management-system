@@ -1,6 +1,7 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -191,6 +192,100 @@ function seat(number: number) {
     { name: new RegExp(`Seat ${number}(?: | ·|$)`) },
   );
 }
+function checkInFooter() {
+  return screen
+    .getByRole("dialog", { name: "Check in player" })
+    .querySelector<HTMLElement>('[data-slot="dialog-footer"]')!;
+}
+
+test("check-in confirmation appears only on the seat step and follows player and destination changes", async () => {
+  const user = userEvent.setup();
+  const { data } = setup(() => ({ kind: "check-in" }));
+  assert.equal(checkInFooter().querySelector("[aria-live]"), null);
+  await user.click(screen.getByRole("tab", { name: "New player" }));
+  await user.type(
+    screen.getByRole("textbox", { name: /Player name/ }),
+    "Sample · Draft Guest",
+  );
+  await user.type(
+    screen.getByRole("textbox", { name: /Phone/ }),
+    "+12025550700",
+  );
+  await waitFor(() =>
+    assert.equal(
+      (screen.getByRole("button", { name: "Choose seat" }) as HTMLButtonElement)
+        .disabled,
+      false,
+    ),
+  );
+  await user.click(screen.getByRole("button", { name: "Choose seat" }));
+  assert.ok(within(checkInFooter()).getByText("Draft Guest"));
+  assert.ok(within(checkInFooter()).getByText("Select table"));
+  assert.doesNotMatch(checkInFooter().textContent!, /Sample ·/);
+  await user.click(screen.getByRole("combobox", { name: "Table" }));
+  await user.click(screen.getByRole("option", { name: /^Main floor/ }));
+  assert.ok(within(checkInFooter()).getByText("Main floor · Select seat"));
+  await user.click(seat(4));
+  assert.ok(within(checkInFooter()).getByText("Main floor · Seat 4"));
+  await user.click(screen.getByRole("combobox", { name: "Table" }));
+  await user.click(screen.getByRole("option", { name: /^Lounge/ }));
+  assert.ok(within(checkInFooter()).getByText("Lounge · Select seat"));
+  assert.equal(within(checkInFooter()).queryByText(/Seat 4/), null);
+  await user.click(seat(5));
+  assert.ok(within(checkInFooter()).getByText("Lounge · Seat 5"));
+  await user.click(screen.getByRole("button", { name: "Change player" }));
+  assert.equal(checkInFooter().querySelector("[aria-live]"), null);
+  await user.clear(screen.getByRole("textbox", { name: /Player name/ }));
+  await user.type(
+    screen.getByRole("textbox", { name: /Player name/ }),
+    "Sample · Updated Guest",
+  );
+  await user.click(screen.getByRole("button", { name: "Choose seat" }));
+  assert.ok(within(checkInFooter()).getByText("Updated Guest"));
+  assert.equal(within(checkInFooter()).queryByText("Draft Guest"), null);
+  assert.ok(within(checkInFooter()).getByText("Lounge · Seat 5"));
+  assert.equal(
+    data.submissions.length,
+    0,
+    "The summary and draft changes do not post a check-in",
+  );
+});
+
+test("returning-player confirmation exposes an occupied selection after another staff member takes the seat", async () => {
+  const user = userEvent.setup();
+  const { data, initial, view } = setup((data) => ({
+    kind: "check-in",
+    playerId: "returning-guest",
+    tableId: data.main.id,
+  }));
+  assert.ok(within(checkInFooter()).getByText("Returning Guest"));
+  assert.ok(within(checkInFooter()).getByText("Main floor · Select seat"));
+  await user.click(seat(4));
+  data.run({
+    kind: "CHECK_IN",
+    name: "Other staff guest",
+    phone: "+12025550900",
+    type: "CASH",
+    creditLimit: 0,
+    tags: [],
+    tableId: data.main.id,
+    seat: 4,
+  });
+  await act(async () => {
+    view.rerender(<Harness data={data} operation={initial} />);
+  });
+  assert.ok(within(checkInFooter()).getByText("Main floor · Seat 4"));
+  assert.ok(within(checkInFooter()).getByText("That seat is occupied."));
+  assert.equal(
+    (
+      within(checkInFooter()).getByRole("button", {
+        name: "Check in & buy-in",
+      }) as HTMLButtonElement
+    ).disabled,
+    true,
+  );
+  assert.equal(data.submissions.length, 0);
+});
 
 test("visual check-in disables occupied seats and posts the chosen seat and table identity", async () => {
   const user = userEvent.setup();
@@ -282,13 +377,17 @@ test("an occupied seat arriving during check-in loses control validity and block
     tableId: data.main.id,
     seat: 4,
   });
-  view.rerender(<Harness data={data} operation={initial} />);
+  await act(async () => {
+    view.rerender(<Harness data={data} operation={initial} />);
+  });
   assert.equal(
     screen.getByRole("radiogroup", { name: "Seat" }).getAttribute("data-value"),
     "",
   );
   assert.equal((seat(4) as HTMLButtonElement).disabled, true);
-  assert.ok(screen.getByText("That seat is occupied."));
+  assert.ok(
+    within(screen.getByRole("alert")).getByText("That seat is occupied."),
+  );
   assert.equal(
     (
       screen.getByRole("button", {

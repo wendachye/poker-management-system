@@ -1,7 +1,19 @@
 import { JSDOM } from "jsdom";
-import { register } from "node:module";
+import { readFileSync } from "node:fs";
+import { createRequire, register } from "node:module";
+import { cssModuleClasses } from "./css-module-loader.mjs";
 
 register(new URL("./css-module-loader.mjs", import.meta.url));
+// Node22/tsx can load components through CommonJS, which bypasses the async
+// ESM hook. Keep both paths on the same class map without evaluating CSS.
+const require = createRequire(import.meta.url);
+const previousCssLoader =
+  require.extensions[".css"] ?? require.extensions[".js"];
+require.extensions[".css"] = (module, filename) => {
+  if (!filename.endsWith(".module.css"))
+    return previousCssLoader(module, filename);
+  module.exports = cssModuleClasses(readFileSync(filename, "utf8"));
+};
 
 // Component tests use a DOM, not a running browser or the operations database.
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {
