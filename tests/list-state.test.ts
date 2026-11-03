@@ -39,6 +39,26 @@ test("a bookmarked list retains explicit all-day filters and uses one-based URL 
   });
 });
 
+test("the reviewer work queue survives transaction URL and saved-view round trips", () => {
+  const values = {
+    "tx.status": "REVIEWABLE",
+    "tx.page": "1",
+    "tx.pageSize": "20",
+  };
+  assert.deepEqual(sanitizeListDrafts(values, "/transactions"), values);
+  const href = writeListLocation(
+    "http://localhost/en/transactions",
+    "/transactions",
+    "sample-review",
+    values,
+  );
+  assert.deepEqual(
+    readListLocation(new URL(href).search, "/transactions", "sample-review")
+      .values,
+    values,
+  );
+});
+
 test("read preferences never persist financial, credential or record-edit drafts", () => {
   const input = {
     "player.search": "Alex",

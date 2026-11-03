@@ -534,21 +534,57 @@ function requestFilters(target: Where, query: ReadQuery) {
 }
 const requestSource =
   "poker_approvals r LEFT JOIN poker_profiles p ON p.branch_id=r.branch_id AND p.id=r.player_id LEFT JOIN poker_tables t ON t.branch_id=r.branch_id AND t.id=r.table_id LEFT JOIN poker_ledger receipt ON receipt.branch_id=r.branch_id AND receipt.approval_id=r.id";
+/** Match the independent-review policy before counting or paging. The actor and
+ * active day come from the authenticated venue context, never query parameters. */
+function reviewableRequestFilters(
+  target: Where,
+  user: Staff,
+  currentDayId: string | null,
+) {
+  if (!["ADMIN", "MANAGER"].includes(user.role) || !currentDayId) {
+    target.clauses.push("FALSE");
+    return;
+  }
+  target.clauses.push("r.status='PENDING'");
+  condition(target, "r.day_id=?", currentDayId);
+  condition(target, "r.requested_by_id<>?", user.id);
+  condition(
+    target,
+    "(r.approval_level<>'ADMIN' OR ?::text='ADMIN')",
+    user.role,
+  );
+  condition(
+    target,
+    "NOT (r.data->'votes' @> jsonb_build_array(jsonb_build_object('staffId',?::text)))",
+    user.id,
+  );
+  target.clauses.push(
+    "EXISTS(SELECT 1 FROM poker_days review_day WHERE review_day.branch_id=r.branch_id AND review_day.id=r.day_id AND review_day.status='OPEN')",
+  );
+}
 async function requestCounts(
   connection: SqlConnection,
   target: Where,
   user: Staff,
+  currentDayId: string | null,
   source = requestSource,
 ) {
+  const mine = `$${target.values.length + 1}`;
+  const reviewable: Where = {
+    clauses: [],
+    values: [...target.values, user.id],
+  };
+  reviewableRequestFilters(reviewable, user, currentDayId);
   const row = (
     await connection.query<{
       pending: string;
       approved: string;
       rejected: string;
       mine: string;
+      reviewable: string;
     }>(
-      `SELECT count(*) FILTER(WHERE r.status='PENDING')::text AS pending,count(*) FILTER(WHERE r.status='APPROVED')::text AS approved,count(*) FILTER(WHERE r.status='REJECTED')::text AS rejected,count(*) FILTER(WHERE r.requested_by_id=$${target.values.length + 1})::text AS mine FROM ${source} WHERE ${sqlWhere(target)}`,
-      [...target.values, user.id],
+      `SELECT count(*) FILTER(WHERE r.status='PENDING')::text AS pending,count(*) FILTER(WHERE r.status='APPROVED')::text AS approved,count(*) FILTER(WHERE r.status='REJECTED')::text AS rejected,count(*) FILTER(WHERE r.requested_by_id=${mine})::text AS mine,count(*) FILTER(WHERE ${sqlWhere(reviewable)})::text AS reviewable FROM ${source} WHERE ${sqlWhere(target)}`,
+      reviewable.values,
     )
   ).rows[0];
   return {
@@ -556,6 +592,7 @@ async function requestCounts(
     APPROVED: checkedTotal(row.approved),
     REJECTED: checkedTotal(row.rejected),
     MINE: checkedTotal(row.mine),
+    REVIEWABLE: checkedTotal(row.reviewable),
   };
 }
 
@@ -568,14 +605,18 @@ async function searchedRequestPage<T>(
   target: Where,
   user: Staff,
   query: ReadQuery & { page: number; pageSize: number },
+  currentDayId: string | null,
 ) {
-  const selected: Where = { clauses: [], values: [...target.values] };
+  const reviewable: Where = { clauses: [], values: [...target.values] };
+  reviewableRequestFilters(reviewable, user, currentDayId);
+  const selected: Where = { clauses: [], values: [...reviewable.values] };
   const requests = query.resource === "requests";
   if (requests) {
     if (query.id) condition(selected, "id=?", query.id);
-    else if (query.status === "MINE")
+    if (query.status === "REVIEWABLE") selected.clauses.push("reviewable");
+    else if (!query.id && query.status === "MINE")
       condition(selected, "requested_by_id=?", user.id);
-    else if (query.status) {
+    else if (!query.id && query.status) {
       if (!["PENDING", "APPROVED", "REJECTED"].includes(query.status))
         throw new DomainError("Choose a valid request status.");
       condition(selected, "status=?", query.status);
@@ -608,16 +649,18 @@ async function searchedRequestPage<T>(
       approved: string;
       rejected: string;
       mine: string;
+      reviewable: string;
       items: T[];
     }>(
       `WITH matches AS MATERIALIZED (
-        SELECT r.id,r.status,r.requested_by_id,r.order_no,receipt.id AS receipt_id,receipt.order_no AS receipt_order_no${sort ? `,${sort.expression} AS sort_value` : ""}
+        SELECT r.id,r.status,r.requested_by_id,r.order_no,receipt.id AS receipt_id,receipt.order_no AS receipt_order_no,(${sqlWhere(reviewable)}) AS reviewable${sort ? `,${sort.expression} AS sort_value` : ""}
         FROM ${requestSource} WHERE ${sqlWhere(target)}
       ), counts AS (
         SELECT count(*) FILTER(WHERE status='PENDING')::text AS pending,
           count(*) FILTER(WHERE status='APPROVED')::text AS approved,
           count(*) FILTER(WHERE status='REJECTED')::text AS rejected,
-          count(*) FILTER(WHERE requested_by_id=${actor})::text AS mine FROM matches
+          count(*) FILTER(WHERE requested_by_id=${actor})::text AS mine,
+          count(*) FILTER(WHERE reviewable)::text AS reviewable FROM matches
       ), filtered AS MATERIALIZED (
         SELECT ${key} AS id,${order} AS order_no${filteredSort} FROM matches${selected.clauses.length ? ` WHERE ${sqlWhere(selected)}` : ""}
       ), totals AS (SELECT count(*)::text AS total FROM filtered), page_info AS (
@@ -641,6 +684,7 @@ async function searchedRequestPage<T>(
       APPROVED: checkedTotal(row.approved),
       REJECTED: checkedTotal(row.rejected),
       MINE: checkedTotal(row.mine),
+      REVIEWABLE: checkedTotal(row.reviewable),
     },
   };
 }
@@ -784,6 +828,7 @@ async function readPageWithin(
         target,
         user,
         query,
+        metadata.currentDayId,
       );
       if (
         (query.resource === "receipt" ||
@@ -807,13 +852,16 @@ async function readPageWithin(
       connection,
       target,
       user,
+      metadata.currentDayId,
       "poker_approvals r",
     );
     if (query.resource === "requests") {
       if (query.id) condition(target, "r.id=?", query.id);
-      else if (query.status === "MINE")
+      if (query.status === "REVIEWABLE")
+        reviewableRequestFilters(target, user, metadata.currentDayId);
+      else if (!query.id && query.status === "MINE")
         condition(target, "r.requested_by_id=?", user.id);
-      else if (query.status) {
+      else if (!query.id && query.status) {
         if (!["PENDING", "APPROVED", "REJECTED"].includes(query.status))
           throw new DomainError("Choose a valid request status.");
         condition(target, "r.status=?", query.status);

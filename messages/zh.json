@@ -1175,6 +1175,12 @@
     "default_order": "默认顺序",
     "check_in_time": "签到时间",
     "updating_results": "正在更新结果…",
-    "results_unavailable": "暂时无法获取结果"
+    "results_unavailable": "暂时无法获取结果",
+    "needs_my_review": "待我审核",
+    "finish_closing": "继续日结",
+    "closing_in_progress": "日结准备中",
+    "stop_closing": "退出日结",
+    "preparing_closing_checklist": "正在准备日结清单…",
+    "no_requests_need_your_review_in_this_view": "当前视图中没有需要您审核的申请。"
   }
 }

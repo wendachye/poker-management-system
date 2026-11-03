@@ -1175,6 +1175,12 @@
     "default_order": "Default order",
     "check_in_time": "Check-in time",
     "updating_results": "Updating results…",
-    "results_unavailable": "Results unavailable"
+    "results_unavailable": "Results unavailable",
+    "needs_my_review": "Needs my review",
+    "finish_closing": "Finish closing",
+    "closing_in_progress": "Closing in progress",
+    "stop_closing": "Stop closing",
+    "preparing_closing_checklist": "Preparing closing checklist…",
+    "no_requests_need_your_review_in_this_view": "No requests need your review in this view."
   }
 }

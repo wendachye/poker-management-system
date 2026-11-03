@@ -1,6 +1,8 @@
 "use client";
 
 import { createContext, useContext } from "react";
+import { useAuth } from "@/contexts/auth-context";
+import { ClosingTaskProvider } from "./components/closing-task";
 
 import {
   type PokerManagementState,
@@ -16,10 +18,15 @@ export function PokerManagementProvider({
   children: React.ReactNode;
 }) {
   const state = usePokerManagementState();
+  const auth = useAuth();
 
   return (
     <PokerManagementContext.Provider value={state}>
-      {children}
+      <ClosingTaskProvider
+        scope={auth.error || auth.loading ? null : state.closingScope}
+      >
+        {children}
+      </ClosingTaskProvider>
     </PokerManagementContext.Provider>
   );
 }

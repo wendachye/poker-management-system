@@ -29,6 +29,7 @@ import { createBackgroundRefresh } from "@/lib/background-refresh";
 import { approvalDecisionMessage } from "@/lib/approval-decision-message";
 import { prototypeEnabled } from "@/prototype/config";
 import { matchesOperationalAccess } from "@/lib/operational-access";
+import { closingTaskScope } from "@/lib/closing-task";
 import type { Command, SeatSwapParticipant } from "@/domain/commands";
 import type { StaffCommand } from "@/domain/staff";
 import type { LocationCommand } from "@/domain/locations";
@@ -676,6 +677,9 @@ export function usePokerManagementState() {
       );
     },
     snapshot: listDrafts.ready ? snapshot : null,
+    // Route-specific list restoration can temporarily hide rows without changing
+    // the authenticated venue/day that owns the in-progress closing task.
+    closingScope: closingTaskScope(snapshot, user),
     store,
     day,
     user: snapshot?.user,

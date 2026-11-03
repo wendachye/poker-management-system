@@ -26,6 +26,7 @@ import {
 import { configuredStore } from "./helpers/store";
 import { replaceStore } from "../src/server/storage";
 import { readCsv, readPage } from "../src/server/queries";
+import { exerciseReviewableRequests } from "./helpers/reviewable-requests";
 import { csvExportBusyDetails } from "../src/server/csv-export-work";
 import {
   claimLoginAttempt,
@@ -400,6 +401,10 @@ test("PostgreSQL integration target guard rejects operational and overridden des
     "postgresql://[::1]/poker_test_ci",
   ])
     assert.equal(testDatabaseUrl(value).connectionString, value);
+});
+
+test("PostgreSQL Needs my review filters eligible requests before search, count, sort and pagination", async () => {
+  await exerciseReviewableRequests(firstDb);
 });
 
 test("two independent requests with the same operation identifier commit one mutation", async () => {

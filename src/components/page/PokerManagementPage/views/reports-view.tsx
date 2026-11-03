@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import {
   Download,
   CalendarPlus,
@@ -28,10 +28,15 @@ import {
 import { venueSettings } from "@/domain/settings";
 import { businessDayDates } from "@/lib/business-day-dates";
 import { closingCashDraft } from "@/lib/closing-cash-draft";
+import {
+  matchesClosingTaskScope,
+  type ClosingTaskScope,
+} from "@/lib/closing-task";
 import { displayName } from "@/lib/display-name";
 import { matchesListSearch } from "@/lib/list-search";
 import { reportDateInput, reportSelection } from "@/lib/report-selection";
 import { usePokerManagementContext } from "../PokerManagementProvider";
+import { useClosingTask } from "../components/closing-task";
 import { money, parseMoney, toCsv } from "../utils";
 import {
   ActionForm,
@@ -57,6 +62,9 @@ export function ReportsView() {
   const [opening, setOpening] = useState(false),
     [closing, setClosing] = useState(false);
   const [closingDayId, setClosingDayId] = useState("");
+  const closingTask = useClosingTask();
+  const { requested, acceptResume, dismissResume } = closingTask;
+  const readClosingContext = s.read;
   const csvDownload = useReadCsvDownload();
   const browsing = useListBrowsing("report", "report", {
     page: "playerPage",
@@ -161,6 +169,52 @@ export function ReportsView() {
   const { countedCash: counted, variance } = reconciliation;
   const closingDay = s.store.days.find((entry) => entry.id === closingDayId);
   const closingDayMatches = closingDayId === s.store.currentDayId;
+  function openClosing(dayId: string) {
+    s.setError("");
+    set("count", "");
+    set("reason", "");
+    set("date", "");
+    set("opening", "");
+    setClosingDayId(dayId);
+    setClosing(true);
+  }
+  const openResumedClosing = useEffectEvent((scope: ClosingTaskScope) => {
+    set("mode", "day");
+    selectDay(scope.dayId);
+    openClosing(scope.dayId);
+  });
+  const resumeFailed = useEffectEvent((message: string) => s.setError(message));
+  useEffect(() => {
+    if (!requested) return;
+    const controller = new AbortController();
+    void readClosingContext(
+      {
+        resource: "report",
+        dayId: requested.scope.dayId,
+        page: 0,
+        pageSize: 20,
+      },
+      controller.signal,
+    )
+      .then((page) => {
+        if (controller.signal.aborted) return;
+        if (acceptResume(requested, page.context)) {
+          openResumedClosing(requested.scope);
+        } else if (!matchesClosingTaskScope(requested.scope, page.context)) {
+          resumeFailed(
+            "The active business day changed. Reopen the closing form and review its totals.",
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        dismissResume(requested);
+        resumeFailed(
+          error instanceof Error ? error.message : "Cannot load records.",
+        );
+      });
+    return () => controller.abort();
+  }, [requested, readClosingContext, acceptResume, dismissResume]);
   function varianceLabel(value: number) {
     return value < 0
       ? "Cash short by"
@@ -272,13 +326,8 @@ export function ReportsView() {
             ) : (
               <Button
                 onClick={() => {
-                  s.setError("");
-                  set("count", "");
-                  set("reason", "");
-                  set("date", "");
-                  set("opening", "");
-                  setClosingDayId(s.day?.id ?? "");
-                  setClosing(true);
+                  closingTask.begin();
+                  openClosing(s.day?.id ?? "");
                 }}
               >
                 <LockKeyhole />
@@ -287,6 +336,13 @@ export function ReportsView() {
             ))}
         </div>
       </div>
+      {requested && (
+        <Alert role="status">
+          <AlertDescription>
+            {t("Preparing closing checklist…")}
+          </AlertDescription>
+        </Alert>
+      )}
       <Tabs value={val("mode", "day")} onValueChange={(v) => set("mode", v)}>
         <TabsList
           variant="line"
@@ -679,7 +735,10 @@ export function ReportsView() {
       </Modal>
       <Modal
         open={closing}
-        onOpenChange={setClosing}
+        onOpenChange={(open) => {
+          setClosing(open);
+          if (!open) closingTask.cancel();
+        }}
         title="Close business day"
         description={
           (closingDay?.date ?? "") +
@@ -799,6 +858,7 @@ export function ReportsView() {
             }
             onSuccess={() => {
               setClosing(false);
+              closingTask.cancel();
               selectDay("");
               set("date", "");
               set("opening", "");

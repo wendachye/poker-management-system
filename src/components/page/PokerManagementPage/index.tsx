@@ -17,6 +17,7 @@ import { venueSettings } from "@/domain/settings";
 import { displayName } from "@/lib/display-name";
 import { Link } from "@/i18n/navigation";
 import { PageHeader } from "./components/page-header";
+import { FinishClosingShortcut } from "./components/finish-closing-shortcut";
 import {
   RequestRecoveryAlert,
   RequestRecoveryResult,
@@ -182,6 +183,9 @@ export function PokerManagementPage({
         </div>
       ) : !state.snapshot ? null : (
         <>
+          {(module === "players" || module === "transactions") && (
+            <FinishClosingShortcut />
+          )}
           {needsSetup && module !== "settings" && (
             <Alert>
               <AlertTitle>{t("Venue setup required")}</AlertTitle>

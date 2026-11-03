@@ -760,6 +760,7 @@ test("indexed paginated reads preserve complete money, search, context and expor
           PENDING: 0,
           REJECTED: 0,
           MINE: Number(approval.requestedById === actors.admin.id),
+          REVIEWABLE: 0,
         };
         for (const status of ["APPROVED", "PENDING", "MINE"] as const) {
           const found = await readPage(db, token, {
@@ -825,6 +826,7 @@ test("indexed paginated reads preserve complete money, search, context and expor
           MINE: store.approvals.filter(
             (row) => row.requestedById === actors.admin.id,
           ).length,
+          REVIEWABLE: approvalNotifications(store, actors.admin).reviewable,
         };
         assert.ok(expectedCounts.PENDING > 0);
         assert.ok(expectedCounts.REJECTED > 0);

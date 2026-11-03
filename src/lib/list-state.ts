@@ -103,7 +103,7 @@ const enumValues: Record<string, readonly string[]> = {
   "player.status": ["", "ACTIVE", "OUT"],
   "player.type": ["", "CASH", "CREDIT"],
   "player.tag": ["", "VIP", "Risk", "Banned"],
-  "tx.status": ["PENDING", "APPROVED", "REJECTED", "MINE"],
+  "tx.status": ["PENDING", "APPROVED", "REJECTED", "MINE", "REVIEWABLE"],
   "tx.filter": [
     "",
     "Buy-in",

@@ -1,12 +1,15 @@
-import type { ApprovalRequest, Store } from "./model";
+import type { ApprovalRequest, Staff, Store } from "./model";
+import { canApprove } from "./operations";
 import { displayName } from "../lib/display-name";
 import { matchesListSearch } from "../lib/list-search";
-export type RequestView = "PENDING" | "APPROVED" | "REJECTED" | "MINE";
+export type RequestView =
+  "PENDING" | "APPROVED" | "REJECTED" | "MINE" | "REVIEWABLE";
 export function filterRequests(
   store: Store,
   filters: {
     view: RequestView;
     userId?: string;
+    user?: Staff;
     dayId?: string;
     type?: string;
     query?: string;
@@ -20,9 +23,16 @@ export function filterRequests(
   return store.approvals.filter((r) => {
     const player = players.get(r.playerId ?? "");
     return (
-      (filters.view === "MINE"
-        ? r.requestedById === filters.userId
-        : r.status === filters.view) &&
+      (filters.view === "REVIEWABLE"
+        ? !!filters.user &&
+          r.dayId === store.currentDayId &&
+          store.days.some(
+            (day) => day.id === store.currentDayId && day.status === "OPEN",
+          ) &&
+          canApprove(filters.user, r)
+        : filters.view === "MINE"
+          ? r.requestedById === filters.userId
+          : r.status === filters.view) &&
       (!filters.dayId || r.dayId === filters.dayId) &&
       (!filters.type || r.type === filters.type) &&
       matchesListSearch(

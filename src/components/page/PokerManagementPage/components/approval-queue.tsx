@@ -50,6 +50,7 @@ export function ApprovalQueue({
   pagination,
   loading = false,
   sorting,
+  emptyMessage,
 }: {
   requests?: ApprovalRequest[];
   compact?: boolean;
@@ -65,6 +66,7 @@ export function ApprovalQueue({
   };
   loading?: boolean;
   sorting?: ListSorting;
+  emptyMessage?: string;
 }) {
   const s = usePokerManagementContext(),
     t = useText(),
@@ -421,18 +423,21 @@ export function ApprovalQueue({
       {!entries.length && !loading && (
         <EmptyState
           title={
-            emptyPendingQueue
+            emptyMessage ??
+            (emptyPendingQueue
               ? "No pending approvals."
               : requests && s.store.approvals.length
                 ? "No requests match these filters."
                 : requests
                   ? "No requests yet"
-                  : "No pending approvals."
+                  : "No pending approvals.")
           }
           description={
-            !emptyPendingQueue && requests && s.store.approvals.length
-              ? "Try another search or clear the filters."
-              : "Requests keep their status and review history here."
+            emptyMessage
+              ? undefined
+              : !emptyPendingQueue && requests && s.store.approvals.length
+                ? "Try another search or clear the filters."
+                : "Requests keep their status and review history here."
           }
         />
       )}

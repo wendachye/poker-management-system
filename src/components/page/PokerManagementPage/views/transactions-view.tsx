@@ -2,7 +2,8 @@
 import { ApprovalQueue } from "../components/approval-queue";
 import { filterRequests, type RequestView } from "@/domain/request-filters";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocale } from "next-intl";
 import { ChevronDown, Plus, ReceiptText, RotateCcw } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -55,17 +56,53 @@ export function TransactionsView() {
   const s = usePokerManagementContext(),
     t = useText(),
     timestamp = useTimestamp();
+  const locale = useLocale();
+  const tabStrip = useRef<HTMLDivElement>(null);
   const [receipt, setReceipt] = useState<Transaction | null>(null),
     [reversing, setReversing] = useState<Transaction | null>(null);
   const val = (key: string, fallback = "") => s.draft("tx." + key, fallback),
     set = (key: string, v: string) => s.setDraft("tx." + key, v);
-  const status = val("status", "PENDING") as RequestView;
+  const reviewer = ["ADMIN", "MANAGER"].includes(s.user?.role ?? "");
+  const savedStatus = val("status", "PENDING") as RequestView;
+  const status =
+    savedStatus === "REVIEWABLE" && !reviewer ? "PENDING" : savedStatus;
+  const requestViews: { value: RequestView; label: string }[] = [
+    { value: "PENDING", label: "Pending" },
+    ...(reviewer
+      ? [{ value: "REVIEWABLE" as const, label: "Needs my review" }]
+      : []),
+    { value: "APPROVED", label: "Approved" },
+    { value: "REJECTED", label: "Rejected" },
+    { value: "MINE", label: "My requests" },
+  ];
+  useEffect(() => {
+    const strip = tabStrip.current;
+    if (!strip) return;
+    const revealSelectedTab = () => {
+      const selected = strip.querySelector<HTMLElement>(
+        '[data-state="active"]',
+      );
+      if (!selected) return;
+      const bounds = strip.getBoundingClientRect();
+      const selectedBounds = selected.getBoundingClientRect();
+      // Scroll only this strip, without moving the page or keyboard focus.
+      if (selectedBounds.left < bounds.left)
+        strip.scrollLeft += selectedBounds.left - bounds.left;
+      else if (selectedBounds.right > bounds.right)
+        strip.scrollLeft += selectedBounds.right - bounds.right;
+    };
+    revealSelectedTab();
+    const observer = new ResizeObserver(revealSelectedTab);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [status, reviewer, locale]);
   const browsing = useListBrowsing(
     status === "APPROVED" ? "transactions" : "requests",
     "tx",
   );
   const requestFilters = {
     userId: s.user?.id,
+    user: s.user,
     dayId: val("day", s.store.currentDayId ?? ""),
     type: val("filter"),
     query: val("search"),
@@ -454,20 +491,16 @@ export function TransactionsView() {
         >
           <div className="min-w-0 px-3 pb-1 sm:px-4">
             <TabsList
+              ref={tabStrip}
               variant="line"
-              className="grid !h-auto w-full grid-cols-4 gap-1 p-0"
+              className="flex !h-auto w-full justify-start gap-1 overflow-x-auto overflow-y-hidden p-0 pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               aria-label={t("Request status")}
             >
-              {[
-                ["PENDING", "Pending"],
-                ["APPROVED", "Approved"],
-                ["REJECTED", "Rejected"],
-                ["MINE", "My requests"],
-              ].map(([value, label]) => (
+              {requestViews.map(({ value, label }) => (
                 <TabsTrigger
                   key={value}
                   value={value}
-                  className="h-10 min-w-0 flex-col gap-0.5 px-1 text-[11px] leading-4 sm:h-9 sm:flex-row sm:gap-1.5 sm:px-3 sm:text-sm"
+                  className="h-10 min-w-max flex-col gap-0.5 px-2 text-[11px] leading-4 sm:h-9 sm:flex-row sm:gap-1.5 sm:px-3 sm:text-sm"
                 >
                   <span>{t(label)}</span>
                   {(!remote.live || resultsReady) && (
@@ -635,36 +668,43 @@ export function TransactionsView() {
               />
             </div>
           </TabsContent>
-          {["PENDING", "REJECTED", "MINE"].map((view) => (
-            <TabsContent
-              key={view}
-              value={view}
-              className="px-3 pb-3 sm:px-4 sm:pb-4"
-            >
-              <ApprovalQueue
-                key={view + JSON.stringify(requestFilters)}
-                requests={
-                  remote.live
-                    ? requests
-                    : requests.slice(
-                        page * browsing.pageSize,
-                        (page + 1) * browsing.pageSize,
-                      )
-                }
-                pendingView={view === "PENDING"}
-                embedded
-                loading={!resultsReady}
-                sorting={browsing.sorting}
-                pagination={{
-                  page,
-                  total: resultsReady ? total : null,
-                  loading: remote.loading && !resultsReady,
-                  setPage: (p: number) => set("page", String(p)),
-                  ...browsing.pager,
-                }}
-              />
-            </TabsContent>
-          ))}
+          {requestViews
+            .filter(({ value }) => value !== "APPROVED")
+            .map(({ value: view }) => (
+              <TabsContent
+                key={view}
+                value={view}
+                className="px-3 pb-3 sm:px-4 sm:pb-4"
+              >
+                <ApprovalQueue
+                  key={view + JSON.stringify(requestFilters)}
+                  requests={
+                    remote.live
+                      ? requests
+                      : requests.slice(
+                          page * browsing.pageSize,
+                          (page + 1) * browsing.pageSize,
+                        )
+                  }
+                  pendingView={view === "PENDING" || view === "REVIEWABLE"}
+                  emptyMessage={
+                    view === "REVIEWABLE"
+                      ? "No requests need your review in this view."
+                      : undefined
+                  }
+                  embedded
+                  loading={!resultsReady}
+                  sorting={browsing.sorting}
+                  pagination={{
+                    page,
+                    total: resultsReady ? total : null,
+                    loading: remote.loading && !resultsReady,
+                    setPage: (p: number) => set("page", String(p)),
+                    ...browsing.pager,
+                  }}
+                />
+              </TabsContent>
+            ))}
         </Tabs>
       </Card>
       <Modal

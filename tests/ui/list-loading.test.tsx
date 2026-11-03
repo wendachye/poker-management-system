@@ -36,6 +36,12 @@ import {
   totalsForDay,
 } from "../../src/domain/selectors";
 import { compareReports } from "../../src/domain/reporting";
+import {
+  filterRequests,
+  type RequestView,
+} from "../../src/domain/request-filters";
+import { ClosingTaskProvider } from "../../src/components/page/PokerManagementPage/components/closing-task";
+import { closingTaskScope } from "../../src/lib/closing-task";
 import { readPageReceipt } from "../../src/lib/read-page";
 import { configuredStore } from "../helpers/store";
 
@@ -124,9 +130,14 @@ function fixture(options: { holdSort?: boolean } = {}) {
           : query.resource === "transactions"
             ? store.transactions
             : query.resource === "requests"
-              ? store.approvals.filter(
-                  (request) => request.status === query.status,
-                )
+              ? filterRequests(store, {
+                  view: (query.status ?? "PENDING") as RequestView,
+                  user: snapshot.user,
+                  userId: snapshot.user.id,
+                  query: query.query,
+                  dayId: query.dayId,
+                  type: query.type,
+                })
               : query.resource === "audit"
                 ? store.auditLogs
                 : playersForDay(store, day.id);
@@ -147,6 +158,7 @@ function fixture(options: { holdSort?: boolean } = {}) {
             APPROVED: 0,
             REJECTED: 0,
             MINE: 0,
+            REVIEWABLE: 0,
           }
         : {
             ALL: rows.length,
@@ -160,6 +172,13 @@ function fixture(options: { holdSort?: boolean } = {}) {
             APPROVED: store.transactions.length,
             REJECTED: 0,
             MINE: 0,
+            REVIEWABLE: filterRequests(store, {
+              view: "REVIEWABLE",
+              user: snapshot.user,
+              query: query.query,
+              dayId: query.dayId,
+              type: query.type,
+            }).length,
           },
       ...(query.resource === "audit"
         ? {
@@ -275,7 +294,11 @@ function Boundary({
       messages={{}}
     >
       <PokerManagementContext.Provider value={state}>
-        {children}
+        <ClosingTaskProvider
+          scope={closingTaskScope(data.snapshot, data.snapshot.user)}
+        >
+          {children}
+        </ClosingTaskProvider>
       </PokerManagementContext.Provider>
     </NextIntlClientProvider>
   );
@@ -286,6 +309,201 @@ beforeEach(() => {
   window.history.replaceState(null, "", "/en/reports");
 });
 afterEach(cleanup);
+
+test("reviewers can open and restore Needs my review without changing the Pending default", async () => {
+  const data = fixture();
+  window.history.replaceState(null, "", "/en/transactions");
+  const view = render(
+    <Boundary data={data} route="/transactions">
+      <TransactionsView />
+    </Boundary>,
+  );
+  const pending = await screen.findByRole("tab", { name: /^Pending/ });
+  assert.equal(pending.getAttribute("aria-selected"), "true");
+  await userEvent
+    .setup()
+    .click(screen.getByRole("tab", { name: /^Needs my review/ }));
+  await waitFor(() => {
+    assert.equal(data.lastRead?.status, "REVIEWABLE");
+    assert.equal(data.lastRead?.page, 0);
+  });
+  assert.equal(
+    screen
+      .getByRole("tab", { name: /^Needs my review/ })
+      .getAttribute("aria-selected"),
+    "true",
+  );
+  view.unmount();
+  render(
+    <Boundary data={data} route="/transactions">
+      <TransactionsView />
+    </Boundary>,
+  );
+  await waitFor(() =>
+    assert.equal(
+      screen
+        .getByRole("tab", { name: /^Needs my review/ })
+        .getAttribute("aria-selected"),
+      "true",
+    ),
+  );
+});
+
+for (const role of ["CASHIER", "DEALER"] as const)
+  test(`${role} cannot activate the reviewer-only queue from a saved URL`, async () => {
+    const data = fixture();
+    data.snapshot.user = { ...data.snapshot.user, role };
+    data.snapshot.branch.role = role;
+    window.history.replaceState(
+      null,
+      "",
+      `/en/transactions?listVenue=${data.snapshot.branch.id}&tx.status=REVIEWABLE`,
+    );
+    render(
+      <Boundary data={data} route="/transactions">
+        <TransactionsView />
+      </Boundary>,
+    );
+    await waitFor(() => assert.equal(data.lastRead?.status, "PENDING"));
+    assert.equal(screen.queryByRole("tab", { name: /^Needs my review/ }), null);
+    assert.equal(
+      screen
+        .getByRole("tab", { name: /^Pending/ })
+        .getAttribute("aria-selected"),
+      "true",
+    );
+  });
+
+test("an empty reviewer view does not imply the global Pending queue is empty", async () => {
+  const data = fixture();
+  const ownPending = data.snapshot.store.approvals.find(
+    (request) => request.status === "PENDING",
+  )!;
+  ownPending.requestedById = data.snapshot.user.id;
+  window.history.replaceState(
+    null,
+    "",
+    `/en/transactions?listVenue=${data.snapshot.branch.id}&tx.status=REVIEWABLE`,
+  );
+  render(
+    <Boundary data={data} route="/transactions">
+      <TransactionsView />
+    </Boundary>,
+  );
+  await screen.findByText("No requests need your review in this view.");
+  assert.equal(screen.queryByText("No pending approvals."), null);
+  assert.equal(
+    screen.queryByText("Try another search or clear the filters."),
+    null,
+  );
+  assert.ok(screen.getByRole("combobox", { name: /Rows per page/ }));
+  await userEvent.setup().click(screen.getByRole("tab", { name: /^Pending/ }));
+  await waitFor(() =>
+    assert.equal(
+      screen.queryByText("No requests need your review in this view."),
+      null,
+    ),
+  );
+  assert.ok(
+    screen.getByRole("tab", { name: /^Pending/ }).textContent?.includes("1"),
+  );
+});
+
+test("reviewer empty copy waits for a confirmed read and survives filtered results without replacing Retry", async () => {
+  const data = fixture();
+  const user = userEvent.setup();
+  window.history.replaceState(
+    null,
+    "",
+    `/en/transactions?listVenue=${data.snapshot.branch.id}&tx.status=REVIEWABLE`,
+  );
+  render(
+    <Boundary data={data} route="/transactions">
+      <TransactionsView />
+    </Boundary>,
+  );
+  const input = await screen.findByRole("searchbox", {
+    name: "Search transactions",
+  });
+  await user.type(input, "unmatched");
+  assert.equal(
+    screen.queryByText("No requests need your review in this view."),
+    null,
+  );
+  await data.failRead();
+  await screen.findByText("Fixture read unavailable.");
+  assert.equal(
+    screen.queryByText("No requests need your review in this view."),
+    null,
+  );
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  assert.equal(
+    screen.queryByText("No requests need your review in this view."),
+    null,
+  );
+  await data.respondEmpty();
+  await screen.findByText("No requests need your review in this view.");
+  assert.equal(screen.queryByText("No pending approvals."), null);
+  assert.equal(screen.queryByText("No requests match these filters."), null);
+  assert.ok(screen.getByRole("combobox", { name: /Rows per page/ }));
+});
+
+test("the ordinary Pending queue keeps its original globally empty copy", async () => {
+  const data = fixture();
+  data.snapshot.store.approvals = data.snapshot.store.approvals.filter(
+    (request) => request.status !== "PENDING",
+  );
+  window.history.replaceState(null, "", "/en/transactions");
+  render(
+    <Boundary data={data} route="/transactions">
+      <TransactionsView />
+    </Boundary>,
+  );
+  await screen.findByText("No pending approvals.");
+  assert.equal(
+    screen.queryByText("No requests need your review in this view."),
+    null,
+  );
+});
+
+test("a restored last tab scrolls only its strip and leaves page and focus alone", async () => {
+  const data = fixture();
+  window.history.replaceState(
+    null,
+    "",
+    `/en/transactions?listVenue=${data.snapshot.branch.id}&tx.status=MINE`,
+  );
+  const measure = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this.getAttribute("role") === "tablist")
+      return DOMRect.fromRect({ x: 20, y: 400, width: 280, height: 40 });
+    if (
+      this.getAttribute("role") === "tab" &&
+      this.textContent?.includes("My requests")
+    )
+      return DOMRect.fromRect({ x: 360, y: 400, width: 90, height: 40 });
+    return measure.call(this);
+  };
+  const focus = document.activeElement;
+  const pageScroll = document.documentElement.scrollTop;
+  try {
+    render(
+      <Boundary data={data} route="/transactions">
+        <TransactionsView />
+      </Boundary>,
+    );
+    await waitFor(() =>
+      assert.equal(
+        screen.getByRole("tablist", { name: "Request status" }).scrollLeft,
+        150,
+      ),
+    );
+    assert.equal(document.activeElement, focus);
+    assert.equal(document.documentElement.scrollTop, pageScroll);
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = measure;
+  }
+});
 
 for (const scenario of [
   {
