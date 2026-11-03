@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table";
 import { canApprove } from "@/domain/operations";
 import { approvalReviewProgress } from "@/domain/approval-review-progress";
+import { approvalReviewStatus } from "@/domain/approval-notifications";
 import { ledgerImpact } from "@/domain/ledger-impact";
 import type { ApprovalRequest, Transaction } from "@/domain/model";
 import { usePokerManagementContext } from "../PokerManagementProvider";
@@ -646,9 +647,7 @@ export function ApprovalQueue({
                   {t(
                     s.locked || request.dayId !== s.store.currentDayId
                       ? "Only requests for the current open business day can be reviewed."
-                      : request.requestedById === s.user?.id
-                        ? "Awaiting independent review"
-                        : "Awaiting authorized reviewer",
+                      : approvalReviewStatus(s.store, request, s.user),
                   )}
                 </p>
               )

@@ -10,7 +10,8 @@ export type ApprovalNotificationStatus =
   | "Different business day"
   | "Day closed";
 
-function reviewStatus(
+/** Presentation for pending requests; decisions remain enforced by canApprove. */
+export function approvalReviewStatus(
   store: Store,
   request: ApprovalRequest,
   user?: Staff,
@@ -42,7 +43,7 @@ export function approvalNotifications(store: Store, user?: Staff) {
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
   const entries = pending.map((request) => ({
     request,
-    status: reviewStatus(store, request, user),
+    status: approvalReviewStatus(store, request, user),
     subject: [
       players.get(request.playerId ?? ""),
       tables.get(request.tableId ?? ""),

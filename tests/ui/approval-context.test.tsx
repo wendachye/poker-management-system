@@ -232,6 +232,94 @@ test("rejection still requires a reason and focuses the invalid field without su
   assert.ok(within(dialog).getByText(data.request.riskReason));
 });
 
+for (const scenario of [
+  {
+    name: "a reviewer who already approved a dual-review request",
+    message: "Already reviewed",
+    prepare(data: ReturnType<typeof fixture>) {
+      data.request.approvalLevel = "DUAL";
+      data.request.votes = [
+        {
+          staffId: data.state.user!.id,
+          username: data.state.user!.username,
+          role: data.state.user!.role,
+          time: "2026-11-04T02:01:00Z",
+        },
+      ];
+    },
+  },
+  {
+    name: "a manager viewing an admin-only request",
+    message: "Admin review required",
+    prepare(data: ReturnType<typeof fixture>) {
+      const manager: Staff = {
+        ...data.state.user!,
+        id: "context-manager",
+        username: "Context manager",
+        role: "MANAGER",
+      };
+      data.state.user = manager;
+      data.state.snapshot!.user = manager;
+      data.state.snapshot!.branch.role = manager.role;
+    },
+  },
+  {
+    name: "the staff member who submitted the request",
+    message: "Your request",
+    prepare(data: ReturnType<typeof fixture>) {
+      data.request.requestedById = data.state.user!.id;
+      data.request.requestedBy = data.state.user!.username;
+    },
+  },
+  {
+    name: "a request from a different business day",
+    message: "Only requests for the current open business day can be reviewed.",
+    prepare(data: ReturnType<typeof fixture>) {
+      data.state.store.currentDayId = "another-context-day";
+    },
+  },
+  {
+    name: "a request after its business day closes",
+    message: "Only requests for the current open business day can be reviewed.",
+    prepare(data: ReturnType<typeof fixture>) {
+      data.state.store.days[0].status = "CLOSED";
+      data.state.locked = true;
+    },
+  },
+]) {
+  test(`request details explain why ${scenario.name} cannot decide`, async () => {
+    const data = fixture();
+    scenario.prepare(data);
+    const user = userEvent.setup();
+    render(
+      <Boundary data={data}>
+        <ApprovalQueue embedded requests={[data.request]} />
+      </Boundary>,
+    );
+    await user.click(
+      within(screen.getByRole("list", { name: "Approval queue" })).getByRole(
+        "button",
+        { name: /^View details/ },
+      ),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Request details",
+    });
+    assert.ok(within(dialog).getByText(scenario.message));
+    assert.equal(
+      within(dialog).queryByRole("tablist", { name: "Review decision" }),
+      null,
+    );
+    assert.equal(
+      within(dialog).queryByRole("button", {
+        name: /^(Approve request|Record approval|Reject request)$/,
+      }),
+      null,
+    );
+    assert.deepEqual(data.submissions, []);
+  });
+}
+
 test("ordinary forms keep input autofocus and required validation when section captions are visually hidden", async () => {
   const data = fixture();
   function Example() {
