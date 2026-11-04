@@ -2,6 +2,7 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { useState, type ReactNode } from "react";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -147,6 +148,162 @@ function Boundary({
     </NextIntlClientProvider>
   );
 }
+
+test("opening a request marks only its action busy and waits for context before showing review", async () => {
+  const data = fixture();
+  const other = { ...data.request, id: "other-context-request" };
+  data.state.store.approvals.push(other);
+  const reads: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  data.state.focusRead = async (query) => {
+    reads.push(query.id!);
+    await gate;
+    return undefined;
+  };
+  const user = userEvent.setup();
+  render(
+    <Boundary data={data}>
+      <ApprovalQueue embedded requests={[data.request, other]} />
+    </Boundary>,
+  );
+  const queue = within(screen.getByRole("list", { name: "Approval queue" }));
+  const [selected, otherAction] = queue.getAllByRole("button", {
+    name: /^Review request/,
+  });
+  await user.dblClick(selected);
+  assert.equal(selected.getAttribute("aria-busy"), "true");
+  assert.ok(selected.querySelector('svg[aria-hidden="true"].animate-spin'));
+  assert.equal(otherAction.getAttribute("aria-busy"), null);
+  for (const action of screen.getAllByRole("button", {
+    name: /^Review request/,
+  }))
+    assert.equal((action as HTMLButtonElement).disabled, true);
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(reads, [data.request.id]);
+  assert.deepEqual(data.submissions, []);
+  await act(async () => release());
+  assert.ok(await screen.findByRole("dialog", { name: "Review request" }));
+  assert.equal(selected.getAttribute("aria-busy"), null);
+  assert.equal((otherAction as HTMLButtonElement).disabled, false);
+  assert.deepEqual(data.submissions, []);
+});
+
+test("a failed request lookup clears loading and allows a deliberate retry", async () => {
+  const data = fixture();
+  const errors: string[] = [];
+  data.state.setError = (message) =>
+    errors.push(typeof message === "function" ? message("") : message);
+  let fail!: (reason: Error) => void;
+  const gate = new Promise<void>((_resolve, reject) => {
+    fail = reject;
+  });
+  data.state.focusRead = async () => {
+    await gate;
+    return undefined;
+  };
+  const user = userEvent.setup();
+  render(
+    <Boundary data={data}>
+      <ApprovalQueue embedded requests={[data.request]} />
+    </Boundary>,
+  );
+  const action = within(
+    screen.getByRole("list", { name: "Approval queue" }),
+  ).getByRole("button", { name: /^Review request/ });
+  await user.click(action);
+  assert.equal(action.getAttribute("aria-busy"), "true");
+  await act(async () =>
+    fail(new Error("Fictional request lookup unavailable")),
+  );
+  assert.equal(action.getAttribute("aria-busy"), null);
+  assert.equal((action as HTMLButtonElement).disabled, false);
+  assert.ok(errors.includes("Fictional request lookup unavailable"));
+  assert.equal(screen.queryByRole("dialog"), null);
+  assert.deepEqual(data.submissions, []);
+  data.state.focusRead = async () => undefined;
+  await user.click(action);
+  assert.ok(await screen.findByRole("dialog", { name: "Review request" }));
+  assert.deepEqual(data.submissions, []);
+});
+
+test("unmounting cancels a pending request lookup and its late result cannot reopen review", async () => {
+  const data = fixture();
+  const errors: string[] = [];
+  data.state.setError = (message) =>
+    errors.push(typeof message === "function" ? message("") : message);
+  let pendingSignal: AbortSignal | undefined;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  data.state.focusRead = async (_query, signal) => {
+    pendingSignal = signal;
+    await gate;
+    return undefined;
+  };
+  const user = userEvent.setup();
+  const view = render(
+    <Boundary data={data}>
+      <ApprovalQueue embedded requests={[data.request]} />
+    </Boundary>,
+  );
+  await user.click(
+    within(screen.getByRole("list", { name: "Approval queue" })).getByRole(
+      "button",
+      { name: /^Review request/ },
+    ),
+  );
+  assert.equal(pendingSignal?.aborted, false);
+  view.unmount();
+  assert.equal(pendingSignal?.aborted, true);
+  errors.length = 0;
+  render(
+    <Boundary data={data}>
+      <ApprovalQueue embedded requests={[data.request]} />
+    </Boundary>,
+  );
+  await act(async () => release());
+  assert.equal(screen.queryByRole("dialog"), null);
+  const action = within(
+    screen.getByRole("list", { name: "Approval queue" }),
+  ).getByRole("button", { name: /^Review request/ });
+  assert.equal(action.getAttribute("aria-busy"), null);
+  assert.equal((action as HTMLButtonElement).disabled, false);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(data.submissions, []);
+});
+
+test("leaving an opened review releases its completed focused read", async () => {
+  const data = fixture();
+  let focusedSignal: AbortSignal | undefined;
+  let released = 0;
+  data.state.focusRead = async (_query, signal) => {
+    focusedSignal = signal;
+    signal?.addEventListener("abort", () => released++, { once: true });
+    return undefined;
+  };
+  const user = userEvent.setup();
+  const view = render(
+    <Boundary data={data}>
+      <ApprovalQueue embedded requests={[data.request]} />
+    </Boundary>,
+  );
+  await user.click(
+    within(screen.getByRole("list", { name: "Approval queue" })).getByRole(
+      "button",
+      { name: /^Review request/ },
+    ),
+  );
+  assert.ok(await screen.findByRole("dialog", { name: "Review request" }));
+  assert.equal(focusedSignal?.aborted, false);
+  view.unmount();
+  assert.equal(focusedSignal?.aborted, true);
+  assert.equal(released, 1);
+  assert.deepEqual(data.submissions, []);
+});
 
 test("approval review opens at its heading, preserves financial context and returns focus on Escape", async () => {
   const data = fixture();

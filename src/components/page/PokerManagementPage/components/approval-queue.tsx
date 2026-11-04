@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ReceiptText } from "lucide-react";
+import { ChevronDown, LoaderCircle, ReceiptText } from "lucide-react";
 import { displayName } from "@/lib/display-name";
 import { Button } from "@/components/ui/button";
 import { Badge as UiBadge } from "@/components/ui/badge";
@@ -77,10 +77,18 @@ export function ApprovalQueue({
   const [reason, setReason] = useState(""),
     [currentPage, setPage] = useState(0);
   const [receipt, setReceipt] = useState<Transaction | null>(null);
-  const [openingReview, setOpeningReview] = useState(false);
+  const [openingReview, setOpeningReview] = useState("");
   const contextRequest = useRef<AbortController | null>(null);
+  const openingRequest = useRef(false);
   const queueFocus = useRef<HTMLDivElement | null>(null);
-  useEffect(() => () => contextRequest.current?.abort(), []);
+  useEffect(
+    () => () => {
+      contextRequest.current?.abort();
+      contextRequest.current = null;
+      openingRequest.current = false;
+    },
+    [],
+  );
   const entries = requests ?? s.pendingApprovals;
   const emptyPendingQueue =
     (pendingView || requests === undefined) &&
@@ -277,14 +285,17 @@ export function ApprovalQueue({
           size="sm"
           className="h-10 px-3 sm:h-9"
           aria-label={t(actionLabel) + " · " + subject(r) + " · " + r.id}
+          aria-busy={openingReview === r.id || undefined}
           variant={actionLabel === "Review request" ? "default" : "outline"}
-          disabled={s.busy || openingReview}
+          disabled={s.busy || !!openingReview}
           onClick={async () => {
+            if (s.busy || openingRequest.current) return;
+            openingRequest.current = true;
             contextRequest.current?.abort();
             const controller = new AbortController();
             contextRequest.current = controller;
             s.setError("");
-            setOpeningReview(true);
+            setOpeningReview(r.id);
             try {
               await s.focusRead(
                 { resource: "requests", id: r.id },
@@ -302,10 +313,19 @@ export function ApprovalQueue({
                     : "Cannot load request.",
                 );
             } finally {
-              if (!controller.signal.aborted) setOpeningReview(false);
+              if (contextRequest.current === controller) {
+                openingRequest.current = false;
+                setOpeningReview("");
+              }
             }
           }}
         >
+          {openingReview === r.id && (
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-4 animate-spin motion-reduce:animate-none"
+            />
+          )}
           {t(actionLabel)}
         </Button>
       </div>
